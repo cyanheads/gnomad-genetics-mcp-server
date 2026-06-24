@@ -315,10 +315,20 @@ export class GnomadService {
             if (/rate.?limit|too many requests/i.test(message)) {
               throw serviceUnavailable(`gnomAD rate limit: ${message}`);
             }
-            throw validationError(`gnomAD GraphQL error: ${message}`, {
-              reason: 'graphql_error',
-              retryable: false,
-            });
+            // gnomAD returns "<entity> not found" as a GraphQL error *alongside* a
+            // valid `data` payload with the entity nulled (e.g. errors:["Gene not
+            // found"] + data:{gene:null}). That is a not-found signal, not a fault —
+            // fall through to parse so the entity surfaces as null and the caller's
+            // typed not-found contract (gene_not_found / variant_not_found) fires.
+            // Any other error (Invalid variant ID, Multiple variants found, …) is a
+            // real failure and still throws.
+            const allNotFound = body.errors.every((e) => /\bnot found\b/i.test(e.message));
+            if (!(allNotFound && body.data != null)) {
+              throw validationError(`gnomAD GraphQL error: ${message}`, {
+                reason: 'graphql_error',
+                retryable: false,
+              });
+            }
           }
           return schema.parse(body.data);
         } finally {
