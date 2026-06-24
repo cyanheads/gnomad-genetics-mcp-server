@@ -13,6 +13,7 @@ import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/erro
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import { sanitizeUpstreamError } from '@/services/upstream-error.js';
 import {
   CLINVAR_BY_VARIANT_ID_QUERY,
   GENE_CONSTRAINT_BY_ID_QUERY,
@@ -298,12 +299,22 @@ export class GnomadService {
       async () => {
         await this.acquireSlot();
         try {
+          // fetchWithTimeout throws a status-mapped McpError on non-2xx whose data
+          // carries upstream internals (statusCode/responseBody/requestId/URL).
+          // Sanitize it here so none of that reaches the client; the typed
+          // validation/not-found paths below raise their own clean errors.
           const response = await fetchWithTimeout(this.baseUrl, this.timeoutMs, reqCtx, {
             method: 'POST',
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ query, variables }),
             signal: ctx.signal,
-          });
+          }).catch((err: unknown) =>
+            sanitizeUpstreamError(
+              err,
+              'gnomAD',
+              'gnomAD is degraded or throttling; wait a few seconds and retry. gnomAD is a community-funded API — keep request volume low.',
+            ),
+          );
           const text = await response.text();
           if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
             throw serviceUnavailable('gnomAD returned HTML instead of JSON — likely rate-limited.');

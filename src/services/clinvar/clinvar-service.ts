@@ -12,6 +12,7 @@ import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import { sanitizeUpstreamError } from '@/services/upstream-error.js';
 import type { ClinVarFilters, ClinVarRow } from './types.js';
 
 /** ClinVar review-status text → gold-star rating (the standard convention). */
@@ -37,6 +38,9 @@ function starsForReviewStatus(status: string | null | undefined): number {
 const MAX_RECORDS = 500;
 /** esummary batch size per request. */
 const SUMMARY_BATCH = 50;
+/** Recovery hint for a sanitized NCBI upstream failure — no internal detail. */
+const NCBI_RETRY_HINT =
+  'NCBI is degraded or throttling; wait a few seconds and retry, or set NCBI_API_KEY for a higher rate limit.';
 
 const EsearchResponse = z.object({
   esearchresult: z.object({
@@ -128,9 +132,11 @@ export class ClinVarService {
 
     return withRetry(
       async () => {
+        // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
+        // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
           signal: ctx.signal,
-        });
+        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
         const text = await response.text();
         if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable('NCBI returned HTML instead of JSON — likely rate-limited.');
@@ -153,9 +159,11 @@ export class ClinVarService {
 
     return withRetry(
       async () => {
+        // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
+        // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
           signal: ctx.signal,
-        });
+        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
         const text = await response.text();
         if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable('NCBI returned HTML instead of JSON — likely rate-limited.');
