@@ -11,38 +11,6 @@
 
 ---
 
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. You're holding a production-grade MCP framework with the hard parts already solved — error handling, telemetry, auth, transport, validation, lifecycle. What's missing is the **domain**. Your job: design the tool, resource, and service surface with the user, then implement it as small pure handlers that throw — the framework catches, classifies, and instruments the rest. Design before code; the user's first messages set direction, so wait for them before scaffolding definitions.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
-## What's Next?
-
-When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
-
-1. **Re-run the `setup` skill** — ensures CLAUDE.md, skills, structure, and metadata are populated and up to date with the current codebase
-2. **Run the `design-mcp-server` skill** — if the tool/resource surface hasn't been mapped yet, work through domain design
-3. **Add tools/resources/prompts** — scaffold new definitions using the `add-tool`, `add-app-tool`, `add-resource`, `add-prompt` skills
-4. **Add services** — scaffold domain service integrations using the `add-service` skill
-5. **Add tests** — scaffold tests for existing definitions using the `add-test` skill
-6. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill, get a report of issues and pain points
-7. **Run `devcheck`** — lint, format, typecheck, and security audit
-8. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
-9. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata, and agent protocol for shipping
-10. **Run the `maintenance` skill** — investigate changelogs, adopt upstream changes, and sync skills after `bun update --latest`
-
-Tailor suggestions to what's actually missing or stale — don't recite the full list every time.
-
----
-
 ## Core Rules
 
 - **Logic throws, framework catches.** Tool/resource handlers are pure — throw on failure, no `try/catch`. Plain `Error` is fine; the framework catches, classifies, and formats. Use error factories (`notFound()`, `validationError()`, etc.) when the error code matters.
@@ -56,97 +24,127 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ## Patterns
 
-### Tool
+Real definitions from this server, condensed. The full versions live under `src/mcp-server/`.
+
+### Tool (`src/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.ts`)
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
+import { datasetField, geneField, referenceGenomeField } from '../shared-schemas.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
-  input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
-  }),
+export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
+  title: 'gnomad-genetics-mcp-server: get gene constraint',
+  description: 'Fetch gnomAD loss-of-function constraint for a gene — pLI, LOEUF, …',
+  annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
+  input: z.object({ gene: geneField, dataset: datasetField, reference_genome: referenceGenomeField }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    gene_id: z.string().describe('Ensembl gene ID resolved for the gene.'),
+    symbol: z.string().describe('HGNC gene symbol.'),
+    pli: z.number().nullable().describe('pLI — probability of LoF intolerance; >0.9 intolerant.'),
+    // … remaining flat constraint fields, all nullable
+    constraint_flags: z.array(z.string()).describe('Constraint caveat flags (e.g. v4 beta notes).'),
   }),
-  auth: ['inventory:read'],
+  // Typed error contract — ctx.fail('gene_not_found', …) is type-checked against this union.
+  errors: [
+    { reason: 'gene_not_found', code: JsonRpcErrorCode.NotFound,
+      when: 'No gene matched the symbol or Ensembl ID in this build.',
+      recovery: 'Check the symbol spelling or resolve a stable Ensembl gene ID via ensembl_lookup_gene.' },
+  ],
 
   async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
+    const svc = getGnomadService();
+    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
+    const constraint = await svc.getGeneConstraint(input.gene, dsCtx, ctx);
+    if (!constraint) throw ctx.fail('gene_not_found', `Gene "${input.gene}" not found.`);
+    return constraint;
   },
 
   // format() populates content[] — the markdown twin of structuredContent.
   // Different clients read different surfaces (Claude Code → structuredContent,
   // Claude Desktop → content[]); both must carry the same data.
   // Enforced at lint time: every field in `output` must appear in the rendered text.
-  format: (result) => [{
-    type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
-  }],
+  format: (result) => [{ type: 'text', text: `## ${result.symbol} (${result.gene_id})` }],
 });
 ```
 
-### Resource
+### Resource (`src/mcp-server/resources/definitions/gene-constraint.resource.ts`)
 
 ```ts
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { GNOMAD_DATASETS } from '@/config/server-config.js';
+import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
+import type { Dataset } from '@/services/gnomad/types.js';
 
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
+export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/constraint', {
+  description: 'gnomAD loss-of-function constraint for a gene. Mirrors gnomad_get_gene_constraint.',
+  name: 'gnomAD gene constraint',
+  mimeType: 'application/json',
+  params: z.object({
+    dataset: z.enum(GNOMAD_DATASETS).describe('gnomAD dataset segment.'),
+    gene: z.string().describe('Gene — HGNC symbol or Ensembl gene ID.'),
+  }),
+  errors: [
+    { reason: 'gene_not_found', code: JsonRpcErrorCode.NotFound,
+      when: 'No gene matched the symbol or Ensembl ID in this build.',
+      recovery: 'Check the symbol spelling or resolve a stable Ensembl gene ID via ensembl_lookup_gene.' },
+  ],
   async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
+    const svc = getGnomadService();
+    const dsCtx = svc.resolveDatasetContext(params.dataset as Dataset);
+    const constraint = await svc.getGeneConstraint(params.gene, dsCtx, ctx);
+    if (!constraint) throw ctx.fail('gene_not_found', `Gene "${params.gene}" not found.`);
+    return constraint;
   },
 });
 ```
 
-### Prompt
+### Prompt (`src/mcp-server/prompts/definitions/variant-triage.prompt.ts`)
 
 ```ts
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
+export const variantTriagePrompt = prompt('gnomad_variant_triage', {
+  description: 'Guided rare-disease variant-triage workflow over gnomAD: frequency → constraint → coverage.',
+  title: 'gnomAD variant triage',
   args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
+    variant: z.string().describe('Variant to triage — a chrom-pos-ref-alt variantId or an rsID.'),
+    gene: z.string().optional().describe('Gene symbol or Ensembl ID for the constraint step.'),
+    dataset: z.string().optional().describe('gnomAD dataset to use. Defaults to the server default.'),
   }),
   generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
+    { role: 'user', content: { type: 'text', text: `Triage variant ${args.variant} for rare-disease causality…` } },
   ],
 });
 ```
 
-### Server config
+### Server config (`src/config/server-config.ts`)
 
 ```ts
-// src/config/server-config.ts — lazy-parsed, separate from framework config
+// Lazy-parsed, separate from framework config. parseEnvConfig maps schema paths →
+// env var names so errors name the variable, not the path.
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
+export const GNOMAD_DATASETS = ['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac'] as const;
+
 const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
-  verboseLogging: z.stringbool().default(false).describe('Enable verbose logging'),
+  gnomadApiBaseUrl: z.string().url().default('https://gnomad.broadinstitute.org/api'),
+  defaultDataset: z.enum(GNOMAD_DATASETS).default('gnomad_r4'),
+  maxConcurrency: z.coerce.number().int().positive().default(2),
+  // env booleans use z.stringbool(), never z.coerce.boolean() (Boolean("false") is true).
+  dataframeDropEnabled: z.stringbool().default(false),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
 export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
-    verboseLogging: 'MY_VERBOSE_LOGGING',
+    gnomadApiBaseUrl: 'GNOMAD_API_BASE_URL',
+    defaultDataset: 'GNOMAD_DEFAULT_DATASET',
+    maxConcurrency: 'GNOMAD_MAX_CONCURRENCY',
+    dataframeDropEnabled: 'GNOMAD_DATAFRAME_DROP_ENABLED',
   });
   return _config;
 }
@@ -239,20 +237,29 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
+  index.ts                                   # createApp() entry point — wires services, registers surface
   config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+    server-config.ts                         # Server-specific env vars (Zod schema)
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    gnomad/
+      gnomad-service.ts                      # gnomAD GraphQL client (init/accessor pattern)
+      queries.ts                             # Parameterized GraphQL query documents
+      types.ts                               # Domain types (VariantRecord, GeneConstraint, …)
+    clinvar/
+      clinvar-service.ts                     # NCBI E-utilities client (optional source)
+      types.ts                               # ClinVar domain types
+    canvas-accessor.ts                       # Module-level DataCanvas accessor (set in setup())
   mcp-server/
-    tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
+    tools/
+      shared-schemas.ts                      # Reused Zod field fragments + resolveGenomeTarget()
+      definitions/
+        gnomad-get-variant.tool.ts           # 5 gnomAD tools + 3 canvas dataframe tools
+        …
     resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
+      variant.resource.ts                    # gnomad://variant/{dataset}/{variantId}
+      gene-constraint.resource.ts            # gnomad://gene/{dataset}/{gene}/constraint
     prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      variant-triage.prompt.ts               # gnomad_variant_triage chain
 ```
 
 ---

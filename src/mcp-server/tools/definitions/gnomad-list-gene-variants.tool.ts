@@ -89,7 +89,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .string()
       .optional()
       .describe(
-        'Optional canvas ID from a prior call. Omit to start a fresh canvas — the response returns a new one.',
+        "Optional canvas ID from a prior call, to reuse the same canvas. Reusing it REPLACES (overwrites) the gene_variants table with this call's results — it does not append. Omit to start a fresh canvas; the response returns a new one.",
       ),
     dataset: datasetField,
     reference_genome: referenceGenomeField,

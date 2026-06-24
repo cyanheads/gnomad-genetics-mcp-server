@@ -2,8 +2,12 @@
   "manifest_version": "0.3",
   "name": "gnomad-genetics-mcp-server",
   "version": "0.1.0",
-  "description": "",
-  "author": { "name": "" },
+  "description": "Human population genetics over gnomAD — allele frequencies by ancestry, gene loss-of-function constraint, variant catalogs, and coverage for variant interpretation, with ClinVar significance joined in.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
+  },
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

@@ -39,7 +39,23 @@
     "start:stdio": "MCP_TRANSPORT_TYPE=stdio node dist/index.js",
     "start:http": "MCP_TRANSPORT_TYPE=http node dist/index.js"
   },
-  "keywords": ["mcp", "mcp-server", "model-context-protocol"],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "gnomad",
+    "genetics",
+    "genomics",
+    "bioinformatics",
+    "variant-interpretation",
+    "allele-frequency",
+    "gene-constraint",
+    "clinvar"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cyanheads/gnomad-genetics-mcp-server.git"
