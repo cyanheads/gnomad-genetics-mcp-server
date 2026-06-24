@@ -1,25 +1,25 @@
 {
   "name": "gnomad-genetics-mcp-server",
   "version": "0.1.0",
-  "description": "",
+  "description": "Human population genetics over gnomAD — allele frequencies by ancestry, gene loss-of-function constraint, variant catalogs, and coverage for variant interpretation, with ClinVar significance joined in.",
   "author": {
-    "name": "",
-    "email": "",
-    "url": ""
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/gnomad-genetics-mcp-server",
+  "repository": "https://github.com/cyanheads/gnomad-genetics-mcp-server",
   "license": "Apache-2.0",
   "keywords": ["mcp", "mcp-server", "model-context-protocol"],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "gnomad-genetics-mcp-server",
-    "shortDescription": "",
-    "longDescription": "",
-    "developerName": "",
-    "category": "",
+    "shortDescription": "Population allele frequencies, gene constraint, and variant catalogs over gnomAD for variant interpretation.",
+    "longDescription": "Human population genetics over the gnomAD GraphQL API. Fetch the full population record for a variant (allele count/number/frequency overall and per genetic-ancestry group, with joined ClinVar significance), assess gene loss-of-function constraint (pLI / LOEUF), list variants in a gene/transcript/region with allele frequencies, and check sequencing coverage to tell a true absent variant from an uncallable position. Large result sets stage on a DataCanvas for SQL. Keyless; a polite, rate-limited client.",
+    "developerName": "Casey Hand",
+    "category": "science",
     "capabilities": ["Read"],
-    "websiteURL": "",
+    "websiteURL": "https://github.com/cyanheads/gnomad-genetics-mcp-server",
     "defaultPrompt": []
   }
 }
