@@ -587,9 +587,7 @@ export class GnomadService {
         .filter((v): v is number => v != null)
         .sort((a, b) => a - b);
       if (vals.length === 0) return null;
-      const mid = Math.floor(vals.length / 2);
-      const v = vals[mid];
-      return v ?? null;
+      return vals[Math.floor(vals.length / 2)] ?? null;
     })();
     return {
       source,

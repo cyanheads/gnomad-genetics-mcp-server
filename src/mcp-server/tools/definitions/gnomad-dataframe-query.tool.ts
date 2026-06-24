@@ -81,10 +81,8 @@ export const gnomadDataframeQuery = tool('gnomad_dataframe_query', {
     const lines = [
       `**${result.row_count} row(s)** [${result.columns.join(', ')}]${result.truncated ? ' (truncated)' : ''}`,
     ];
-    const sample = result.rows.slice(0, 50);
-    for (const row of sample) lines.push(`- ${JSON.stringify(row)}`);
-    if (result.rows.length > sample.length)
-      lines.push(`… and ${result.rows.length - sample.length} more row(s).`);
+    for (const row of result.rows.slice(0, 50)) lines.push(`- ${JSON.stringify(row)}`);
+    if (result.rows.length > 50) lines.push(`… and ${result.rows.length - 50} more row(s).`);
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });
