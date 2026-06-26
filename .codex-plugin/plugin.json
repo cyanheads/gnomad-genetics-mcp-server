@@ -1,7 +1,7 @@
 {
   "name": "gnomad-genetics-mcp-server",
-  "version": "0.1.0",
-  "description": "Human population genetics over gnomAD — allele frequencies by ancestry, gene loss-of-function constraint, variant catalogs, and coverage for variant interpretation, with ClinVar significance joined in.",
+  "version": "0.1.1",
+  "description": "Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in.",
   "author": {
     "name": "Casey Hand",
     "email": "casey@caseyjhand.com",

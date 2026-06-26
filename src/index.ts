@@ -27,7 +27,6 @@ import { initGnomadService } from './services/gnomad/gnomad-service.js';
 await createApp({
   name: 'gnomad-genetics-mcp-server',
   title: 'gnomad-genetics-mcp-server',
-  websiteUrl: 'https://github.com/cyanheads/gnomad-genetics-mcp-server',
   tools: [
     gnomadGetVariant,
     gnomadGetGeneConstraint,

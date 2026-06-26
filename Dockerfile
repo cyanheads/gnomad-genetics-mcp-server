@@ -39,7 +39,7 @@ ENV NODE_ENV=production
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 ARG APP_VERSION
 LABEL org.opencontainers.image.title="gnomad-genetics-mcp-server"
-LABEL org.opencontainers.image.description="Human population genetics over gnomAD — allele frequencies by ancestry, gene loss-of-function constraint, variant catalogs, and coverage for variant interpretation, with ClinVar significance joined in."
+LABEL org.opencontainers.image.description="Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in — via MCP. STDIO or Streamable HTTP."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.version="${APP_VERSION}"
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/gnomad-genetics-mcp-server"

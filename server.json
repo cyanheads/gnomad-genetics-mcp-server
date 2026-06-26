@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/gnomad-genetics-mcp-server",
-  "description": "Human population genetics over gnomAD — allele frequencies, gene constraint, variants, coverage.",
+  "description": "Look up allele frequencies by ancestry, gene constraint, variants, and coverage over gnomAD.",
   "repository": {
     "url": "https://github.com/cyanheads/gnomad-genetics-mcp-server",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "gnomad-genetics-mcp-server",
+      "identifier": "@cyanheads/gnomad-genetics-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "packageArguments": [
         {
           "type": "positional",
@@ -40,9 +40,9 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "gnomad-genetics-mcp-server",
+      "identifier": "@cyanheads/gnomad-genetics-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "packageArguments": [
         {
           "type": "positional",
