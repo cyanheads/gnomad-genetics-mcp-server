@@ -34,6 +34,21 @@ function starsForReviewStatus(status: string | null | undefined): number {
   return REVIEW_STATUS_STARS[status.toLowerCase().trim()] ?? 0;
 }
 
+/**
+ * Whole-word, case-insensitive classification match. A `pathogenic` query keeps
+ * "Pathogenic", "Likely pathogenic", and "Pathogenic/Likely pathogenic" but not
+ * "Conflicting classifications of pathogenicity" — the word boundary stops the
+ * query from matching inside "pathogenicity". Underscores in the query are read
+ * as spaces so the documented `likely_pathogenic` form works.
+ */
+function matchesSignificance(value: string | null, requested: string): boolean {
+  if (!value) return false;
+  const term = requested.trim().replace(/_/g, ' ');
+  if (!term) return true;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(value);
+}
+
 /** Cap on records pulled per gene search — politeness + bounded canvas size. */
 const MAX_RECORDS = 500;
 /** esummary batch size per request. */
@@ -106,11 +121,20 @@ export class ClinVarService {
       const batch = ids.slice(i, i + SUMMARY_BATCH);
       rows.push(...(await this.esummary(batch, ctx)));
     }
+    // NCBI's [clinical_significance] field tag matches broadly — a pathogenic
+    // query leaks "Benign"/"Uncertain significance"/"Conflicting…" rows — so the
+    // classification filter is enforced here, post-fetch. Both filters compose:
+    // the significance term and the star floor each narrow the set when set.
+    let filtered = rows;
+    if (filters.clinicalSignificance) {
+      const sig = filters.clinicalSignificance;
+      filtered = filtered.filter((r) => matchesSignificance(r.clinical_significance, sig));
+    }
     if (filters.minReviewStars != null) {
       const floor = filters.minReviewStars;
-      return rows.filter((r) => r.gold_stars >= floor);
+      filtered = filtered.filter((r) => r.gold_stars >= floor);
     }
-    return rows;
+    return filtered;
   }
 
   private esearch(
