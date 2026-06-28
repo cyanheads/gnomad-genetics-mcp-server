@@ -35,12 +35,38 @@ describe('gnomad_variant_triage prompt', () => {
     expect(text).toContain('do not skip');
   });
 
-  it('inlines a known gene into the constraint and coverage steps', () => {
+  it('inlines a known gene into the constraint step', () => {
     const text = renderText({ variant: 'rs11591147', gene: 'PCSK9' });
     expect(text).toContain('gnomad_get_gene_constraint(gene: "PCSK9"');
-    expect(text).toContain('gnomad_get_coverage(gene: "PCSK9"');
-    // No placeholder leaks when the gene is supplied.
+    // No <symbol> placeholder leaks when the gene is supplied.
     expect(text).not.toContain('<symbol>');
+  });
+
+  it('derives a single-position region for a chrom-pos-ref-alt variant and quotes the dataset', () => {
+    const text = renderText({ variant: '1-55051215-G-GA', gene: 'PCSK9', dataset: 'gnomad_r4' });
+    // Every tool-call clause quotes the dataset value so it is copyable verbatim.
+    expect(text).toContain(
+      'gnomad_get_variant(variants: ["1-55051215-G-GA"], dataset: "gnomad_r4")',
+    );
+    expect(text).toContain('gnomad_get_gene_constraint(gene: "PCSK9", dataset: "gnomad_r4")');
+    // Coverage confirms the exact position via a single-position region — not the gene.
+    expect(text).toContain(
+      'gnomad_get_coverage(region: "1-55051215-55051215", dataset: "gnomad_r4")',
+    );
+    expect(text).not.toContain('gnomad_get_coverage(gene:');
+  });
+
+  it('routes an rsID coverage check through the resolved variant_id, with gene as a fallback only', () => {
+    const text = renderText({ variant: 'rs11591147', gene: 'PCSK9', dataset: 'gnomad_r4' });
+    // Coordinates are unknown for an rsID, so coverage derives the region from the
+    // variant_id step 1 resolves.
+    expect(text).toContain('variant_id');
+    expect(text).toContain(
+      'gnomad_get_coverage(region: "<chrom>-<pos>-<pos>", dataset: "gnomad_r4")',
+    );
+    // Gene-level coverage is offered only as a weaker, non-confirming fallback.
+    expect(text).toContain('weaker fallback');
+    expect(text).toContain('gnomad_get_coverage(gene: "PCSK9", dataset: "gnomad_r4")');
   });
 
   it('falls back to a gene placeholder when gene is omitted', () => {
@@ -49,9 +75,9 @@ describe('gnomad_variant_triage prompt', () => {
     expect(text).toContain('<symbol>');
   });
 
-  it('threads an explicit dataset into every tool call clause', () => {
+  it('threads an explicit, quoted dataset into every tool call clause', () => {
     const text = renderText({ variant: 'rs11591147', gene: 'PCSK9', dataset: 'gnomad_r2_1' });
-    expect(text).toContain('dataset: gnomad_r2_1');
+    expect(text).toContain('dataset: "gnomad_r2_1"');
     // v2 threshold guidance appears in the constraint step text.
     expect(text).toContain('<0.35 in v2');
   });

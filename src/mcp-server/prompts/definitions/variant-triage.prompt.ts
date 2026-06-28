@@ -8,6 +8,7 @@
  */
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
+import { VARIANT_ID_REGEX } from '../../tools/shared-schemas.js';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description:
@@ -33,11 +34,30 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
       ),
   }),
   generate: (args) => {
-    const datasetClause = args.dataset ? `, dataset: ${args.dataset}` : '';
+    const datasetClause = args.dataset ? `, dataset: "${args.dataset}"` : '';
     const geneStep = args.gene
       ? `2. **Gene constraint.** Call \`gnomad_get_gene_constraint(gene: "${args.gene}"${datasetClause})\`. Read pLI (>0.9 intolerant) and LOEUF / oe_lof_upper (<0.6 intolerant in v4, <0.35 in v2). High constraint weights a loss-of-function variant as more likely deleterious.`
       : `2. **Gene constraint.** Identify the affected gene (from the variant's consequence in step 1, or via ensembl_lookup_gene), then call \`gnomad_get_gene_constraint(gene: <symbol>${datasetClause})\`. Read pLI and LOEUF (oe_lof_upper) to judge how intolerant the gene is to being broken.`;
-    const coverageTarget = args.gene ? `gene: "${args.gene}"` : 'gene: <symbol>';
+
+    // Coverage must confirm the EXACT variant position. Gene-level coverage
+    // averages across the whole gene and can mask a poorly-covered base, so it
+    // does not prove the specific position is callable. For a chrom-pos-ref-alt
+    // we derive the single-position region (start = stop = pos) up front; for an
+    // rsID the coordinates are unknown until step 1 resolves the variant_id.
+    const coverageStep = (() => {
+      const intro =
+        '3. **Callability check (do not skip).** If step 1 returned the variant as absent or ultra-rare, confirm the *exact position* is well-covered before trusting the absence — gene-level coverage averages across the gene and can hide a poorly-covered base.';
+      const tail =
+        'An absent variant at a well-covered position is informative; one at a poorly-covered position is uninterpretable — the absence may just be uncallable sequence. This step is the one analysts most often skip.';
+      if (VARIANT_ID_REGEX.test(args.variant)) {
+        const [chrom, pos] = args.variant.split('-');
+        return `${intro} Call \`gnomad_get_coverage(region: "${chrom}-${pos}-${pos}"${datasetClause})\` for the single-position region at ${chrom}-${pos}. ${tail}`;
+      }
+      const fallback = args.gene
+        ? ` If exact coordinates are unavailable, \`gnomad_get_coverage(gene: "${args.gene}"${datasetClause})\` is a weaker fallback — it does not confirm the variant position.`
+        : ' If exact coordinates are unavailable, gene- or transcript-level coverage is a weaker fallback that does not confirm the variant position.';
+      return `${intro} Take the chrom-pos-ref-alt \`variant_id\` that step 1 resolved and call \`gnomad_get_coverage(region: "<chrom>-<pos>-<pos>"${datasetClause})\` for that single position.${fallback} ${tail}`;
+    })();
 
     return [
       {
@@ -51,7 +71,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
             '',
             geneStep,
             '',
-            `3. **Callability check (do not skip).** If step 1 returned the variant as absent or ultra-rare, call \`gnomad_get_coverage(${coverageTarget}${datasetClause})\` to confirm the position is well-covered. An absent variant in a well-covered region is informative; one in a poorly-covered region is uninterpretable — the absence may just be uncallable sequence. This step is the one analysts most often skip.`,
+            coverageStep,
             '',
             `Synthesize: is the variant rare enough to be plausibly pathogenic, in a gene intolerant to its consequence class, at a callable position? State which axes support causality and which do not, and flag any uncertainty (sparse ancestry data, beta v4 constraint, low coverage) honestly.`,
           ].join('\n'),
