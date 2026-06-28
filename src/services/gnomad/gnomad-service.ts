@@ -547,9 +547,13 @@ export class GnomadService {
     const exome = r.exome;
     const genome = r.genome;
     const ac = (exome?.ac ?? 0) + (genome?.ac ?? 0);
-    const an = Math.max(exome?.an ?? 0, genome?.an ?? 0);
-    // Prefer upstream af; fall back to the joint ac/an when both carry counts.
-    const af = exome?.af ?? genome?.af ?? computeAf(ac, an);
+    // Joint frequency over the carried callsets: sum ac and an across exome +
+    // genome, then af = ac/an — matching normalizeVariant(). The per-callset
+    // upstream af describes one callset only, so it must not stand in for the
+    // joint frequency: an exome-only af on a dual-callset row understates it and
+    // would make max_af filter on the wrong number.
+    const an = (exome?.an ?? 0) + (genome?.an ?? 0);
+    const af = computeAf(ac, an);
     const source: string[] = [];
     if (exome?.ac != null) source.push('exome');
     if (genome?.ac != null) source.push('genome');

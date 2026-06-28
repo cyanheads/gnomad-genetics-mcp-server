@@ -33,9 +33,9 @@ const GeneVariantRowSchema = z
     af: z
       .number()
       .nullable()
-      .describe('Allele frequency (joint or upstream); null when uncomputable.'),
+      .describe('Allele frequency computed from joint allele counts; null when uncomputable.'),
     ac: z.number().describe('Allele count (joint across carried callsets).'),
-    an: z.number().describe('Allele number (max across callsets).'),
+    an: z.number().describe('Allele number (joint sum across carried callsets).'),
     consequence: z.string().nullable().describe('VEP consequence term; null when none.'),
     consequence_class: z
       .enum(['lof', 'missense', 'synonymous', 'other'])

@@ -7,7 +7,8 @@
  */
 
 import { McpError } from '@cyanheads/mcp-ts-core/errors';
-import { describe, expect, it } from 'vitest';
+import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { GnomadService } from '@/services/gnomad/gnomad-service.js';
 
@@ -62,5 +63,67 @@ describe('GnomadService.resolveDatasetContext', () => {
       expected: 'GRCh38',
       supplied: 'GRCh37',
     });
+  });
+});
+
+describe('GnomadService.listGeneVariants — dual-callset joint frequency', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('sums an across callsets and recomputes joint af (not exome-only)', async () => {
+    // Live gnomad_r4 / GRCh38 values for 1-55051215-G-GA: the variant is carried
+    // by both callsets, so the row must report joint counts matching
+    // gnomad_get_variant (AC 919 / AN 456260 / AF 0.002014…).
+    const raw = {
+      variant_id: '1-55051215-G-GA',
+      consequence: 'frameshift_variant',
+      flags: null,
+      exome: { ac: 192, an: 303936, af: 0.0006317119393556538, homozygote_count: 0 },
+      genome: { ac: 727, an: 152324, af: 0.004772721304587589, homozygote_count: 1 },
+    };
+    vi.spyOn(svc as any, 'graphql').mockResolvedValue({ region: { variants: [raw] } });
+
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+    const rows = await svc.listGeneVariants(
+      { kind: 'region', value: '1-55051215-55051215' },
+      {},
+      dsCtx,
+      createMockContext(),
+    );
+
+    expect(rows).toHaveLength(1);
+    const [r] = rows;
+    expect(r?.ac).toBe(919);
+    // Joint AN is the sum (456260), NOT max-across-callsets (303936 = exome only).
+    expect(r?.an).toBe(456260);
+    // Joint AF recomputed from joint counts — NOT the single-callset exome af
+    // (0.000632) the old code returned.
+    expect(r?.af).toBe(919 / 456260);
+    expect(r?.af).toBeCloseTo(0.0020142, 6);
+    expect(r?.source).toBe('exome|genome');
+  });
+
+  it('leaves a single-callset variant unchanged', async () => {
+    const raw = {
+      variant_id: '1-55051216-A-G',
+      consequence: 'missense_variant',
+      flags: null,
+      exome: null,
+      genome: { ac: 10, an: 1000, af: 0.01, homozygote_count: 0 },
+    };
+    vi.spyOn(svc as any, 'graphql').mockResolvedValue({ region: { variants: [raw] } });
+
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+    const rows = await svc.listGeneVariants(
+      { kind: 'region', value: '1-55051216-55051216' },
+      {},
+      dsCtx,
+      createMockContext(),
+    );
+
+    const [r] = rows;
+    expect(r?.ac).toBe(10);
+    expect(r?.an).toBe(1000);
+    expect(r?.af).toBe(0.01);
+    expect(r?.source).toBe('genome');
   });
 });
