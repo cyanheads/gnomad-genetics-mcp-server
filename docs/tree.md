@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-06-28 04:36:18
+Generated on: 2026-06-28 13:55:46
 
 ```text
 gnomad-genetics-mcp-server/
@@ -174,6 +174,7 @@ gnomad-genetics-mcp-server/
 │       ├── gnomad-dataframe-query.test.ts
 │       ├── gnomad-get-coverage.test.ts
 │       ├── gnomad-get-gene-constraint.test.ts
+│       ├── gnomad-get-variant.batch-config.test.ts
 │       ├── gnomad-get-variant.test.ts
 │       ├── gnomad-list-gene-variants.test.ts
 │       └── gnomad-search-clinvar.test.ts

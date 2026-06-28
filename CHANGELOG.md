@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-28
+
+Three fixes: an inverted region (start > stop) is rejected immediately as a validation error instead of exhausting the retry budget; GNOMAD_MAX_VARIANT_BATCH now drives the gnomad_get_variant batch cap (was hard-coded 25); and gnomad_variant_triage confirms the exact variant position for callability instead of gene-level coverage.
+
 ## [0.1.2](changelog/0.1.x/0.1.2.md) — 2026-06-27
 
 Three correctness fixes: the gnomad_search_clinvar clinical_significance filter is enforced post-fetch and composes with min_review_stars, gnomad_list_gene_variants reports joint AN/AF for dual-callset rows, and the gnomad_get_gene_constraint LOEUF interval renders oe_lof_upper as its upper bound.
