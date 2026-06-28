@@ -9,6 +9,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getServerConfig } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   batchVariantIdField,
@@ -16,6 +17,15 @@ import {
   referenceGenomeField,
   VARIANT_OR_RSID_REGEX,
 } from '../shared-schemas.js';
+
+/**
+ * Per-call batch cap, read once at module load from GNOMAD_MAX_VARIANT_BATCH
+ * (default 25). The server runs over stdio/HTTP where process env is populated
+ * at startup, so reading config here lets the configured cap flow into both the
+ * advertised input schema (the `maxItems` in tools/list) and parse-time
+ * validation — keeping the env var, the description, and the actual limit in sync.
+ */
+const MAX_VARIANT_BATCH = getServerConfig().maxVariantBatch;
 
 const PopulationFreq = z
   .object({
@@ -102,15 +112,16 @@ const VariantRecordSchema = z
 
 export const gnomadGetVariant = tool('gnomad_get_variant', {
   title: 'gnomad-genetics-mcp-server: get variant',
-  description:
-    'Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. Accepts a batch of up to 25 IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.',
+  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     variants: z
       .array(batchVariantIdField)
       .min(1)
-      .max(25)
-      .describe('1–25 variant IDs (chrom-pos-ref-alt or rsID) to look up in one batched call.'),
+      .max(MAX_VARIANT_BATCH)
+      .describe(
+        `1–${MAX_VARIANT_BATCH} variant IDs (chrom-pos-ref-alt or rsID) to look up in one batched call.`,
+      ),
     dataset: datasetField,
     reference_genome: referenceGenomeField,
   }),
