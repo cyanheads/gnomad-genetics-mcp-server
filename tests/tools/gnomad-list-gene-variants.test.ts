@@ -9,6 +9,7 @@
  * @module tests/tools/gnomad-list-gene-variants.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
@@ -228,21 +229,22 @@ describe('gnomad_list_gene_variants handler — input contracts', () => {
     );
   });
 
-  it('does NOT reject an inverted region (start>stop) — it reaches the service unguarded', async () => {
-    // Documents a real gap: REGION_REGEX validates shape only, and neither the
-    // schema, resolveGenomeTarget, nor the service's region parse checks
-    // start<stop. An inverted region flows straight through to gnomAD.
-    const fake = stubService([]);
+  it('rejects an inverted region (start>stop) before any upstream call', async () => {
+    // REGION_REGEX validates shape only, so an inverted region parses; the
+    // service rejects start>stop in its region parse, failing fast as a
+    // ValidationError instead of reaching gnomAD (which 500s and burns the retry
+    // budget). Drive the real service so the guard actually runs.
+    const real = new GnomadService(getServerConfig());
+    const graphql = vi.spyOn(real as any, 'graphql');
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(real as never);
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
     const input = gnomadListGeneVariants.input.parse({ region: '1-200-100' });
-    await expect(gnomadListGeneVariants.handler(input, ctx as never)).resolves.toBeDefined();
-    expect(fake.listGeneVariants).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'region', value: '1-200-100' }),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-    );
+    await expect(gnomadListGeneVariants.handler(input, ctx as never)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_region' },
+    });
+    expect(graphql).not.toHaveBeenCalled();
   });
 });

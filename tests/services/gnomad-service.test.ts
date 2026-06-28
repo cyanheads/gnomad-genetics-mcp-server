@@ -6,7 +6,7 @@
  * @module tests/services/gnomad-service.test
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
@@ -125,5 +125,46 @@ describe('GnomadService.listGeneVariants — dual-callset joint frequency', () =
     expect(r?.an).toBe(1000);
     expect(r?.af).toBe(0.01);
     expect(r?.source).toBe('genome');
+  });
+});
+
+describe('GnomadService — region ordering guard', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('rejects an inverted region (start>stop) before any upstream call — list and coverage alike', async () => {
+    const graphql = vi.spyOn(svc as any, 'graphql').mockResolvedValue({});
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+    const ctx = createMockContext();
+
+    await expect(
+      svc.listGeneVariants({ kind: 'region', value: '1-55064852-55039447' }, {}, dsCtx, ctx),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_region' },
+    });
+    await expect(
+      svc.getCoverage({ kind: 'region', value: '1-55064852-55039447' }, dsCtx, ctx),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_region' },
+    });
+
+    // The malformed region never reaches the network — no retry storm, no
+    // misleading "unavailable" error.
+    expect(graphql).not.toHaveBeenCalled();
+  });
+
+  it('accepts a single-position region (start == stop) and reaches the upstream query', async () => {
+    const graphql = vi
+      .spyOn(svc as any, 'graphql')
+      .mockResolvedValue({ region: { coverage: { exome: null, genome: null } } });
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+
+    await svc.getCoverage(
+      { kind: 'region', value: '1-55051215-55051215' },
+      dsCtx,
+      createMockContext(),
+    );
+    expect(graphql).toHaveBeenCalledTimes(1);
   });
 });

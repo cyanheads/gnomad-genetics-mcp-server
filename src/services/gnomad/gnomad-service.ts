@@ -644,9 +644,22 @@ export class GnomadService {
           },
         );
       }
+      const start = Number(m[2]);
+      const stop = Number(m[3]);
+      // Reject an inverted range up front. gnomAD answers start > stop with an
+      // HTTP 500 the retry layer reads as a transient fault, so without this guard
+      // a malformed region burns the full retry budget and surfaces as a
+      // misleading "unavailable" error instead of a validation error. A single
+      // position is valid (start == stop), so only start > stop is rejected.
+      if (start > stop) {
+        throw validationError(
+          `Region start must not exceed stop: ${start} > ${stop}. Provide chrom-start-stop with start ≤ stop (a single position uses start = stop).`,
+          { reason: 'invalid_region', retryable: false },
+        );
+      }
       return {
         query: kind === 'variants' ? REGION_VARIANTS_QUERY : REGION_COVERAGE_QUERY,
-        variables: { chrom: m[1], start: Number(m[2]), stop: Number(m[3]), ...base },
+        variables: { chrom: m[1], start, stop, ...base },
       };
     }
     const byId = ENSEMBL_GENE_ID.test(target.value);
