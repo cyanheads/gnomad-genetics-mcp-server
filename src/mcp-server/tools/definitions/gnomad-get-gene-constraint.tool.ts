@@ -104,7 +104,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     const lines = [
       `## ${result.symbol} (${result.gene_id})`,
       `**Dataset:** ${result.dataset} (${result.reference_genome})`,
-      `**pLI:** ${num(result.pli)} | **LOEUF (oe_lof_upper):** ${num(result.oe_lof_upper)} [${num(result.oe_lof_lower)}–${num(result.oe_lof)}]`,
+      `**pLI:** ${num(result.pli)} | **LOEUF (oe_lof_upper):** ${num(result.oe_lof_upper)} [${num(result.oe_lof_lower)}–${num(result.oe_lof_upper)}] | **oe_lof (point estimate):** ${num(result.oe_lof)}`,
       `**oe_mis:** ${num(result.oe_mis)} | **oe_syn:** ${num(result.oe_syn)}`,
       `**Z-scores:** LoF ${num(result.lof_z)} | mis ${num(result.mis_z)} | syn ${num(result.syn_z)}`,
       `**LoF obs/exp:** ${num(result.obs_lof, 1)} / ${num(result.exp_lof, 1)}`,

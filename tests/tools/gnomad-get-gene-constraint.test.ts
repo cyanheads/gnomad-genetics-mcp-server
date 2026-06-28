@@ -159,6 +159,13 @@ describe('gnomad_get_gene_constraint handler', () => {
     expect(text).toContain('PCSK9');
     expect(text).toContain('0.0123');
     expect(text).toContain('no_exp_lof');
+    // The LOEUF interval upper bound is oe_lof_upper (1.0500), not the oe_lof
+    // point estimate (0.8120) — the #5 regression.
+    expect(text).toContain('[0.6000–1.0500]');
+    expect(text).not.toContain('[0.6000–0.8120]');
+    // oe_lof is still rendered explicitly (point estimate + format-parity).
+    expect(text).toContain('point estimate');
+    expect(text).toContain('0.8120');
   });
 
   it('rejects a too-short gene symbol at parse time', () => {
