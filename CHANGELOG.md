@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-30 · 🛡️ Security
+
+Two fixes plus a security-bearing framework bump: gnomad_get_coverage bounds region coverage to the requested span (no more padded-window leakage); gnomad_search_clinvar names the cause for Ensembl gene IDs instead of a bare empty result; and adopting @cyanheads/mcp-ts-core ^0.10.10 re-resolves the transitive js-yaml, clearing GHSA-h67p-54hq-rp68.
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-28
 
 Three fixes: an inverted region (start > stop) is rejected immediately as a validation error instead of exhausting the retry budget; GNOMAD_MAX_VARIANT_BATCH now drives the gnomad_get_variant batch cap (was hard-coded 25); and gnomad_variant_triage confirms the exact variant position for callability instead of gene-level coverage.
