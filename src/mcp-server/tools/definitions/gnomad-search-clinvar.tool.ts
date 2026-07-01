@@ -17,6 +17,13 @@ import { geneField } from '../shared-schemas.js';
 const TABLE_NAME = 'clinvar_variants';
 const INLINE_PREVIEW_CAP = 100;
 
+/**
+ * Ensembl gene ID shape (ENSG…). ClinVar's `[gene]` index resolves HGNC symbols
+ * only, so an ENSG ID — valid on every other gnomAD tool — always returns zero
+ * records here; detect it to name the real cause instead of a bare empty result.
+ */
+const ENSEMBL_GENE_ID = /^ENSG\d+$/i;
+
 const ClinVarRowSchema = z
   .object({
     clinvar_variation_id: z.string().describe('ClinVar VariationID (uid).'),
@@ -46,7 +53,12 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     'Search ClinVar (NCBI E-utilities) for a gene and return its classified variants — clinical significance, review status with a 0–4 star rating, associated conditions, molecular consequences, and submission counts — turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by clinical_significance (e.g. pathogenic) and a minimum star rating. The full set is staged on a DataCanvas table named clinvar_variants with an inline preview; query it with gnomad_dataframe_query to rank or count across the complete set. Keyless, but honors NCBI_API_KEY for a higher rate limit. When the canvas is disabled the tool returns a capped inline preview with spilled=false. Credit: ClinVar, NCBI.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
-    gene: geneField,
+    // Tool-specific override of the shared geneField: ClinVar indexes HGNC
+    // symbols only. .describe() clones the field, so the shared fragment other
+    // tools reuse (which legitimately accept ENSG IDs) is left untouched.
+    gene: geneField.describe(
+      'Gene HGNC symbol (e.g. PCSK9). ClinVar indexes HGNC symbols only — Ensembl gene IDs (ENSG…) are not resolved here, unlike the other gnomAD tools; resolve one to its symbol via ensembl_lookup_gene.',
+    ),
     clinical_significance: z
       .string()
       .optional()
@@ -105,6 +117,17 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   ],
 
   async handler(input, ctx) {
+    // ClinVar's [gene] index resolves HGNC symbols only, so an Ensembl gene ID
+    // always yields zero records. Name the real cause instead of running a
+    // guaranteed-empty NCBI query and returning the misdirecting generic
+    // "verify the gene symbol" notice.
+    if (ENSEMBL_GENE_ID.test(input.gene)) {
+      ctx.enrich.notice(
+        `ClinVar search needs an HGNC symbol; Ensembl gene IDs (ENSG…) are not indexed by ClinVar. Resolve "${input.gene}" to its symbol (e.g. via ensembl_lookup_gene) and retry.`,
+      );
+      return { preview: [], canvas_id: '', table_name: '', spilled: false, total: 0 };
+    }
+
     const rows = await getClinVarService().searchGene(
       input.gene,
       { clinicalSignificance: input.clinical_significance, minReviewStars: input.min_review_stars },

@@ -114,6 +114,40 @@ describe('gnomad_search_clinvar handler — canvas disabled', () => {
   });
 });
 
+describe('gnomad_search_clinvar handler — Ensembl gene ID', () => {
+  it('short-circuits an ENSG id with a targeted notice and no NCBI call', async () => {
+    // ClinVar's [gene] index resolves HGNC symbols only — an ENSG id would
+    // return a bare empty. The tool names the real cause and never queries NCBI.
+    const fake = stubClinvar(async () => [row(1)]); // would return a row IF called
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+    const ctx = createMockContext({ errors: gnomadSearchClinvar.errors });
+    const input = gnomadSearchClinvar.input.parse({ gene: 'ENSG00000169174' });
+    const result = await gnomadSearchClinvar.handler(input, ctx as never);
+
+    expect(fake.searchGene).not.toHaveBeenCalled();
+    expect(result.total).toBe(0);
+    expect(result.preview).toEqual([]);
+    const notice = getEnrichment(ctx).notice;
+    expect(notice).toMatch(/HGNC symbol/);
+    expect(notice).toMatch(/not indexed by ClinVar/);
+    expect(notice).toContain('ENSG00000169174');
+  });
+
+  it('queries normally for an HGNC symbol', async () => {
+    const fake = stubClinvar(async () => [row(1), row(2)]);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+    const ctx = createMockContext({ errors: gnomadSearchClinvar.errors });
+    const input = gnomadSearchClinvar.input.parse({ gene: 'PCSK9' });
+    const result = await gnomadSearchClinvar.handler(input, ctx as never);
+
+    expect(fake.searchGene).toHaveBeenCalledOnce();
+    expect(result.total).toBe(2);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+});
+
 describe('gnomad_search_clinvar handler — canvas enabled', () => {
   it('spills a large result to the clinvar_variants table', async () => {
     const rows = Array.from({ length: 1000 }, (_, i) => row(i + 1));
