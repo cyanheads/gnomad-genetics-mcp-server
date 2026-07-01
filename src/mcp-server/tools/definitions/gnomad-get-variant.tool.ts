@@ -2,8 +2,10 @@
  * @fileoverview gnomad_get_variant — full population record for one or more
  * variants: AC/AN/AF overall and per genetic-ancestry group, homozygote/
  * hemizygote counts, quality flags, transcript consequence, in-silico
- * predictors, and joined ClinVar significance. Batch with per-item partial
- * success — one bad ID never fails the call.
+ * predictors, and joined ClinVar significance. The batch is dispatched
+ * concurrently under GnomadService's upstream-concurrency cap, with per-item
+ * partial success — one bad ID never fails the call, and found[]/failed[] stay
+ * in input order.
  * @module mcp-server/tools/definitions/gnomad-get-variant.tool
  */
 
@@ -110,6 +112,15 @@ const VariantRecordSchema = z
   })
   .describe('Full population record for one variant.');
 
+/**
+ * Per-item batch outcome — a resolved record or a typed failure. Each input ID
+ * maps to one of these; the map never rejects, so one bad ID can't fail the
+ * batch. Bucketed in input order after the concurrent dispatch settles.
+ */
+type VariantLookupOutcome =
+  | { ok: true; record: z.infer<typeof VariantRecordSchema> }
+  | { ok: false; failure: { variant: string; error: string } };
+
 export const gnomadGetVariant = tool('gnomad_get_variant', {
   title: 'gnomad-genetics-mcp-server: get variant',
   description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.`,
@@ -156,34 +167,53 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     const svc = getGnomadService();
     const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
 
+    // Dispatch every ID concurrently; GnomadService's maxConcurrency semaphore
+    // (GNOMAD_MAX_CONCURRENCY, default 2) — acquired per upstream GraphQL call —
+    // bounds the actual fan-out, so this stays polite without a serial loop.
+    // Promise.all preserves input order in its result array regardless of
+    // resolution order, so bucketing the settled outcomes below keeps
+    // found[]/failed[] deterministic. Each item resolves to an outcome and never
+    // rejects, preserving per-item partial success — one bad ID never fails the
+    // batch.
+    const outcomes = await Promise.all(
+      input.variants.map(async (variantId): Promise<VariantLookupOutcome> => {
+        if (!VARIANT_OR_RSID_REGEX.test(variantId)) {
+          return {
+            ok: false,
+            failure: {
+              variant: variantId,
+              error:
+                'Malformed ID. Expected chrom-pos-ref-alt (e.g. 1-55051215-G-GA) with ACGT alleles, or an rsID (e.g. rs11591147).',
+            },
+          };
+        }
+        try {
+          const record = await svc.getVariant(variantId, dsCtx, ctx);
+          if (record) return { ok: true, record };
+          return {
+            ok: false,
+            failure: {
+              variant: variantId,
+              error: `Not found in ${dsCtx.dataset}. Confirm the ID and build, or run gnomad_get_coverage to check the position is callable before concluding true absence.`,
+            },
+          };
+        } catch (err) {
+          return {
+            ok: false,
+            failure: {
+              variant: variantId,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }),
+    );
+
     const found: z.infer<typeof VariantRecordSchema>[] = [];
     const failed: { variant: string; error: string }[] = [];
-
-    for (const variantId of input.variants) {
-      if (!VARIANT_OR_RSID_REGEX.test(variantId)) {
-        failed.push({
-          variant: variantId,
-          error:
-            'Malformed ID. Expected chrom-pos-ref-alt (e.g. 1-55051215-G-GA) with ACGT alleles, or an rsID (e.g. rs11591147).',
-        });
-        continue;
-      }
-      try {
-        const record = await svc.getVariant(variantId, dsCtx, ctx);
-        if (record) {
-          found.push(record);
-        } else {
-          failed.push({
-            variant: variantId,
-            error: `Not found in ${dsCtx.dataset}. Confirm the ID and build, or run gnomad_get_coverage to check the position is callable before concluding true absence.`,
-          });
-        }
-      } catch (err) {
-        failed.push({
-          variant: variantId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+    for (const outcome of outcomes) {
+      if (outcome.ok) found.push(outcome.record);
+      else failed.push(outcome.failure);
     }
 
     ctx.log.info('gnomad_get_variant resolved', {

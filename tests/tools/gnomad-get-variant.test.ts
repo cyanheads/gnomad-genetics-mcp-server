@@ -81,6 +81,67 @@ describe('gnomad_get_variant handler', () => {
     expect(fake.getVariant).toHaveBeenCalledTimes(3);
   });
 
+  it('dispatches the batch concurrently instead of serially', async () => {
+    let active = 0;
+    let peak = 0;
+    const fake = {
+      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      getVariant: vi.fn(async (id: string) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((r) => setTimeout(r, 10));
+        active -= 1;
+        return record(id);
+      }),
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const ctx = createMockContext();
+    const ids = Array.from({ length: 5 }, (_, i) => `1-${100 + i}-A-T`);
+    const result = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({ variants: ids }),
+      ctx as never,
+    );
+
+    // The fake carries no semaphore, so true concurrent dispatch peaks at the
+    // full batch size; the old serial for-loop would have peaked at 1. This
+    // guards the dispatch change itself — the live semaphore cap is exercised in
+    // field-testing, which a mocked service cannot prove.
+    expect(peak).toBe(5);
+    expect(result.found.map((v) => v.variant_id)).toEqual(ids);
+  });
+
+  it('keeps found[]/failed[] in input order regardless of upstream resolution order', async () => {
+    // Per-item delays deliberately invert the input order: the first input
+    // resolves last, so resolution order is not input order.
+    const delays: Record<string, number> = {
+      '1-300-A-T': 30,
+      rs100: 20,
+      '1-200-A-T': 10,
+      '1-100-A-T': 5,
+    };
+    const fake = {
+      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      getVariant: vi.fn(async (id: string) => {
+        await new Promise((r) => setTimeout(r, delays[id] ?? 0));
+        if (id === '1-200-A-T') return null; // absent in dataset → failed[]
+        return record(id);
+      }),
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const ctx = createMockContext();
+    const input = gnomadGetVariant.input.parse({
+      variants: ['1-300-A-T', 'not-a-variant', 'rs100', '1-100-A-T', '1-200-A-T'],
+    });
+    const result = await gnomadGetVariant.handler(input, ctx as never);
+
+    // found[] and failed[] each follow input order, not the scrambled resolution
+    // order (which would be not-a-variant, 1-100, 1-200, rs100, 1-300).
+    expect(result.found.map((v) => v.variant_id)).toEqual(['1-300-A-T', 'rs100', '1-100-A-T']);
+    expect(result.failed.map((f) => f.variant)).toEqual(['not-a-variant', '1-200-A-T']);
+  });
+
   it('renders found and failed records in format() for content[] parity', async () => {
     const fake = {
       resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
