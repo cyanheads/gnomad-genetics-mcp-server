@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-06-30
+
+gnomad_get_variant batch lookups now dispatch concurrently under the existing GNOMAD_MAX_CONCURRENCY cap instead of a serial loop; per-item partial success and stable input-order found[]/failed[] are unchanged, with no schema change.
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-30 · 🛡️ Security
 
 Two fixes plus a security-bearing framework bump: gnomad_get_coverage bounds region coverage to the requested span (no more padded-window leakage); gnomad_search_clinvar names the cause for Ensembl gene IDs instead of a bare empty result; and adopting @cyanheads/mcp-ts-core ^0.10.10 re-resolves the transitive js-yaml, clearing GHSA-h67p-54hq-rp68.

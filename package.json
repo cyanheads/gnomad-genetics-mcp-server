@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/gnomad-genetics-mcp-server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "mcpName": "io.github.cyanheads/gnomad-genetics-mcp-server",
   "description": "Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in — via MCP. STDIO or Streamable HTTP.",
   "type": "module",
