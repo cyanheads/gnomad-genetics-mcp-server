@@ -576,15 +576,26 @@ export class GnomadService {
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<CoverageSummary[]> {
-    const { query, variables } = this.buildTargetQuery(target, dsCtx, 'coverage');
+    const { query, variables, regionBounds } = this.buildTargetQuery(target, dsCtx, 'coverage');
     const data = await this.graphql(query, variables, CoverageResponse, 'gnomad.getCoverage', ctx);
     const cov = (data.gene ?? data.transcript ?? data.region)?.coverage;
     const summaries: CoverageSummary[] = [];
-    for (const [src, bins] of [
+    for (const [src, rawBins] of [
       ['exome', cov?.exome],
       ['genome', cov?.genome],
     ] as const) {
-      if (!bins || bins.length === 0) continue;
+      if (!rawBins || rawBins.length === 0) continue;
+      // gnomAD pads a region(...) query to a fixed ~151 bp window centered on the
+      // request, so region coverage bins include ±~75 bp of neighboring bases.
+      // Bound them to the requested start..stop so the summary describes exactly
+      // the requested span (a single-position region → one bin). Gene and
+      // transcript bins are the intended whole-feature set and pass through as-is.
+      const bins = regionBounds
+        ? rawBins.filter(
+            (b) => b.pos != null && b.pos >= regionBounds.start && b.pos <= regionBounds.stop,
+          )
+        : rawBins;
+      if (bins.length === 0) continue;
       summaries.push(this.summarizeCoverage(src, bins));
     }
     return summaries;
@@ -621,12 +632,20 @@ export class GnomadService {
     };
   }
 
-  /** Build the right query + variables for a gene/transcript/region target. */
+  /**
+   * Build the right query + variables for a gene/transcript/region target. For
+   * region targets, also returns the parsed `regionBounds` so callers can bound
+   * the padded window gnomAD returns (see getCoverage); absent for gene/transcript.
+   */
   private buildTargetQuery(
     target: GenomeTarget,
     dsCtx: DatasetContext,
     kind: 'variants' | 'coverage',
-  ): { query: string; variables: Record<string, unknown> } {
+  ): {
+    query: string;
+    variables: Record<string, unknown>;
+    regionBounds?: { start: number; stop: number };
+  } {
     const base = { dataset: dsCtx.dataset, referenceGenome: dsCtx.reference_genome };
     if (target.kind === 'transcript') {
       return {
@@ -660,6 +679,7 @@ export class GnomadService {
       return {
         query: kind === 'variants' ? REGION_VARIANTS_QUERY : REGION_COVERAGE_QUERY,
         variables: { chrom: m[1], start, stop, ...base },
+        regionBounds: { start, stop },
       };
     }
     const byId = ENSEMBL_GENE_ID.test(target.value);
