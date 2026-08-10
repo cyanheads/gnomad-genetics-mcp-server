@@ -19,6 +19,12 @@
 
 </div>
 
+<div align="center">
+
+**Public Hosted Server:** [https://gnomad-genetics.caseyjhand.com/mcp](https://gnomad-genetics.caseyjhand.com/mcp)
+
+</div>
+
 ---
 
 ## Tools
@@ -138,6 +144,23 @@ Agent-friendly output:
 - Recovery hints on errors (`incoherent_build`, `invalid_target`, `gene_not_found`, `canvas_disabled`) so callers know the next move
 
 ## Getting started
+
+### Public Hosted Instance
+
+A public instance is available at `https://gnomad-genetics.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "gnomad-genetics-mcp-server": {
+      "type": "streamable-http",
+      "url": "https://gnomad-genetics.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file. gnomAD is a free, keyless API — no credentials required.
 

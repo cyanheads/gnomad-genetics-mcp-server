@@ -7,6 +7,12 @@
     "source": "github"
   },
   "version": "0.1.5",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gnomad-genetics.caseyjhand.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
