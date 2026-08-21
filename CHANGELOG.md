@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-08-21 · ⚠️ Breaking
+
+Adopts MCP SDK v2 through mcp-ts-core 0.12.3, tightening advertised tool schemas and serving protocol revision 2026-07-28; the release also adds the hosted endpoint, expands boundary coverage, and refreshes the build and packaging toolchain.
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-06-30
 
 gnomad_get_variant batch lookups now dispatch concurrently under the existing GNOMAD_MAX_CONCURRENCY cap instead of a serial loop; per-item partial success and stable input-order found[]/failed[] are unchanged, with no schema change.

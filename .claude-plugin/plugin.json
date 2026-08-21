@@ -1,11 +1,11 @@
 {
   "name": "gnomad-genetics-mcp-server",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in.",
   "author": {
     "name": "Casey Hand",
     "email": "casey@caseyjhand.com",
-    "url": "https://github.com/cyanheads"
+    "url": "https://caseyjhand.com"
   },
   "homepage": "https://github.com/cyanheads/gnomad-genetics-mcp-server",
   "repository": "https://github.com/cyanheads/gnomad-genetics-mcp-server",

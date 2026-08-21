@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-06-28 13:55:46
+Generated on: 2026-08-21 23:05:17
 
 ```text
 gnomad-genetics-mcp-server/
@@ -10,15 +10,20 @@ gnomad-genetics-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -158,6 +163,14 @@ gnomad-genetics-mcp-server/
 │   │   └── upstream-error.ts
 │   └── index.ts
 ├── tests/
+│   ├── fuzz/
+│   │   └── identifiers-and-responses.fuzz.test.ts
+│   ├── integration/
+│   │   ├── clinvar-boundary.integration.test.ts
+│   │   ├── dataframe-tools.integration.test.ts
+│   │   ├── gnomad-boundary.integration.test.ts
+│   │   ├── known-issues.integration.test.ts
+│   │   └── unresolved-correctness.integration.test.ts
 │   ├── prompts/
 │   │   └── variant-triage.prompt.test.ts
 │   ├── resources/
@@ -168,6 +181,8 @@ gnomad-genetics-mcp-server/
 │   │   ├── gnomad-service.test.ts
 │   │   ├── upstream-error.test.ts
 │   │   └── upstream-leak.e2e.test.ts
+│   ├── smoke/
+│   │   └── tool-surface.smoke.test.ts
 │   └── tools/
 │       ├── gnomad-dataframe-describe.test.ts
 │       ├── gnomad-dataframe-drop.test.ts
@@ -180,6 +195,7 @@ gnomad-genetics-mcp-server/
 │       └── gnomad-search-clinvar.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md
@@ -187,6 +203,7 @@ gnomad-genetics-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile
