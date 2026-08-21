@@ -209,8 +209,13 @@ describe('ClinVarService upstream error contracts', () => {
   });
 
   it('classifies a real fetch timeout path without leaking the E-utilities URL', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
-      new DOMException('The operation timed out', 'TimeoutError'),
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(signal.reason);
+          else signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
     );
     const svc = new ClinVarService(getServerConfig());
 

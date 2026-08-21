@@ -46,7 +46,7 @@ describe('gnomad://gene constraint resource', () => {
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
     const ctx = createMockContext({ errors: geneConstraintResource.errors });
-    const params = geneConstraintResource.params.parse({ dataset: 'gnomad_r4', gene: 'PCSK9' });
+    const params = geneConstraintResource.params!.parse({ dataset: 'gnomad_r4', gene: 'PCSK9' });
     const result = await geneConstraintResource.handler(params, ctx as never);
     expect(result).toMatchObject({ symbol: 'PCSK9', gene_id: 'ENSG00000169174' });
   });
@@ -59,7 +59,10 @@ describe('gnomad://gene constraint resource', () => {
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
     const ctx = createMockContext({ errors: geneConstraintResource.errors });
-    const params = geneConstraintResource.params.parse({ dataset: 'gnomad_r4', gene: 'NOTAGENE' });
+    const params = geneConstraintResource.params!.parse({
+      dataset: 'gnomad_r4',
+      gene: 'NOTAGENE',
+    });
     await expect(geneConstraintResource.handler(params, ctx as never)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
       data: { reason: 'gene_not_found' },

@@ -144,7 +144,7 @@ export class ClinVarService {
   ): Promise<string[]> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esearch',
-      parentContext: { requestId: ctx.requestId, traceId: ctx.traceId },
+      parentContext: ctx,
     });
     let term = `${gene}[gene]`;
     if (clinicalSignificance) term += ` AND ${clinicalSignificance}[clinical_significance]`;
@@ -174,7 +174,7 @@ export class ClinVarService {
   private esummary(ids: string[], ctx: Context): Promise<ClinVarRow[]> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esummary',
-      parentContext: { requestId: ctx.requestId, traceId: ctx.traceId },
+      parentContext: ctx,
     });
     const url = this.withKey(new URL(`${this.baseUrl}/esummary.fcgi`));
     url.searchParams.set('db', 'clinvar');

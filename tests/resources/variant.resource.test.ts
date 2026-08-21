@@ -44,7 +44,7 @@ describe('gnomad://variant resource', () => {
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
     const ctx = createMockContext({ errors: variantResource.errors });
-    const params = variantResource.params.parse({
+    const params = variantResource.params!.parse({
       dataset: 'gnomad_r4',
       variantId: '1-55051215-G-GA',
     });
@@ -60,7 +60,7 @@ describe('gnomad://variant resource', () => {
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
     const ctx = createMockContext({ errors: variantResource.errors });
-    const params = variantResource.params.parse({
+    const params = variantResource.params!.parse({
       dataset: 'gnomad_r4',
       variantId: '1-55051215-G-GA',
     });

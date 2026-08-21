@@ -38,16 +38,12 @@ async function rejectAfterRetries(operation: () => Promise<unknown>): Promise<un
 }
 
 describe('variant and rsID parser fuzz', () => {
-  it.each([
-    '1-100-A-T',
-    'x-200-a-g',
-    'Y-300-G-GA',
-    'm-400-AC-GT',
-    'RS11591147',
-    'rs1',
-  ])('accepts supported case and allele-length variants: %s', (identifier) => {
-    expect(VARIANT_OR_RSID_REGEX.test(identifier)).toBe(true);
-  });
+  it.each(['1-100-A-T', 'x-200-a-g', 'Y-300-G-GA', 'm-400-AC-GT', 'RS11591147', 'rs1'])(
+    'accepts supported case and allele-length variants: %s',
+    (identifier) => {
+      expect(VARIANT_OR_RSID_REGEX.test(identifier)).toBe(true);
+    },
+  );
 
   it.each([
     '',
@@ -95,16 +91,12 @@ describe('variant and rsID parser fuzz', () => {
 });
 
 describe('gene parser fuzz', () => {
-  it.each([
-    'PCSK9',
-    'pcsk9',
-    'PARK2',
-    'MLL2',
-    'ENSG00000169174',
-    'ensg00000169174',
-  ])('accepts symbol, alias, deprecated-symbol, and stable-ID shapes: %s', (gene) => {
-    expect(gnomadGetGeneConstraint.input.safeParse({ gene }).success).toBe(true);
-  });
+  it.each(['PCSK9', 'pcsk9', 'PARK2', 'MLL2', 'ENSG00000169174', 'ensg00000169174'])(
+    'accepts symbol, alias, deprecated-symbol, and stable-ID shapes: %s',
+    (gene) => {
+      expect(gnomadGetGeneConstraint.input.safeParse({ gene }).success).toBe(true);
+    },
+  );
 
   it.each(['', 'A'])('rejects empty and truncated gene identifiers: %j', (gene) => {
     expect(gnomadGetGeneConstraint.input.safeParse({ gene }).success).toBe(false);
@@ -166,16 +158,19 @@ describe('gnomAD response-envelope fuzz', () => {
         clinvar_variant: null,
       },
     }),
-  ])('rejects truncated or wrong-type GraphQL payloads without returning a record', async (body) => {
-    vi.useFakeTimers();
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body));
-    const svc = new GnomadService(getServerConfig());
+  ])(
+    'rejects truncated or wrong-type GraphQL payloads without returning a record',
+    async (body) => {
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body));
+      const svc = new GnomadService(getServerConfig());
 
-    const error = await rejectAfterRetries(() =>
-      svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
-    );
-    expect(error).toBeDefined();
-  });
+      const error = await rejectAfterRetries(() =>
+        svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+      );
+      expect(error).toBeDefined();
+    },
+  );
 });
 
 describe('ClinVar response-envelope fuzz', () => {

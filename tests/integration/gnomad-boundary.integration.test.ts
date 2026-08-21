@@ -120,7 +120,7 @@ describe('GnomadService variant boundary', () => {
       expect.objectContaining({ id: 'afr', ac: 0, an: 500, af: 0 }),
       expect.objectContaining({ id: 'nfe', af: null }),
     ]);
-    expect(result?.populations.some((population) => population.id === 'afr_XX')).toBe(false);
+    expect(result?.populations.map((population) => population.id)).not.toContain('afr_XX');
   });
 
   it('keeps dataset-specific presence separate for the same coordinate', async () => {

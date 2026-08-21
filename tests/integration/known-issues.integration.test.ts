@@ -46,9 +46,9 @@ describe('known correctness defects', () => {
       reference_genome: 'GRCh37',
     });
 
-    const error = await gnomadGetGeneConstraint
-      .handler(input, ctx)
-      .catch((caught: unknown) => caught);
+    const error = await Promise.resolve(gnomadGetGeneConstraint.handler(input, ctx)).catch(
+      (caught: unknown) => caught,
+    );
     expect(error).toMatchObject({
       data: {
         reason: 'incoherent_build',
@@ -63,9 +63,9 @@ describe('known correctness defects', () => {
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
     const input = gnomadListGeneVariants.input.parse({});
 
-    const error = await gnomadListGeneVariants
-      .handler(input, ctx)
-      .catch((caught: unknown) => caught);
+    const error = await Promise.resolve(gnomadListGeneVariants.handler(input, ctx)).catch(
+      (caught: unknown) => caught,
+    );
     expect(error).toMatchObject({
       data: {
         reason: 'invalid_target',

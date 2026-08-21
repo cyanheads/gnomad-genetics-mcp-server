@@ -293,7 +293,7 @@ export class GnomadService {
   ): Promise<T> {
     const reqCtx = requestContextService.createRequestContext({
       operation,
-      parentContext: { requestId: ctx.requestId, traceId: ctx.traceId },
+      parentContext: ctx,
     });
     return withRetry(
       async () => {

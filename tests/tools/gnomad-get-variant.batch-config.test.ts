@@ -34,7 +34,7 @@ test('GNOMAD_MAX_VARIANT_BATCH drives the accepted batch size and advertised max
   expect(gnomadGetVariant.input.safeParse({ variants: batch(31) }).success).toBe(false);
 
   // The cap clients see in tools/list reflects the configured value, not 25.
-  const json = z.toJSONSchema(gnomadGetVariant.input) as {
+  const json = z.toJSONSchema(gnomadGetVariant.input) as unknown as {
     properties: { variants: { maxItems?: number } };
   };
   expect(json.properties.variants.maxItems).toBe(30);

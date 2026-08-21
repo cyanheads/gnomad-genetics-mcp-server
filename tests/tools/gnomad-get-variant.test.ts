@@ -75,6 +75,7 @@ describe('gnomad_get_variant handler', () => {
     expect(result.failed.map((f) => f.variant).sort()).toEqual(
       ['1-200-A-T', '1-300-A-T', 'not-a-variant'].sort(),
     );
+    expect(result).toEqual(expect.schemaMatching(gnomadGetVariant.output));
     const malformed = result.failed.find((f) => f.variant === 'not-a-variant');
     expect(malformed?.error).toMatch(/Malformed ID/);
     // getVariant is never called for the malformed ID (rejected before the service)
