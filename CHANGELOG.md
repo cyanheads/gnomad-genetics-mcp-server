@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-08-30
+
+Hardens variant and ClinVar boundaries: trims gene inputs, validates and canonicalizes coordinate IDs and upstream build labels, preserves variant hits when the optional ClinVar join fails, returns candidate IDs for ambiguous rsIDs, adds gnomAD attribution, and drops unused fast-check while refreshing dev dependencies.
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-08-21 · ⚠️ Breaking
 
 Adopts MCP SDK v2 through mcp-ts-core 0.12.3, tightening advertised tool schemas and serving protocol revision 2026-07-28; the release also adds the hosted endpoint, expands boundary coverage, and refreshes the build and packaging toolchain.
