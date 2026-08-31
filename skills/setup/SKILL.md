@@ -4,7 +4,7 @@ description: >
   Post-init orientation for an MCP server built on @cyanheads/mcp-ts-core. Use after running `@cyanheads/mcp-ts-core init` to understand the project structure, conventions, and skill sync model. Also use when onboarding to an existing project for the first time.
 metadata:
   author: cyanheads
-  version: "1.9"
+  version: "1.10"
   audience: external
   type: workflow
 ---
@@ -59,7 +59,7 @@ tests/
   prompts/echo.prompt.test.ts
   smoke/definitions.smoke.test.ts               # Every shipped definition executed once
   integration/echo-contract.int.test.ts         # The echo tool driven through the production surfaces
-  fuzz/echo-tool.fuzz.test.ts                   # Property-based coverage, via the fast-check dev dep
+  fuzz/echo-tool.fuzz.test.ts                   # Optional property-based coverage; add fast-check when adopted
 ```
 
 Add these as needed:
