@@ -8,11 +8,10 @@
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
-import { sanitizeUpstreamError } from '@/services/upstream-error.js';
+import { invalidUpstreamResponse, sanitizeUpstreamError } from '@/services/upstream-error.js';
 import type { ClinVarFilters, ClinVarRow } from './types.js';
 
 /** ClinVar review-status text → gold-star rating (the standard convention). */
@@ -64,6 +63,10 @@ const EsearchResponse = z.object({
   }),
 });
 
+const EsummaryResponse = z.object({
+  result: z.object({ uids: z.array(z.string()) }).catchall(z.unknown()),
+});
+
 const ClassificationSchema = z
   .object({
     description: z.string().nullable().optional(),
@@ -99,11 +102,59 @@ export class ClinVarService {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly timeoutMs: number;
+  private readonly requestIntervalMs: number;
+  private nextRequestAt = 0;
+  private rateTail: Promise<void> = Promise.resolve();
 
   constructor(serverConfig: ServerConfig) {
     this.baseUrl = serverConfig.clinvarBaseUrl;
     if (serverConfig.ncbiApiKey) this.apiKey = serverConfig.ncbiApiKey;
     this.timeoutMs = serverConfig.requestTimeoutMs;
+    this.requestIntervalMs = Math.ceil(1000 / (this.apiKey ? 10 : 3));
+  }
+
+  /** Serialize request starts at NCBI's process-shared keyed/keyless rate. */
+  private async waitForRateLimit(signal: AbortSignal): Promise<void> {
+    const previous = this.rateTail;
+    const turn = previous.then(async () => {
+      if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
+      const delay = Math.max(0, this.nextRequestAt - Date.now());
+      if (delay > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal.reason ?? new Error('Request aborted'));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+          }, delay);
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+      }
+      if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
+      this.nextRequestAt = Date.now() + this.requestIntervalMs;
+    });
+    this.rateTail = turn.catch(() => {});
+
+    if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener('abort', onAbort);
+        reject(signal.reason ?? new Error('Request aborted'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      void turn.then(
+        () => {
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        },
+        (err: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        },
+      );
+    });
   }
 
   private withKey(url: URL): URL {
@@ -113,7 +164,7 @@ export class ClinVarService {
 
   /** Search ClinVar for a gene, returning normalized rows (the handler spills them). */
   async searchGene(gene: string, filters: ClinVarFilters, ctx: Context): Promise<ClinVarRow[]> {
-    const ids = await this.esearch(gene, filters.clinicalSignificance, ctx);
+    const ids = await this.esearch(gene.trim(), filters.clinicalSignificance, ctx);
     if (ids.length === 0) return [];
     const rows: ClinVarRow[] = [];
     for (let i = 0; i < ids.length; i += SUMMARY_BATCH) {
@@ -156,6 +207,7 @@ export class ClinVarService {
 
     return withRetry(
       async () => {
+        await this.waitForRateLimit(ctx.signal);
         // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
         // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
@@ -163,9 +215,17 @@ export class ClinVarService {
         }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
         const text = await response.text();
         if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable('NCBI returned HTML instead of JSON — likely rate-limited.');
+          invalidUpstreamResponse(
+            new Error('NCBI returned HTML instead of JSON.'),
+            'NCBI ClinVar',
+            NCBI_RETRY_HINT,
+          );
         }
-        return EsearchResponse.parse(JSON.parse(text)).esearchresult.idlist;
+        try {
+          return EsearchResponse.parse(JSON.parse(text)).esearchresult.idlist;
+        } catch (err) {
+          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
+        }
       },
       { operation: 'clinvar.esearch', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
     );
@@ -183,6 +243,7 @@ export class ClinVarService {
 
     return withRetry(
       async () => {
+        await this.waitForRateLimit(ctx.signal);
         // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
         // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
@@ -190,16 +251,26 @@ export class ClinVarService {
         }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
         const text = await response.text();
         if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable('NCBI returned HTML instead of JSON — likely rate-limited.');
+          invalidUpstreamResponse(
+            new Error('NCBI returned HTML instead of JSON.'),
+            'NCBI ClinVar',
+            NCBI_RETRY_HINT,
+          );
         }
-        const parsed = JSON.parse(text) as { result?: Record<string, unknown> };
-        const result = parsed.result;
-        if (!result) return [];
-        const uids = (result.uids as string[] | undefined) ?? [];
-        return uids
-          .map((uid) => result[uid])
-          .filter((r): r is Record<string, unknown> => r != null)
-          .map((raw) => this.normalize(EsummaryRecord.parse(raw)));
+        let result: z.infer<typeof EsummaryResponse>['result'];
+        try {
+          result = EsummaryResponse.parse(JSON.parse(text)).result;
+        } catch (err) {
+          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
+        }
+        try {
+          return result.uids
+            .map((uid) => result[uid])
+            .filter((r): r is Record<string, unknown> => r != null)
+            .map((raw) => this.normalize(EsummaryRecord.parse(raw)));
+        } catch (err) {
+          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
+        }
       },
       { operation: 'clinvar.esummary', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
     );

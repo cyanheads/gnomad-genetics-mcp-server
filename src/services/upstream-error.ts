@@ -100,3 +100,16 @@ export function sanitizeUpstreamError(err: unknown, upstream: string, retryHint:
     { cause: err },
   );
 }
+
+/** Raise a leak-free transient error for malformed HTTP 2xx JSON or schema payloads. */
+export function invalidUpstreamResponse(err: unknown, upstream: string, retryHint: string): never {
+  throw serviceUnavailable(
+    `${upstream} returned an invalid response.`,
+    {
+      reason: 'invalid_upstream_response',
+      retryable: true,
+      recovery: { hint: retryHint },
+    },
+    { cause: err },
+  );
+}

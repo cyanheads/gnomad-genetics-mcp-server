@@ -63,4 +63,18 @@ describe('eight-tool surface', () => {
       expect(schema.properties).toHaveProperty('reference_genome');
     }
   });
+
+  it('attributes every gnomAD-backed tool in client-facing metadata', () => {
+    for (const definition of [
+      gnomadGetVariant,
+      gnomadListGeneVariants,
+      gnomadGetGeneConstraint,
+      gnomadGetCoverage,
+    ]) {
+      expect(definition.description).toContain(
+        'Data source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+      );
+    }
+    expect(gnomadSearchClinvar.description).not.toContain('Data source: gnomAD');
+  });
 });

@@ -7,7 +7,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
@@ -47,6 +47,7 @@ function record(variantId: string): VariantRecord {
     gene_symbol: 'GENE1',
     in_silico: [{ id: 'revel_max', value: 0.5 }],
     clinvar: null,
+    clinvar_unavailable: false,
   };
 }
 
@@ -161,6 +162,28 @@ describe('gnomad_get_variant handler', () => {
     expect(text).toContain('nfe');
   });
 
+  it('distinguishes unavailable ClinVar from an ordinary absent entry on both surfaces', async () => {
+    const unavailable = { ...record('1-100-A-T'), clinvar: null, clinvar_unavailable: true };
+    const fake = {
+      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      getVariant: vi.fn(async () => unavailable),
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+    const ctx = createMockContext({ errors: gnomadGetVariant.errors });
+
+    const result = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({ variants: ['1-100-A-T'] }),
+      ctx as never,
+    );
+    expect(result.found[0]).toMatchObject({ clinvar: null, clinvar_unavailable: true });
+    expect(result).toEqual(expect.schemaMatching(gnomadGetVariant.output));
+    expect(getEnrichment(ctx).notice).toContain('1-100-A-T');
+    const text = (gnomadGetVariant.format?.(result) ?? [])
+      .map((block) => ('text' in block ? block.text : ''))
+      .join('');
+    expect(text).toContain('ClinVar:** unavailable');
+  });
+
   it('rejects an incoherent dataset/reference_genome pair before any lookup', async () => {
     const getVariant = vi.fn(async () => record('1-100-A-T'));
     const fake = {
@@ -201,6 +224,7 @@ describe('gnomad_get_variant handler', () => {
       gene_symbol: null,
       in_silico: [],
       clinvar: null,
+      clinvar_unavailable: false,
     };
     const fake = {
       resolveDatasetContext: realService.resolveDatasetContext.bind(realService),

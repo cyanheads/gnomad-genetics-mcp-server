@@ -32,14 +32,23 @@ function record(variantId: string): VariantRecord {
     gene_symbol: null,
     in_silico: [],
     clinvar: null,
+    clinvar_unavailable: false,
   };
 }
 
 describe('gnomad://variant resource', () => {
+  it('attributes the gnomAD source in its description', () => {
+    expect(variantResource.description).toContain(
+      'Data source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    );
+  });
   it('returns the population record for a resolved variant', async () => {
     const fake = {
       resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
-      getVariant: vi.fn(async () => record('1-55051215-G-GA')),
+      getVariant: vi.fn(async () => ({
+        ...record('1-55051215-G-GA'),
+        clinvar_unavailable: true,
+      })),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
@@ -49,7 +58,51 @@ describe('gnomad://variant resource', () => {
       variantId: '1-55051215-G-GA',
     });
     const result = await variantResource.handler(params, ctx as never);
-    expect(result).toMatchObject({ variant_id: '1-55051215-G-GA', dataset: 'gnomad_r4' });
+    expect(result).toMatchObject({
+      variant_id: '1-55051215-G-GA',
+      dataset: 'gnomad_r4',
+      clinvar_unavailable: true,
+    });
+  });
+
+  it('canonicalizes chr prefixes and allele case before lookup', async () => {
+    const getVariant = vi.fn(async () => record('1-55051215-G-GA'));
+    const fake = {
+      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      getVariant,
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const ctx = createMockContext({ errors: variantResource.errors });
+    const params = variantResource.params!.parse({
+      dataset: 'gnomad_r4',
+      variantId: 'chr1-55051215-g-ga',
+    });
+    await variantResource.handler(params, ctx as never);
+
+    expect(getVariant).toHaveBeenCalledWith(
+      '1-55051215-G-GA',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('rejects invalid coordinate bounds before lookup', async () => {
+    const getVariant = vi.fn();
+    const fake = {
+      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      getVariant,
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const ctx = createMockContext({ errors: variantResource.errors });
+    const params = variantResource.params!.parse({ dataset: 'gnomad_r4', variantId: '23-0-A-T' });
+
+    await expect(variantResource.handler(params, ctx as never)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_variant_id' },
+    });
+    expect(getVariant).not.toHaveBeenCalled();
   });
 
   it('throws ctx.fail("variant_not_found") when the variant is absent', async () => {

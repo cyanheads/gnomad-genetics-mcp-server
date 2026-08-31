@@ -59,6 +59,22 @@ describe('gnomad_variant_triage prompt', () => {
     expect(text).not.toContain('gnomad_get_coverage(gene:');
   });
 
+  it('canonicalizes a chr-prefixed lowercase coordinate throughout the generated workflow', async () => {
+    const text = await renderText({ variant: 'chr1-55051215-g-ga' });
+
+    expect(text).toContain('**1-55051215-G-GA**');
+    expect(text).toContain('variants: ["1-55051215-G-GA"]');
+    expect(text).toContain('region: "1-55051215-55051215"');
+    expect(text).not.toContain('chr1-55051215-g-ga');
+  });
+
+  it.each(['23-100-A-T', '1-0-A-T', '1-100-N-T'])(
+    'rejects an invalid coordinate before prompt generation: %s',
+    (variant) => {
+      expect(variantTriagePrompt.args!.safeParse({ variant }).success).toBe(false);
+    },
+  );
+
   it('routes an rsID coverage check through the resolved variant_id, with gene as a fallback only', async () => {
     const text = await renderText({ variant: 'rs11591147', gene: 'PCSK9', dataset: 'gnomad_r4' });
     // Coordinates are unknown for an rsID, so coverage derives the region from the

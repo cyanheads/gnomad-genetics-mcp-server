@@ -73,7 +73,7 @@ const CoverageSummarySchema = z
 export const gnomadGetCoverage = tool('gnomad_get_coverage', {
   title: 'gnomad-genetics-mcp-server: get coverage',
   description:
-    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.',
+    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: geneField.optional(),
@@ -144,7 +144,11 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
 
   async handler(input, ctx) {
     const svc = getGnomadService();
-    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
+    const dsCtx = svc.resolveDatasetContext(
+      input.dataset,
+      input.reference_genome,
+      ctx.recoveryFor('incoherent_build'),
+    );
     const target = resolveGenomeTarget(
       { gene: input.gene, transcript_id: input.transcript_id, region: input.region || undefined },
       ctx,

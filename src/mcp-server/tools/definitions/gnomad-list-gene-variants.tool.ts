@@ -49,7 +49,7 @@ const GeneVariantRowSchema = z
 export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   title: 'gnomad-genetics-mcp-server: list gene variants',
   description:
-    'List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. The full result is staged on a DataCanvas table named gene_variants and an inline preview is returned alongside canvas_id and table_name — run gnomad_dataframe_query against them to rank by AF, count by consequence, or group across the complete set rather than the preview. When the canvas is disabled (CANVAS_PROVIDER_TYPE != duckdb) the tool returns a capped inline preview with spilled=false and canvas_id empty; the SQL path is then unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.',
+    'List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. The full result is staged on a DataCanvas table named gene_variants and an inline preview is returned alongside canvas_id and table_name — run gnomad_dataframe_query against them to rank by AF, count by consequence, or group across the complete set rather than the preview. When the canvas is disabled (CANVAS_PROVIDER_TYPE != duckdb) the tool returns a capped inline preview with spilled=false and canvas_id empty; the SQL path is then unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: geneField.optional(),
@@ -140,7 +140,11 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
 
   async handler(input, ctx) {
     const svc = getGnomadService();
-    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
+    const dsCtx = svc.resolveDatasetContext(
+      input.dataset,
+      input.reference_genome,
+      ctx.recoveryFor('incoherent_build'),
+    );
     const target = resolveGenomeTarget(
       { gene: input.gene, transcript_id: input.transcript_id, region: input.region || undefined },
       ctx,

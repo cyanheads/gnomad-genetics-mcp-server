@@ -14,7 +14,7 @@ import type { Dataset } from '@/services/gnomad/types.js';
 
 export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/constraint', {
   description:
-    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI, observed/expected ratios, and Z-scores. Mirrors gnomad_get_gene_constraint. The gene segment is an HGNC symbol or Ensembl gene ID.',
+    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI, observed/expected ratios, and Z-scores. Mirrors gnomad_get_gene_constraint. The gene segment is an HGNC symbol or Ensembl gene ID.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   name: 'gnomAD gene constraint',
   mimeType: 'application/json',
   params: z.object({

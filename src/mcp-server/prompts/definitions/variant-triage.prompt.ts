@@ -8,7 +8,8 @@
  */
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
-import { VARIANT_ID_REGEX } from '../../tools/shared-schemas.js';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
+import { normalizeVariantIdentifier, VARIANT_OR_RSID_REGEX } from '../../tools/shared-schemas.js';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description:
@@ -17,6 +18,10 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   args: z.object({
     variant: z
       .string()
+      .regex(
+        VARIANT_OR_RSID_REGEX,
+        'Expected chrom-pos-ref-alt on chromosome 1–22, X, Y, or M with a positive position and A/C/G/T alleles, or an rsID.',
+      )
       .describe(
         'Variant to triage — a chrom-pos-ref-alt variantId (e.g. 1-55051215-G-GA) or an rsID (rs11591147).',
       ),
@@ -34,6 +39,14 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
       ),
   }),
   generate: (args) => {
+    const normalizedVariant = normalizeVariantIdentifier(args.variant);
+    if (!normalizedVariant) {
+      throw validationError('Invalid variant ID.', {
+        reason: 'invalid_variant_id',
+        retryable: false,
+      });
+    }
+    const variant = normalizedVariant.canonical;
     const datasetClause = args.dataset ? `, dataset: "${args.dataset}"` : '';
     const geneStep = args.gene
       ? `2. **Gene constraint.** Call \`gnomad_get_gene_constraint(gene: "${args.gene}"${datasetClause})\`. Read pLI (>0.9 intolerant) and LOEUF / oe_lof_upper (<0.6 intolerant in v4, <0.35 in v2). High constraint weights a loss-of-function variant as more likely deleterious.`
@@ -49,8 +62,8 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
         '3. **Callability check (do not skip).** If step 1 returned the variant as absent or ultra-rare, confirm the *exact position* is well-covered before trusting the absence — gene-level coverage averages across the gene and can hide a poorly-covered base.';
       const tail =
         'An absent variant at a well-covered position is informative; one at a poorly-covered position is uninterpretable — the absence may just be uncallable sequence. This step is the one analysts most often skip.';
-      if (VARIANT_ID_REGEX.test(args.variant)) {
-        const [chrom, pos] = args.variant.split('-');
+      if (normalizedVariant.kind === 'variant') {
+        const [chrom, pos] = variant.split('-');
         return `${intro} Call \`gnomad_get_coverage(region: "${chrom}-${pos}-${pos}"${datasetClause})\` for the single-position region at ${chrom}-${pos}. ${tail}`;
       }
       const fallback = args.gene
@@ -65,9 +78,9 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
         content: {
           type: 'text',
           text: [
-            `Triage variant **${args.variant}** for rare-disease causality using gnomAD. Run these steps in order and report the population context plainly — never overstate certainty from a missing field.`,
+            `Triage variant **${variant}** for rare-disease causality using gnomAD. Run these steps in order and report the population context plainly — never overstate certainty from a missing field.`,
             '',
-            `1. **Population frequency.** Call \`gnomad_get_variant(variants: ["${args.variant}"]${datasetClause})\`. Report the overall AC/AN/AF and the full per-ancestry vector — a variant common in one genetic-ancestry group and absent in another is exactly the signal. Note homozygote/hemizygote counts, quality flags, and any joined ClinVar significance.`,
+            `1. **Population frequency.** Call \`gnomad_get_variant(variants: ["${variant}"]${datasetClause})\`. Report the overall AC/AN/AF and the full per-ancestry vector — a variant common in one genetic-ancestry group and absent in another is exactly the signal. Note homozygote/hemizygote counts, quality flags, and any joined ClinVar significance.`,
             '',
             geneStep,
             '',

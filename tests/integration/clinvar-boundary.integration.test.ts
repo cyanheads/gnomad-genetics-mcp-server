@@ -55,6 +55,69 @@ afterEach(() => {
 });
 
 describe('ClinVarService E-utilities boundary', () => {
+  it.each([
+    { apiKey: false, interval: 334 },
+    { apiKey: true, interval: 100 },
+  ])(
+    'paces concurrent request starts at the configured NCBI rate ($apiKey)',
+    async ({ apiKey, interval }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const starts: number[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        starts.push(Date.now());
+        return new Response(JSON.stringify({ esearchresult: { idlist: [] } }));
+      });
+      const base = getServerConfig();
+      const svc = new ClinVarService(apiKey ? { ...base, ncbiApiKey: 'test-key' } : base);
+      const calls = Promise.all(
+        Array.from({ length: 4 }, (_, index) =>
+          svc.searchGene(`GENE${index}`, {}, createMockContext()),
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(interval * 4 + 1);
+      await calls;
+
+      expect(starts).toHaveLength(4);
+      for (let index = 1; index < starts.length; index += 1) {
+        expect((starts[index] ?? 0) - (starts[index - 1] ?? 0)).toBeGreaterThanOrEqual(
+          interval - 1,
+        );
+      }
+      if (!apiKey) {
+        expect((starts[3] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(1000);
+      }
+    },
+  );
+
+  it('aborts a queued request without consuming a later limiter turn', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const starts: number[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      starts.push(Date.now());
+      return new Response(JSON.stringify({ esearchresult: { idlist: [] } }));
+    });
+    const svc = new ClinVarService(getServerConfig());
+    const first = svc.searchGene('FIRST', {}, createMockContext());
+    const controller = new AbortController();
+    const cancelled = svc.searchGene(
+      'CANCELLED',
+      {},
+      createMockContext({ signal: controller.signal }),
+    );
+    const third = svc.searchGene('THIRD', {}, createMockContext());
+    controller.abort(new Error('cancelled'));
+
+    await expect(cancelled).rejects.toThrow('cancelled');
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all([first, third]);
+
+    expect(starts).toHaveLength(2);
+    expect((starts[1] ?? 0) - (starts[0] ?? 0)).toBeGreaterThanOrEqual(334);
+  });
+
   it('builds a scoped gene query and normalizes review metadata', async () => {
     const urls: URL[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -205,6 +268,34 @@ describe('ClinVarService upstream error contracts', () => {
     expect((error.data?.recovery as { hint?: string } | undefined)?.hint).toMatch(/NCBI.*retry/i);
     expect(JSON.stringify({ message: error.message, data: error.data })).not.toContain(
       'PRIVATE_RATE_LIMIT_DETAIL',
+    );
+  });
+
+  it('classifies a malformed esummary record without leaking response fields', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith('/esearch.fcgi')) {
+        return new Response(JSON.stringify({ esearchresult: { idlist: ['1'] } }));
+      }
+      return new Response(
+        JSON.stringify({
+          result: {
+            uids: ['1'],
+            '1': { uid: 1, private_upstream_field: 'DO_NOT_LEAK' },
+          },
+        }),
+      );
+    });
+    const svc = new ClinVarService(getServerConfig());
+
+    const error = await runExhausting(() => svc.searchGene('LDLR', {}, createMockContext()));
+
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'invalid_upstream_response', retryable: true },
+    });
+    expect(JSON.stringify({ message: error.message, data: error.data })).not.toContain(
+      'DO_NOT_LEAK',
     );
   });
 

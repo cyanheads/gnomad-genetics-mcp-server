@@ -211,24 +211,39 @@ describe('GnomadService variant boundary', () => {
     expect(result.reference_genome).toBe('GRCh38');
   });
 
-  it('treats GraphQL not-found plus null data as absence rather than an upstream fault', async () => {
+  it('rejects a pathless not-found error on the exact-path variant operation', async () => {
     fakeGraphql(() => ({
       errors: [{ message: 'Variant not found' }],
       data: { variant: null, clinvar_variant: null },
     }));
     const svc = new GnomadService(getServerConfig());
 
-    const result = await svc.getVariant(
-      '1-999-A-T',
+    await expect(
+      svc.getVariant('1-999-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'graphql_error' },
+    });
+  });
+});
+
+describe('GnomadService gene resolution and constraint normalization', () => {
+  it('preserves pathless not-found partial data for operations without an exact-path policy', async () => {
+    fakeGraphql(() => ({
+      errors: [{ message: 'Gene not found' }],
+      data: { gene: null },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getGeneConstraint(
+      'NORESULT',
       svc.resolveDatasetContext('gnomad_r4'),
       createMockContext(),
     );
 
     expect(result).toBeNull();
   });
-});
 
-describe('GnomadService gene resolution and constraint normalization', () => {
   it('routes symbols, aliases, deprecated symbols, and Ensembl IDs without silently changing identity', async () => {
     const canonical: Record<string, { geneId: string; symbol: string }> = {
       PARK2: { geneId: 'ENSG00000185345', symbol: 'PRKN' },

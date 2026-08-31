@@ -67,6 +67,12 @@ query GnomadVariantByRsid($rsid: String!, $dataset: DatasetId!) {
   variant(rsid: $rsid, dataset: $dataset) { ${VARIANT_SELECTION} }
 }` as const;
 
+/** Resolve concrete variant IDs associated with an ambiguous rsID. */
+export const VARIANT_SEARCH_QUERY = `
+query GnomadVariantSearch($query: String!, $dataset: DatasetId!) {
+  variant_search(query: $query, dataset: $dataset) { variant_id }
+}` as const;
+
 /** ClinVar join for a resolved variant_id (second hop for rsID lookups). */
 export const CLINVAR_BY_VARIANT_ID_QUERY = `
 query GnomadClinvar($variantId: String!, $referenceGenome: ReferenceGenomeId!) {

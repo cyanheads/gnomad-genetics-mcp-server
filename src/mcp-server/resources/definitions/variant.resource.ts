@@ -12,10 +12,11 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { Dataset } from '@/services/gnomad/types.js';
+import { normalizeVariantIdentifier } from '../../tools/shared-schemas.js';
 
 export const variantResource = resource('gnomad://variant/{dataset}/{variantId}', {
   description:
-    'Population record for one gnomAD variant — AC/AN/AF overall and per ancestry, counts, flags, consequence, in-silico predictors, and joined ClinVar significance. Mirrors gnomad_get_variant. The dataset segment (e.g. gnomad_r4) makes the URI self-describing.',
+    'Population record for one gnomAD variant — AC/AN/AF overall and per ancestry, counts, flags, consequence, in-silico predictors, and joined ClinVar significance. Mirrors gnomad_get_variant. The dataset segment (e.g. gnomad_r4) makes the URI self-describing.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   name: 'gnomAD variant record',
   mimeType: 'application/json',
   params: z.object({
@@ -28,6 +29,13 @@ export const variantResource = resource('gnomad://variant/{dataset}/{variantId}'
   }),
   errors: [
     {
+      reason: 'invalid_variant_id',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The variant identifier is outside the supported coordinate or rsID grammar.',
+      recovery:
+        'Use chrom-pos-ref-alt with chromosome 1–22, X, Y, or M; a positive position; A/C/G/T alleles; or an rsID.',
+    },
+    {
       reason: 'variant_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'The variant is absent from the requested dataset.',
@@ -39,7 +47,13 @@ export const variantResource = resource('gnomad://variant/{dataset}/{variantId}'
   async handler(params, ctx) {
     const svc = getGnomadService();
     const dsCtx = svc.resolveDatasetContext(params.dataset as Dataset);
-    const record = await svc.getVariant(params.variantId, dsCtx, ctx);
+    const normalized = normalizeVariantIdentifier(params.variantId);
+    if (!normalized) {
+      throw ctx.fail('invalid_variant_id', 'Invalid variant ID.', {
+        ...ctx.recoveryFor('invalid_variant_id'),
+      });
+    }
+    const record = await svc.getVariant(normalized.canonical, dsCtx, ctx);
     if (!record) {
       throw ctx.fail(
         'variant_not_found',

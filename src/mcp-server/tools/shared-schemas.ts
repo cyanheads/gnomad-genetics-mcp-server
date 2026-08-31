@@ -27,7 +27,7 @@ export const referenceGenomeField = z
   );
 
 /** Variant ID: chrom-pos-ref-alt (e.g. 1-55051215-G-GA). */
-export const VARIANT_ID_REGEX = /^[0-9XYM]+-\d+-[ACGT]+-[ACGT]+$/i;
+export const VARIANT_ID_REGEX = /^(?:chr)?(?:[1-9]|1\d|2[0-2]|X|Y|M)-[1-9]\d*-[ACGT]+-[ACGT]+$/i;
 /** rsID: rs followed by digits (e.g. rs11591147). */
 export const RSID_REGEX = /^rs\d+$/i;
 /** Region: chrom-start-stop (e.g. 1-55039447-55064852). */
@@ -35,9 +35,18 @@ export const REGION_REGEX = /^[0-9XYM]+-\d+-\d+$/i;
 
 /** Combined matcher — accepts a chrom-pos-ref-alt variantId OR an rsID. */
 export const VARIANT_OR_RSID_REGEX = new RegExp(
-  `(${VARIANT_ID_REGEX.source})|(${RSID_REGEX.source})`,
+  `^(?:${VARIANT_ID_REGEX.source.slice(1, -1)}|${RSID_REGEX.source.slice(1, -1)})$`,
   'i',
 );
+
+/** Parse and canonicalize one supported coordinate ID or rsID. */
+export function normalizeVariantIdentifier(
+  value: string,
+): { kind: 'variant' | 'rsid'; canonical: string } | null {
+  if (RSID_REGEX.test(value)) return { kind: 'rsid', canonical: value };
+  if (!VARIANT_ID_REGEX.test(value)) return null;
+  return { kind: 'variant', canonical: value.replace(/^chr/i, '').toUpperCase() };
+}
 
 /**
  * A single variant identifier for a BATCH field — a plain string so one
@@ -55,6 +64,7 @@ export const batchVariantIdField = z
 /** Gene reference — HGNC symbol or Ensembl gene ID. */
 export const geneField = z
   .string()
+  .trim()
   .min(2)
   .describe(
     'Gene — HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene.',
@@ -71,7 +81,10 @@ export function resolveGenomeTarget(
     transcript_id?: string | undefined;
     region?: string | undefined;
   },
-  ctx: { fail: (reason: 'invalid_target', msg?: string) => Error },
+  ctx: {
+    fail: (reason: 'invalid_target', msg?: string, data?: Record<string, unknown>) => Error;
+    recoveryFor: (reason: 'invalid_target') => Record<string, unknown>;
+  },
 ): GenomeTarget {
   const provided = [
     inputs.gene ? ({ kind: 'gene', value: inputs.gene } as const) : undefined,
@@ -84,6 +97,7 @@ export function resolveGenomeTarget(
     throw ctx.fail(
       'invalid_target',
       `Supply exactly one of gene, transcript_id, or region — received ${provided.length}.`,
+      ctx.recoveryFor('invalid_target'),
     );
   }
   return provided[0] as GenomeTarget;

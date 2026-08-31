@@ -9,11 +9,11 @@
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
-import { sanitizeUpstreamError } from '@/services/upstream-error.js';
+import { invalidUpstreamResponse, sanitizeUpstreamError } from '@/services/upstream-error.js';
 import {
   CLINVAR_BY_VARIANT_ID_QUERY,
   GENE_CONSTRAINT_BY_ID_QUERY,
@@ -28,6 +28,7 @@ import {
   TRANSCRIPT_VARIANTS_QUERY,
   VARIANT_BY_RSID_QUERY,
   VARIANT_QUERY,
+  VARIANT_SEARCH_QUERY,
 } from './queries.js';
 import {
   type ConsequenceClass,
@@ -116,34 +117,47 @@ const VariantResponse = z.object({
 
 const VariantByRsidResponse = z.object({ variant: RawVariant });
 const ClinVarOnlyResponse = z.object({ clinvar_variant: RawClinVar });
+const VariantSearchResponse = z.object({
+  variant_search: z.array(z.object({ variant_id: z.string() })),
+});
 
-const RawConstraint = z
-  .object({
-    pli: z.number().nullable(),
-    oe_lof: z.number().nullable(),
-    oe_lof_lower: z.number().nullable(),
-    oe_lof_upper: z.number().nullable(),
-    oe_mis: z.number().nullable(),
-    oe_syn: z.number().nullable(),
-    lof_z: z.number().nullable(),
-    mis_z: z.number().nullable(),
-    syn_z: z.number().nullable(),
-    obs_lof: z.number().nullable(),
-    exp_lof: z.number().nullable(),
-    obs_mis: z.number().nullable(),
-    exp_mis: z.number().nullable(),
-    obs_syn: z.number().nullable(),
-    exp_syn: z.number().nullable(),
-    flags: z.array(z.string()).nullable(),
-  })
-  .nullable();
+const GraphqlEnvelope = z.object({
+  data: z.unknown().optional(),
+  errors: z
+    .array(
+      z.object({
+        message: z.string(),
+        path: z.array(z.union([z.string(), z.number()])).optional(),
+      }),
+    )
+    .optional(),
+});
+
+const ConstraintMetrics = z.object({
+  pli: z.number().min(0).max(1).nullable(),
+  oe_lof: z.number().nonnegative().nullable(),
+  oe_lof_lower: z.number().nonnegative().nullable(),
+  oe_lof_upper: z.number().nonnegative().nullable(),
+  oe_mis: z.number().nonnegative().nullable(),
+  oe_syn: z.number().nonnegative().nullable(),
+  lof_z: z.number().nullable(),
+  mis_z: z.number().nullable(),
+  syn_z: z.number().nullable(),
+  obs_lof: z.number().nonnegative().nullable(),
+  exp_lof: z.number().nonnegative().nullable(),
+  obs_mis: z.number().nonnegative().nullable(),
+  exp_mis: z.number().nonnegative().nullable(),
+  obs_syn: z.number().nonnegative().nullable(),
+  exp_syn: z.number().nonnegative().nullable(),
+  flags: z.array(z.string()).nullable(),
+});
 
 const ConstraintResponse = z.object({
   gene: z
     .object({
       gene_id: z.string(),
       symbol: z.string(),
-      gnomad_constraint: RawConstraint,
+      gnomad_constraint: z.unknown().nullable(),
     })
     .nullable(),
 });
@@ -254,6 +268,7 @@ export class GnomadService {
   resolveDatasetContext(
     dataset: Dataset | undefined,
     referenceGenome?: ReferenceGenome,
+    recovery?: Record<string, unknown>,
   ): DatasetContext {
     const ds = dataset ?? this.serverConfig.defaultDataset;
     const derived = refGenomeForDataset(ds);
@@ -261,7 +276,13 @@ export class GnomadService {
       throw validationError(
         `dataset ${ds} requires reference_genome ${derived}, not ${referenceGenome}. ` +
           `gnomAD v4/v3 are GRCh38; v2.1 and ExAC are GRCh37.`,
-        { reason: 'incoherent_build', dataset: ds, expected: derived, supplied: referenceGenome },
+        {
+          reason: 'incoherent_build',
+          dataset: ds,
+          expected: derived,
+          supplied: referenceGenome,
+          ...recovery,
+        },
       );
     }
     return { dataset: ds, reference_genome: derived };
@@ -290,6 +311,11 @@ export class GnomadService {
     schema: z.ZodType<T>,
     operation: string,
     ctx: Context,
+    options?: {
+      allowedErrorPath?: readonly (string | number)[];
+      acceptPartialData?: (data: T) => boolean;
+      onAllowedPartial?: () => void;
+    },
   ): Promise<T> {
     const reqCtx = requestContextService.createRequestContext({
       operation,
@@ -317,9 +343,23 @@ export class GnomadService {
           );
           const text = await response.text();
           if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-            throw serviceUnavailable('gnomAD returned HTML instead of JSON — likely rate-limited.');
+            invalidUpstreamResponse(
+              new Error('gnomAD returned HTML instead of JSON.'),
+              'gnomAD',
+              'Wait a few seconds and retry; the upstream response could not be validated.',
+            );
           }
-          const body = JSON.parse(text) as { data?: unknown; errors?: Array<{ message: string }> };
+          let body: z.infer<typeof GraphqlEnvelope>;
+          try {
+            body = GraphqlEnvelope.parse(JSON.parse(text));
+          } catch (err) {
+            invalidUpstreamResponse(
+              err,
+              'gnomAD',
+              'Wait a few seconds and retry; the upstream response could not be validated.',
+            );
+          }
+          let hasAllowedPartialErrors = false;
           if (body.errors?.length) {
             const message = body.errors.map((e) => e.message).join('; ');
             // gnomAD reports rate limiting as a GraphQL error; treat that one as transient.
@@ -334,14 +374,46 @@ export class GnomadService {
             // Any other error (Invalid variant ID, Multiple variants found, …) is a
             // real failure and still throws.
             const allNotFound = body.errors.every((e) => /\bnot found\b/i.test(e.message));
-            if (!(allNotFound && body.data != null)) {
+            const allAllowed =
+              options?.allowedErrorPath != null &&
+              body.errors.every((error) => {
+                const path = error.path;
+                const allowed = options.allowedErrorPath;
+                if (!path || !allowed || path.length !== allowed.length) return false;
+                return path.every((segment, index) => segment === allowed[index]);
+              });
+            const allowedPartial = allAllowed && body.data != null;
+            const legacyNotFound =
+              options?.allowedErrorPath == null && allNotFound && body.data != null;
+            if (allowedPartial) {
+              hasAllowedPartialErrors = true;
+            } else if (!legacyNotFound) {
               throw validationError(`gnomAD GraphQL error: ${message}`, {
                 reason: 'graphql_error',
                 retryable: false,
               });
             }
           }
-          return schema.parse(body.data);
+          try {
+            const data = schema.parse(body.data);
+            if (hasAllowedPartialErrors) {
+              if (!options?.acceptPartialData?.(data)) {
+                throw validationError('gnomAD GraphQL error affected required response data.', {
+                  reason: 'graphql_error',
+                  retryable: false,
+                });
+              }
+              options.onAllowedPartial?.();
+            }
+            return data;
+          } catch (err) {
+            if (err instanceof McpError) throw err;
+            invalidUpstreamResponse(
+              err,
+              'gnomAD',
+              'Wait a few seconds and retry; the upstream response could not be validated.',
+            );
+          }
         } finally {
           this.releaseSlot();
         }
@@ -370,38 +442,104 @@ export class GnomadService {
     ctx: Context,
   ): Promise<VariantRecord | null> {
     if (RSID.test(idOrRsid)) {
-      const resolved = await this.graphql(
-        VARIANT_BY_RSID_QUERY,
-        { rsid: idOrRsid, dataset: dsCtx.dataset },
-        VariantByRsidResponse,
-        'gnomad.getVariantByRsid',
-        ctx,
-      );
+      let resolved: z.infer<typeof VariantByRsidResponse>;
+      try {
+        resolved = await this.graphql(
+          VARIANT_BY_RSID_QUERY,
+          { rsid: idOrRsid, dataset: dsCtx.dataset },
+          VariantByRsidResponse,
+          'gnomad.getVariantByRsid',
+          ctx,
+        );
+      } catch (err) {
+        if (!(err instanceof McpError) || !/multiple variants found/i.test(err.message)) throw err;
+        let candidates: string[] = [];
+        try {
+          const search = await this.graphql(
+            VARIANT_SEARCH_QUERY,
+            { query: idOrRsid, dataset: dsCtx.dataset },
+            VariantSearchResponse,
+            'gnomad.searchVariant',
+            ctx,
+          );
+          candidates = search.variant_search.map((candidate) => candidate.variant_id);
+        } catch (resolverError) {
+          if (ctx.signal.aborted) throw resolverError;
+          // Preserve the original actionable failure if candidate resolution is unavailable.
+        }
+        throw validationError(
+          candidates.length
+            ? `${idOrRsid} maps to multiple variants; retry with a candidate variant ID.`
+            : `${idOrRsid} maps to multiple variants; resolve it to a concrete chrom-pos-ref-alt variant ID with dbSNP or Ensembl and retry.`,
+          {
+            reason: 'ambiguous_rsid',
+            retryable: false,
+            ...(candidates.length ? { candidates } : {}),
+          },
+        );
+      }
       if (!resolved.variant) return null;
+      this.assertVariantBuild(resolved.variant, dsCtx);
+      let clinvarUnavailable = false;
       const clinvar = await this.graphql(
         CLINVAR_BY_VARIANT_ID_QUERY,
         { variantId: resolved.variant.variant_id, referenceGenome: dsCtx.reference_genome },
         ClinVarOnlyResponse,
         'gnomad.getClinvar',
         ctx,
+        {
+          allowedErrorPath: ['clinvar_variant'],
+          acceptPartialData: (data) => data.clinvar_variant === null,
+          onAllowedPartial: () => {
+            clinvarUnavailable = true;
+          },
+        },
       );
-      return this.normalizeVariant(resolved.variant, clinvar.clinvar_variant, dsCtx);
+      return this.normalizeVariant(
+        resolved.variant,
+        clinvar.clinvar_variant,
+        dsCtx,
+        clinvarUnavailable,
+      );
     }
+    let clinvarUnavailable = false;
     const data = await this.graphql(
       VARIANT_QUERY,
       { variantId: idOrRsid, dataset: dsCtx.dataset, referenceGenome: dsCtx.reference_genome },
       VariantResponse,
       'gnomad.getVariant',
       ctx,
+      {
+        allowedErrorPath: ['clinvar_variant'],
+        acceptPartialData: (response) =>
+          response.variant !== null && response.clinvar_variant === null,
+        onAllowedPartial: () => {
+          clinvarUnavailable = true;
+        },
+      },
     );
     if (!data.variant) return null;
-    return this.normalizeVariant(data.variant, data.clinvar_variant, dsCtx);
+    this.assertVariantBuild(data.variant, dsCtx);
+    return this.normalizeVariant(data.variant, data.clinvar_variant, dsCtx, clinvarUnavailable);
+  }
+
+  private assertVariantBuild(
+    variant: NonNullable<z.infer<typeof RawVariant>>,
+    dsCtx: DatasetContext,
+  ): void {
+    if (variant.reference_genome !== dsCtx.reference_genome) {
+      throw validationError('gnomAD returned a variant on a different reference build.', {
+        reason: 'upstream_build_mismatch',
+        retryable: false,
+      });
+    }
   }
 
   private normalizeVariant(
     v: NonNullable<z.infer<typeof RawVariant>>,
     clinvar: z.infer<typeof RawClinVar>,
     dsCtx: DatasetContext,
+    clinvarUnavailable = false,
   ): VariantRecord {
     const source: VariantRecord['source'] = [];
     const populations: PopulationFreq[] = [];
@@ -472,6 +610,7 @@ export class GnomadService {
               clinvar_variation_id: clinvar.clinvar_variation_id,
             }
           : null,
+      clinvar_unavailable: clinvarUnavailable,
     };
   }
 
@@ -490,7 +629,17 @@ export class GnomadService {
       ctx,
     );
     if (!data.gene) return null;
-    const c = data.gene.gnomad_constraint;
+    let c: z.infer<typeof ConstraintMetrics> | null = null;
+    if (data.gene.gnomad_constraint !== null) {
+      const parsed = ConstraintMetrics.safeParse(data.gene.gnomad_constraint);
+      if (!parsed.success) {
+        throw validationError('gnomAD returned constraint metrics outside their valid domains.', {
+          reason: 'invalid_constraint_data',
+          retryable: false,
+        });
+      }
+      c = parsed.data;
+    }
     return {
       gene_id: data.gene.gene_id,
       symbol: data.gene.symbol,

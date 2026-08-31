@@ -74,6 +74,8 @@ export interface VariantRecord {
   af: number | null;
   an: number;
   clinvar: ClinVarAnnotation | null;
+  /** True when the optional ClinVar resolver failed; false means no entry exists. */
+  clinvar_unavailable: boolean;
   consequence: string | null;
   dataset: Dataset;
   flags: string[];

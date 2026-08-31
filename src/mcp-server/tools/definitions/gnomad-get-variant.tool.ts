@@ -16,8 +16,8 @@ import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   batchVariantIdField,
   datasetField,
+  normalizeVariantIdentifier,
   referenceGenomeField,
-  VARIANT_OR_RSID_REGEX,
 } from '../shared-schemas.js';
 
 /**
@@ -109,6 +109,9 @@ const VariantRecordSchema = z
       .describe('Gene symbol for the reported consequence; null when none.'),
     in_silico: z.array(InSilico).describe('In-silico predictor scores present for this variant.'),
     clinvar: ClinVar.nullable().describe('ClinVar annotation, or null when no entry exists.'),
+    clinvar_unavailable: z
+      .boolean()
+      .describe('True when the optional ClinVar resolver failed; false when no entry exists.'),
   })
   .describe('Full population record for one variant.');
 
@@ -119,11 +122,11 @@ const VariantRecordSchema = z
  */
 type VariantLookupOutcome =
   | { ok: true; record: z.infer<typeof VariantRecordSchema> }
-  | { ok: false; failure: { variant: string; error: string } };
+  | { ok: false; failure: { variant: string; error: string; candidates?: string[] } };
 
 export const gnomadGetVariant = tool('gnomad_get_variant', {
   title: 'gnomad-genetics-mcp-server: get variant',
-  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.`,
+  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     variants: z
@@ -144,6 +147,10 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
           .object({
             variant: z.string().describe('The input ID that failed to resolve.'),
             error: z.string().describe('What went wrong and how to resolve it.'),
+            candidates: z
+              .array(z.string())
+              .optional()
+              .describe('Concrete variant IDs to retry when an rsID is ambiguous.'),
           })
           .describe('One failed input ID and why it failed.'),
       )
@@ -153,6 +160,12 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     dataset: z.string().describe('Effective gnomAD dataset used for the batch.'),
     reference_genome: z.string().describe('Effective reference build used for the batch.'),
   }),
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe('Non-fatal notice when optional ClinVar annotation was unavailable.'),
+  },
   errors: [
     {
       reason: 'incoherent_build',
@@ -165,7 +178,11 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
 
   async handler(input, ctx) {
     const svc = getGnomadService();
-    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
+    const dsCtx = svc.resolveDatasetContext(
+      input.dataset,
+      input.reference_genome,
+      ctx.recoveryFor('incoherent_build'),
+    );
 
     // Dispatch every ID concurrently; GnomadService's maxConcurrency semaphore
     // (GNOMAD_MAX_CONCURRENCY, default 2) — acquired per upstream GraphQL call —
@@ -177,7 +194,8 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     // batch.
     const outcomes = await Promise.all(
       input.variants.map(async (variantId): Promise<VariantLookupOutcome> => {
-        if (!VARIANT_OR_RSID_REGEX.test(variantId)) {
+        const normalized = normalizeVariantIdentifier(variantId);
+        if (!normalized) {
           return {
             ok: false,
             failure: {
@@ -188,7 +206,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
           };
         }
         try {
-          const record = await svc.getVariant(variantId, dsCtx, ctx);
+          const record = await svc.getVariant(normalized.canonical, dsCtx, ctx);
           if (record) return { ok: true, record };
           return {
             ok: false,
@@ -198,11 +216,19 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
             },
           };
         } catch (err) {
+          const candidates =
+            err &&
+            typeof err === 'object' &&
+            'data' in err &&
+            Array.isArray((err as { data?: { candidates?: unknown } }).data?.candidates)
+              ? (err as { data: { candidates: string[] } }).data.candidates
+              : undefined;
           return {
             ok: false,
             failure: {
               variant: variantId,
               error: err instanceof Error ? err.message : String(err),
+              ...(candidates?.length ? { candidates } : {}),
             },
           };
         }
@@ -210,7 +236,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     );
 
     const found: z.infer<typeof VariantRecordSchema>[] = [];
-    const failed: { variant: string; error: string }[] = [];
+    const failed: { variant: string; error: string; candidates?: string[] }[] = [];
     for (const outcome of outcomes) {
       if (outcome.ok) found.push(outcome.record);
       else failed.push(outcome.failure);
@@ -223,6 +249,12 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       failed: failed.length,
     });
 
+    const unavailable = found.filter((record) => record.clinvar_unavailable);
+    if (unavailable.length) {
+      ctx.enrich.notice(
+        `ClinVar annotation was unavailable for: ${unavailable.map((record) => record.variant_id).join(', ')}. Population data is complete.`,
+      );
+    }
     return { found, failed, dataset: dsCtx.dataset, reference_genome: dsCtx.reference_genome };
   },
 
@@ -259,12 +291,20 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
           `**ClinVar:** ${v.clinvar.clinical_significance ?? 'Not available'} | stars ${v.clinvar.gold_stars ?? 'Not available'} | review ${v.clinvar.review_status ?? 'Not available'} | VariationID ${v.clinvar.clinvar_variation_id ?? 'Not available'}`,
         );
       } else {
-        lines.push('**ClinVar:** no entry');
+        lines.push(
+          v.clinvar_unavailable
+            ? '**ClinVar:** unavailable (optional resolver failed)'
+            : '**ClinVar:** no entry',
+        );
       }
     }
     if (result.failed.length) {
       lines.push('', '### Failed');
-      for (const f of result.failed) lines.push(`- **${f.variant}:** ${f.error}`);
+      for (const f of result.failed) {
+        lines.push(
+          `- **${f.variant}:** ${f.error}${f.candidates?.length ? ` Candidates: ${f.candidates.join(', ')}` : ''}`,
+        );
+      }
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

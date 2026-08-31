@@ -40,7 +40,7 @@ await createApp({
   resources: [variantResource, geneConstraintResource],
   prompts: [variantTriagePrompt],
   instructions:
-    'Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; both are echoed in output. Per-ancestry allele frequencies are never collapsed to a single global AF. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this). gnomad_list_gene_variants and gnomad_search_clinvar stage large results on a DataCanvas (set CANVAS_PROVIDER_TYPE=duckdb) queryable via gnomad_dataframe_query. The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.',
+    'Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; both are echoed in output. Per-ancestry allele frequencies are never collapsed to a single global AF. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this). gnomad_list_gene_variants and gnomad_search_clinvar stage large results on a DataCanvas (set CANVAS_PROVIDER_TYPE=duckdb) queryable via gnomad_dataframe_query. The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   setup(core) {
     setCanvas(core.canvas);
     initGnomadService(core.config, core.storage);

@@ -14,7 +14,7 @@ import { datasetField, geneField, referenceGenomeField } from '../shared-schemas
 export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
   title: 'gnomad-genetics-mcp-server: get gene constraint',
   description:
-    'Fetch gnomAD loss-of-function constraint for a gene — pLI (probability of LoF intolerance; >0.9 intolerant), LOEUF (oe_lof_upper, the headline metric; <0.6 intolerant in v4, <0.35 in v2) plus its lower bound, observed/expected ratios for LoF, missense, and synonymous variation, and the three Z-scores. This is the orthogonal axis to allele frequency: a loss-of-function variant matters far more in a gene intolerant to being broken. Accepts an HGNC symbol (PCSK9) or an Ensembl gene ID (ENSG00000169174). Many genes have null constraint (sparse upstream) — null fields are reported as such, never fabricated. v4 constraint is flagged beta by the gnomAD team; constraint_flags surfaces any caveats. Echoes the effective dataset and reference build.',
+    'Fetch gnomAD loss-of-function constraint for a gene — pLI (probability of LoF intolerance; >0.9 intolerant), LOEUF (oe_lof_upper, the headline metric; <0.6 intolerant in v4, <0.35 in v2) plus its lower bound, observed/expected ratios for LoF, missense, and synonymous variation, and the three Z-scores. This is the orthogonal axis to allele frequency: a loss-of-function variant matters far more in a gene intolerant to being broken. Accepts an HGNC symbol (PCSK9) or an Ensembl gene ID (ENSG00000169174). Many genes have null constraint (sparse upstream) — null fields are reported as such, never fabricated. v4 constraint is flagged beta by the gnomAD team; constraint_flags surfaces any caveats. Echoes the effective dataset and reference build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: geneField,
@@ -28,34 +28,68 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     reference_genome: z.string().describe('Effective reference build.'),
     pli: z
       .number()
+      .min(0)
+      .max(1)
       .nullable()
       .describe('pLI — probability of LoF intolerance; >0.9 intolerant. Null when unavailable.'),
-    oe_lof: z.number().nullable().describe('Observed/expected LoF ratio. Null when unavailable.'),
+    oe_lof: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative observed/expected LoF ratio. Null when unavailable.'),
     oe_lof_lower: z
       .number()
+      .nonnegative()
       .nullable()
       .describe('LOEUF confidence-interval lower bound. Null when unavailable.'),
     oe_lof_upper: z
       .number()
+      .nonnegative()
       .nullable()
       .describe('LOEUF (oe_lof_upper) — the headline intolerance metric. Null when unavailable.'),
     oe_mis: z
       .number()
+      .nonnegative()
       .nullable()
       .describe('Observed/expected missense ratio. Null when unavailable.'),
     oe_syn: z
       .number()
+      .nonnegative()
       .nullable()
       .describe('Observed/expected synonymous ratio. Null when unavailable.'),
     lof_z: z.number().nullable().describe('LoF constraint Z-score. Null when unavailable.'),
     mis_z: z.number().nullable().describe('Missense constraint Z-score. Null when unavailable.'),
     syn_z: z.number().nullable().describe('Synonymous constraint Z-score. Null when unavailable.'),
-    obs_lof: z.number().nullable().describe('Observed LoF variant count. Null when unavailable.'),
-    exp_lof: z.number().nullable().describe('Expected LoF variant count. Null when unavailable.'),
-    obs_mis: z.number().nullable().describe('Observed missense count. Null when unavailable.'),
-    exp_mis: z.number().nullable().describe('Expected missense count. Null when unavailable.'),
-    obs_syn: z.number().nullable().describe('Observed synonymous count. Null when unavailable.'),
-    exp_syn: z.number().nullable().describe('Expected synonymous count. Null when unavailable.'),
+    obs_lof: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative observed LoF variant count. Null when unavailable.'),
+    exp_lof: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative expected LoF variant count. Null when unavailable.'),
+    obs_mis: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative observed missense count. Null when unavailable.'),
+    exp_mis: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative expected missense count. Null when unavailable.'),
+    obs_syn: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative observed synonymous count. Null when unavailable.'),
+    exp_syn: z
+      .number()
+      .nonnegative()
+      .nullable()
+      .describe('Non-negative expected synonymous count. Null when unavailable.'),
     constraint_flags: z
       .array(z.string())
       .describe('Constraint caveat flags (e.g. beta/experimental notes for v4).'),
@@ -79,7 +113,11 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
 
   async handler(input, ctx) {
     const svc = getGnomadService();
-    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
+    const dsCtx = svc.resolveDatasetContext(
+      input.dataset,
+      input.reference_genome,
+      ctx.recoveryFor('incoherent_build'),
+    );
     const constraint = await svc.getGeneConstraint(input.gene, dsCtx, ctx);
     if (!constraint) {
       throw ctx.fail(

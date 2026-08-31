@@ -38,6 +38,11 @@ function constraint(): GeneConstraint {
 }
 
 describe('gnomad://gene constraint resource', () => {
+  it('attributes the gnomAD source in its description', () => {
+    expect(geneConstraintResource.description).toContain(
+      'Data source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    );
+  });
   it('returns the constraint record for a resolved gene', async () => {
     const fake = {
       resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,

@@ -1,7 +1,6 @@
 /**
- * @fileoverview Correct-behavior regression tests for known open defects. Each
- * remains skipped with its public issue link until the production behavior is
- * fixed; assertions describe the contract callers should receive.
+ * @fileoverview Correct-behavior regressions for tracked defects. Each test
+ * retains its public issue link so the implementation contract stays traceable.
  * @module tests/integration/known-issues.integration.test
  */
 
@@ -17,12 +16,12 @@ import { initGnomadService } from '@/services/gnomad/gnomad-service.js';
 
 describe('known correctness defects', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/11
-  it.skip('rejects whitespace-only ClinVar genes before any upstream call', () => {
+  it('rejects whitespace-only ClinVar genes before any upstream call', () => {
     expect(gnomadSearchClinvar.input.safeParse({ gene: '  ' }).success).toBe(false);
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/11
-  it.skip('trims whitespace around a valid ClinVar gene before the E-utilities query', async () => {
+  it('trims whitespace around a valid ClinVar gene before the E-utilities query', async () => {
     let term: string | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = input instanceof Request ? new URL(input.url) : new URL(input);
@@ -37,7 +36,7 @@ describe('known correctness defects', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/12
-  it.skip('includes the declared recovery hint on incoherent-build validation', async () => {
+  it('includes the declared recovery hint on incoherent-build validation', async () => {
     initGnomadService({} as never, {} as never);
     const ctx = createMockContext({ errors: gnomadGetGeneConstraint.errors });
     const input = gnomadGetGeneConstraint.input.parse({
@@ -58,7 +57,7 @@ describe('known correctness defects', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/12
-  it.skip('includes the declared recovery hint when no genome target is supplied', async () => {
+  it('includes the declared recovery hint when no genome target is supplied', async () => {
     initGnomadService({} as never, {} as never);
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
     const input = gnomadListGeneVariants.input.parse({});
@@ -75,23 +74,42 @@ describe('known correctness defects', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/13
-  it.skip('makes an ambiguous rsID failure actionable with candidates or a concrete resolver', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          errors: [{ message: 'Multiple variants found, query using variant ID to select one.' }],
-          data: { variant: null },
-        }),
-      ),
-    );
+  it('makes an ambiguous rsID failure actionable with candidates or a concrete resolver', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            errors: [{ message: 'Multiple variants found, query using variant ID to select one.' }],
+            data: { variant: null },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              variant_search: [{ variant_id: '1-55039974-G-T' }, { variant_id: '1-55039974-G-A' }],
+            },
+          }),
+        ),
+      );
     initGnomadService({} as never, {} as never);
     const result = await gnomadGetVariant.handler(
       gnomadGetVariant.input.parse({ variants: ['rs11591147'] }),
       createMockContext({ errors: gnomadGetVariant.errors }),
     );
 
-    expect(result.failed[0]?.error).toMatch(
-      /(?:[0-9XYM]+-\d+-[ACGT]+-[ACGT]+|dbSNP|Ensembl|variant recoder)/i,
-    );
+    expect(result.failed).toEqual([
+      {
+        variant: 'rs11591147',
+        error: 'rs11591147 maps to multiple variants; retry with a candidate variant ID.',
+        candidates: ['1-55039974-G-T', '1-55039974-G-A'],
+      },
+    ]);
+    const text = (gnomadGetVariant.format?.(result) ?? [])
+      .map((block) => ('text' in block ? block.text : ''))
+      .join('');
+    expect(text).toContain('1-55039974-G-T');
+    expect(text).toContain('1-55039974-G-A');
   });
 });

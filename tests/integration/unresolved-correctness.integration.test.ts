@@ -1,7 +1,7 @@
 /**
  * @fileoverview Correct-behavior regressions for unresolved genetics
- * correctness defects. Each remains skipped with its public issue link until
- * the production behavior is fixed.
+ * correctness defects. Each regression retains its public issue link so the
+ * implementation contract stays traceable.
  * @module tests/integration/unresolved-correctness.integration.test
  */
 
@@ -69,7 +69,7 @@ afterEach(() => {
 
 describe('upstream build integrity', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/16
-  it.skip('rejects a variant payload labeled for a different reference build', async () => {
+  it('rejects a variant payload labeled for a different reference build', async () => {
     fakeGraphql(({ variables }) => ({
       data: {
         variant: variant(String(variables.variantId), 'GRCh37'),
@@ -93,7 +93,7 @@ describe('upstream build integrity', () => {
 
 describe('variant identifier normalization', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/17
-  it.skip('accepts a chr-prefixed coordinate identifier', async () => {
+  it('accepts a chr-prefixed coordinate identifier', async () => {
     const { fetch } = fakeGraphql(({ variables }) => ({
       data: { variant: variant(String(variables.variantId)), clinvar_variant: null },
     }));
@@ -110,7 +110,7 @@ describe('variant identifier normalization', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/17
-  it.skip('rejects impossible chromosome and zero-position coordinates before fetch', async () => {
+  it('rejects impossible chromosome and zero-position coordinates before fetch', async () => {
     const { fetch } = fakeGraphql(({ variables }) => ({
       data: { variant: variant(String(variables.variantId)), clinvar_variant: null },
     }));
@@ -128,27 +128,27 @@ describe('variant identifier normalization', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/17
-  it.skip('canonicalizes equivalent padded alleles before upstream lookup', async () => {
+  it('canonicalizes chr prefixes and allele case before upstream lookup', async () => {
     const { requests } = fakeGraphql(({ variables }) => ({
       data: { variant: variant(String(variables.variantId)), clinvar_variant: null },
     }));
     initGnomadService({} as never, {} as never);
 
     await gnomadGetVariant.handler(
-      gnomadGetVariant.input.parse({ variants: ['1-101-A-AT', '1-100-CA-CAT'] }),
+      gnomadGetVariant.input.parse({ variants: ['chr1-55051215-g-ga', 'CHR1-55051215-G-GA'] }),
       createMockContext({ errors: gnomadGetVariant.errors }),
     );
 
     expect(requests.map((request) => request.variables.variantId)).toEqual([
-      '1-101-A-AT',
-      '1-101-A-AT',
+      '1-55051215-G-GA',
+      '1-55051215-G-GA',
     ]);
   });
 });
 
 describe('constraint metric ranges', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/18
-  it.skip('rejects out-of-range pLI and negative observed/expected ratios', async () => {
+  it('rejects out-of-range pLI and negative observed/expected ratios', async () => {
     fakeGraphql(() => ({
       data: {
         gene: {
@@ -181,11 +181,35 @@ describe('constraint metric ranges', () => {
       svc.getGeneConstraint('PCSK9', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
     ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/18
+  it.each([false, 0, ''])(
+    'rejects a falsy malformed constraint payload: %j',
+    async (constraint) => {
+      fakeGraphql(() => ({
+        data: {
+          gene: {
+            gene_id: 'ENSG00000169174',
+            symbol: 'PCSK9',
+            gnomad_constraint: constraint,
+          },
+        },
+      }));
+      const svc = new GnomadService(getServerConfig());
+
+      await expect(
+        svc.getGeneConstraint('PCSK9', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'invalid_constraint_data' },
+      });
+    },
+  );
 });
 
 describe('GraphQL error and partial-data contracts', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/19
-  it.skip('classifies malformed 2xx JSON as a clean upstream response error', async () => {
+  it('classifies malformed 2xx JSON as a clean upstream response error', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async () => new Response('PRIVATE_MALFORMED_RESPONSE'),
@@ -205,7 +229,29 @@ describe('GraphQL error and partial-data contracts', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/19
-  it.skip('classifies malformed ClinVar 2xx JSON without leaking the response body', async () => {
+  it('classifies a malformed gnomAD schema payload without leaking response fields', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ data: { variant: { private_upstream_field: 'DO_NOT_LEAK' } } }),
+        ),
+    );
+    const svc = new GnomadService(getServerConfig());
+
+    const error = await rejectAfterRetries(() =>
+      svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    );
+
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'invalid_upstream_response', retryable: true },
+    });
+    expect(JSON.stringify(error)).not.toContain('DO_NOT_LEAK');
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/19
+  it('classifies malformed ClinVar 2xx JSON without leaking the response body', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async () => new Response('PRIVATE_MALFORMED_RESPONSE'),
@@ -223,9 +269,9 @@ describe('GraphQL error and partial-data contracts', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
-  it.skip('returns usable variant data when only the optional ClinVar join errors', async () => {
+  it('returns usable variant data when only the optional ClinVar join errors', async () => {
     fakeGraphql(({ variables }) => ({
-      errors: [{ message: 'ClinVar resolver temporarily unavailable' }],
+      errors: [{ message: 'ClinVar resolver temporarily unavailable', path: ['clinvar_variant'] }],
       data: {
         variant: variant(String(variables.variantId)),
         clinvar_variant: null,
@@ -239,6 +285,55 @@ describe('GraphQL error and partial-data contracts', () => {
       createMockContext(),
     );
 
-    expect(result).toMatchObject({ variant_id: '1-100-A-T', clinvar: null });
+    expect(result).toMatchObject({
+      variant_id: '1-100-A-T',
+      clinvar: null,
+      clinvar_unavailable: true,
+    });
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
+  it.each([
+    ['required variant field', ['variant']],
+    ['nested optional field', ['clinvar_variant', 'review_status']],
+    ['missing path', undefined],
+  ])('rejects GraphQL errors outside the exact ClinVar path: %s', async (_label, path) => {
+    fakeGraphql(({ variables }) => ({
+      errors: [{ message: 'resolver failed', ...(path ? { path } : {}) }],
+      data: {
+        variant: variant(String(variables.variantId)),
+        clinvar_variant: null,
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'graphql_error' },
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
+  it.each([undefined, ['variant']])(
+    'keeps not-found errors outside the exact optional ClinVar path fatal: %j',
+    async (path) => {
+      fakeGraphql(({ variables }) => ({
+        errors: [{ message: 'ClinVar variant not found', ...(path ? { path } : {}) }],
+        data: {
+          variant: variant(String(variables.variantId)),
+          clinvar_variant: null,
+        },
+      }));
+      const svc = new GnomadService(getServerConfig());
+
+      await expect(
+        svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'graphql_error' },
+      });
+    },
+  );
 });
