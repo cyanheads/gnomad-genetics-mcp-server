@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -27,26 +27,43 @@
 
 ---
 
-## Tools
+## Overview
 
-Five gnomAD tools, plus three for SQL analytics over the DuckDB-backed canvas tables the list tools materialize:
+Population genetics over gnomAD (Broad Institute), with ClinVar clinical significance joined in from NCBI. Look up per-ancestry allele frequencies, gene loss-of-function constraint, gene variant catalogs, and sequencing coverage, then query large result sets with SQL from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+
+### Tools
 
 | Tool | Description |
 |:---|:---|
-| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per genetic-ancestry group, homozygote/hemizygote counts, quality flags, transcript consequence, in-silico predictors, and joined ClinVar significance. Batch up to 25 IDs with per-item partial success. |
-| `gnomad_get_gene_constraint` | Gene loss-of-function constraint — pLI, LOEUF (`oe_lof_upper`) with CI, observed/expected ratios, and Z-scores. By HGNC symbol or Ensembl gene ID. |
-| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies and predicted consequences, filterable by consequence class and max AF. Spills to the `gene_variants` canvas table. |
-| `gnomad_get_coverage` | Sequencing coverage across a gene, transcript, or region — mean/median depth and the fraction of samples over depth thresholds, per callset track. Tells a true absent variant from an uncallable position. |
-| `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status (star rating), conditions, and submission counts. Spills to the `clinvar_variants` canvas table. |
+| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per genetic-ancestry group, homozygote/hemizygote counts, quality flags, transcript consequence, in-silico predictors, and joined ClinVar significance. |
+| `gnomad_get_gene_constraint` | Gene loss-of-function constraint — pLI, LOEUF (`oe_lof_upper`) with confidence interval, observed/expected ratios, and Z-scores. By HGNC symbol or Ensembl gene ID. |
+| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies and predicted consequences, filterable by consequence class and max allele frequency. |
+| `gnomad_get_coverage` | Sequencing coverage across a gene, transcript, or region — mean/median depth and the fraction of samples over depth thresholds, per callset track. |
+| `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status, conditions, and submission counts. |
 | `gnomad_dataframe_query` | Run a read-only SQL `SELECT` across canvas tables staged by the list tools. |
 | `gnomad_dataframe_describe` | List the tables staged on a canvas and their columns before writing SQL. |
-| `gnomad_dataframe_drop` | Drop a named table from a canvas to reclaim memory. Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` — off by default since per-table TTL already handles cleanup. |
+| `gnomad_dataframe_drop` | Drop a named table from a canvas to reclaim memory. Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` — off by default. |
 
-### `gnomad_get_variant`
+### Resources
 
-The "how common, is it benign" answer in one call.
+| Resource | Description |
+|:---|:---|
+| `gnomad://variant/{dataset}/{variantId}` | Population record for one variant — mirrors `gnomad_get_variant`. |
+| `gnomad://gene/{dataset}/{gene}/constraint` | Gene loss-of-function constraint — mirrors `gnomad_get_gene_constraint`. |
 
-- Batch up to 25 IDs per call, each a `chrom-pos-ref-alt` variantId (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
+All resource data is also reachable via tools. The list tools (`gnomad_list_gene_variants`, `gnomad_get_coverage`, `gnomad_search_clinvar`) return analytical row sets rather than stable single-URI documents, so they are not exposed as resources — call the tools instead.
+
+### Prompts
+
+| Prompt | Description |
+|:---|:---|
+| `gnomad_variant_triage` | Guided rare-disease variant-triage workflow: population frequency → gene constraint → callability check, in order. |
+
+## Capability reference
+
+### `gnomad_get_variant` <sub>tool</sub>
+
+- Batch up to 25 IDs per call (default; raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
 - Per-item partial success — a malformed or absent ID lands in `failed[]` without failing the others
 - Per-ancestry frequency vector is returned in full, never collapsed to a single global AF
 - Reports which callset(s) (`exome` / `genome`) carry the variant, quality flags, transcript consequence, in-silico predictor scores, and the ClinVar significance gnomAD joins per variant
@@ -54,9 +71,7 @@ The "how common, is it benign" answer in one call.
 
 ---
 
-### `gnomad_get_gene_constraint`
-
-The orthogonal axis to allele frequency — a loss-of-function variant matters far more in a gene intolerant to being broken.
+### `gnomad_get_gene_constraint` <sub>tool</sub>
 
 - Accepts an HGNC symbol (`PCSK9`) or an Ensembl gene ID (`ENSG00000169174`)
 - Returns pLI (>0.9 intolerant), LOEUF / `oe_lof_upper` (<0.6 intolerant in v4, <0.35 in v2) with its lower bound, observed/expected ratios for LoF / missense / synonymous, and the three Z-scores
@@ -65,21 +80,17 @@ The orthogonal axis to allele frequency — a loss-of-function variant matters f
 
 ---
 
-### `gnomad_list_gene_variants`
-
-List variants across a gene, transcript, or region, then SQL the full set.
+### `gnomad_list_gene_variants` <sub>tool</sub>
 
 - Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive)
 - Optional filters: one `consequence_class` (`lof` / `missense` / `synonymous` / `other`) and/or a maximum allele frequency
 - The full result is staged on a DataCanvas table named `gene_variants` with an inline preview returned alongside `canvas_id` and `table_name` — query it with `gnomad_dataframe_query` to rank by AF, count by consequence, or group across the complete set
 - Reusing a `canvas_id` REPLACES the staged table; it does not append
-- When the canvas is disabled (`CANVAS_PROVIDER_TYPE` != `duckdb`) the tool returns a capped inline preview with `spilled=false` and the SQL path is unavailable
+- When the canvas is disabled (`CANVAS_PROVIDER_TYPE` != `duckdb`) the tool returns a capped inline preview (100 rows) with `spilled=false` and the SQL path is unavailable
 
 ---
 
-### `gnomad_get_coverage`
-
-Disambiguate a true absent variant from an uncallable position.
+### `gnomad_get_coverage` <sub>tool</sub>
 
 - Supply exactly one of `gene`, `transcript_id`, or `region`
 - Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track
@@ -88,52 +99,72 @@ Disambiguate a true absent variant from an uncallable position.
 
 ---
 
-### `gnomad_search_clinvar`
-
-Gene-panel curation depth beyond the per-variant ClinVar join, via NCBI E-utilities.
+### `gnomad_search_clinvar` <sub>tool</sub>
 
 - Returns a gene's classified ClinVar variants — clinical significance, review status with a 0–4 star rating, associated conditions, molecular consequences, and submission counts
 - Optional filters: `clinical_significance` (e.g. `pathogenic`) and a minimum star rating (`min_review_stars`, 0–4)
+- Accepts an HGNC symbol only — ClinVar's gene index doesn't resolve Ensembl gene IDs, unlike the other gnomAD tools
 - The full set is staged on the `clinvar_variants` canvas table with an inline preview; reusing a `canvas_id` REPLACES that table
 - Keyless, but honors `NCBI_API_KEY` for a higher rate limit (10 vs 3 req/s)
 
 ---
 
-### Canvas dataframe tools
+### `gnomad_dataframe_query` <sub>tool</sub>
 
-`gnomad_dataframe_query`, `gnomad_dataframe_describe`, and `gnomad_dataframe_drop` operate on the canvas tables the list tools stage.
+- Runs single-statement, read-only SQL `SELECT`s against a canvas table staged by `gnomad_list_gene_variants` or `gnomad_search_clinvar` — writes, DDL, and file/HTTP table functions are rejected by the canvas gate
+- Reference tables by the name the staging tool returned (`gene_variants` or `clinvar_variants`)
+- Output columns are dynamic per the SQL projection; `truncated: true` marks a result clipped at the canvas row cap
+- Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
 
-- `gnomad_dataframe_query` runs single-statement `SELECT`s only — writes, DDL, and file/HTTP table functions are rejected by the canvas gate
-- `gnomad_dataframe_describe` returns each staged table's name, row count, and column schema — call it before writing SQL
-- `gnomad_dataframe_drop` is a deliberate mutation (`readOnlyHint: false`); it stays absent from `tools/list` unless `GNOMAD_DATAFRAME_DROP_ENABLED=true`
-- All three require `CANVAS_PROVIDER_TYPE=duckdb`; without it they return a `canvas_disabled` error
+---
 
-## Resources and prompts
+### `gnomad_dataframe_describe` <sub>tool</sub>
 
-| Type | Name | Description |
-|:---|:---|:---|
-| Resource | `gnomad://variant/{dataset}/{variantId}` | Population record for one variant — mirrors `gnomad_get_variant`. The `dataset` segment keeps the URI self-describing. |
-| Resource | `gnomad://gene/{dataset}/{gene}/constraint` | Gene loss-of-function constraint — mirrors `gnomad_get_gene_constraint`. |
-| Prompt | `gnomad_variant_triage` | Guided rare-disease variant-triage workflow: population frequency → gene constraint → callability check, in order. |
+- Lists every table staged on a canvas with its row count and column schema (name and DuckDB type)
+- Call it before writing SQL for `gnomad_dataframe_query`
+- Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
 
-All resource data is also reachable via tools. The list tools (`gnomad_list_gene_variants`, `gnomad_get_coverage`, `gnomad_search_clinvar`) return analytical row sets rather than stable single-URI documents, so they are not exposed as resources — call the tools instead.
+---
+
+### `gnomad_dataframe_drop` <sub>tool</sub>
+
+- Drops a named table from a canvas to reclaim memory — a deliberate mutation (`readOnlyHint: false`, `destructiveHint: true`) on an otherwise read-only surface
+- Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true`; absent from `tools/list` when off, since per-table TTL already reclaims memory automatically
+- Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
+
+---
+
+### `gnomad://variant/{dataset}/{variantId}` <sub>resource</sub>
+
+- Population record for one variant as `application/json` — mirrors `gnomad_get_variant`; the `dataset` segment keeps the URI self-describing
+- `variantId` accepts a chrom-pos-ref-alt ID or an rsID, same grammar as the tool
+- Typed errors: `invalid_variant_id` (outside the coordinate/rsID grammar) and `variant_not_found`
+
+---
+
+### `gnomad://gene/{dataset}/{gene}/constraint` <sub>resource</sub>
+
+- Gene loss-of-function constraint as `application/json` — mirrors `gnomad_get_gene_constraint`
+- `gene` accepts an HGNC symbol or Ensembl gene ID
+- Typed error `gene_not_found` when no gene matches in the requested build
+
+---
+
+### `gnomad_variant_triage` <sub>prompt</sub>
+
+- Arguments: `variant` required (chrom-pos-ref-alt or rsID); `gene` and `dataset` optional
+- Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`) → gene constraint (`gnomad_get_gene_constraint`) → callability check (`gnomad_get_coverage` on the exact position, not gene-level)
+- Rejects a malformed `variant` with a validation error before generating the chain
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool, resource, and prompt definitions — single file per primitive, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Typed error contracts with agent-facing recovery hints
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 gnomAD-specific:
 
 - Single keyless GraphQL source for the entire core surface — ClinVar significance is joined per variant inside gnomAD's own response
 - `dataset` and `reference_genome` are distinct, coherence-validated parameters (v4/v3 ⇒ GRCh38, v2.1/ExAC ⇒ GRCh37); both are echoed in every tool's output so a wrong-build coordinate mismatch is visible
-- Polite client — conservative concurrency cap and exponential backoff against a community-funded, rate-limited API
+- Polite client — conservative concurrency cap (`GNOMAD_MAX_CONCURRENCY`, default 2) and exponential backoff against a community-funded, rate-limited API
 - In-conversation SQL analytics: `gnomad_list_gene_variants` and `gnomad_search_clinvar` stage their full result on a DuckDB-backed canvas table queryable via `gnomad_dataframe_query`
 
 Agent-friendly output:
@@ -223,11 +254,11 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
-To enable the SQL analytics path, also set `CANVAS_PROVIDER_TYPE=duckdb` (requires the `@duckdb/node-api` peer dependency; unavailable on Cloudflare Workers).
+To enable the SQL analytics path, also set `CANVAS_PROVIDER_TYPE=duckdb` (requires the `@duckdb/node-api` peer dependency).
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - No API key — gnomAD's GraphQL endpoint is keyless. An optional `NCBI_API_KEY` raises the `gnomad_search_clinvar` rate limit.
 
 ### Installation
@@ -335,9 +366,13 @@ See [`CLAUDE.md`/`AGENTS.md`](./CLAUDE.md) for development guidelines and archit
 - Register new tools and resources in the `createApp()` arrays in `src/index.ts`
 - Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
 
+## Data attribution
+
+gnomAD data is provided by the [Genome Aggregation Database](https://gnomad.broadinstitute.org) (Broad Institute). ClinVar data is provided by [NCBI](https://www.ncbi.nlm.nih.gov/clinvar/).
+
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
@@ -347,5 +382,3 @@ bun run test
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) for details.
-
-gnomAD data is provided by the [Genome Aggregation Database](https://gnomad.broadinstitute.org) (Broad Institute). ClinVar data is provided by [NCBI](https://www.ncbi.nlm.nih.gov/clinvar/).
