@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-08-21 23:05:17
+Generated on: 2026-09-20 18:34:47
 
 ```text
 gnomad-genetics-mcp-server/
@@ -14,6 +14,8 @@ gnomad-genetics-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── workflows/
+│   │   └── codeql.yml
 │   ├── CODE_OF_CONDUCT.md
 │   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
@@ -28,23 +30,7 @@ gnomad-genetics-mcp-server/
 ├── docs/
 │   ├── design.md
 │   └── idea.md
-├── scripts/
-│   ├── build-changelog.ts
-│   ├── build.ts
-│   ├── check-dependency-specifiers.ts
-│   ├── check-docs-sync.ts
-│   ├── check-framework-antipatterns.ts
-│   ├── check-skill-versions.ts
-│   ├── check-skills-sync.ts
-│   ├── clean-mcpb.ts
-│   ├── clean.ts
-│   ├── devcheck.ts
-│   ├── lint-mcp.ts
-│   ├── lint-packaging.ts
-│   ├── list-skills.ts
-│   ├── release-github.ts
-│   └── tree.ts
-├── skills/
+├── framework-skills/
 │   ├── add-app-tool/
 │   │   └── SKILL.md
 │   ├── add-prompt/
@@ -115,6 +101,8 @@ gnomad-genetics-mcp-server/
 │   │   └── SKILL.md
 │   ├── release-and-publish/
 │   │   └── SKILL.md
+│   ├── release-pr-review/
+│   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
@@ -129,6 +117,22 @@ gnomad-genetics-mcp-server/
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
+├── scripts/
+│   ├── build-changelog.ts
+│   ├── build.ts
+│   ├── check-dependency-specifiers.ts
+│   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
+│   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
+│   ├── clean.ts
+│   ├── devcheck.ts
+│   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
+│   ├── release-github.ts
+│   └── tree.ts
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -183,16 +187,17 @@ gnomad-genetics-mcp-server/
 │   │   └── upstream-leak.e2e.test.ts
 │   ├── smoke/
 │   │   └── tool-surface.smoke.test.ts
-│   └── tools/
-│       ├── gnomad-dataframe-describe.test.ts
-│       ├── gnomad-dataframe-drop.test.ts
-│       ├── gnomad-dataframe-query.test.ts
-│       ├── gnomad-get-coverage.test.ts
-│       ├── gnomad-get-gene-constraint.test.ts
-│       ├── gnomad-get-variant.batch-config.test.ts
-│       ├── gnomad-get-variant.test.ts
-│       ├── gnomad-list-gene-variants.test.ts
-│       └── gnomad-search-clinvar.test.ts
+│   ├── tools/
+│   │   ├── gnomad-dataframe-describe.test.ts
+│   │   ├── gnomad-dataframe-drop.test.ts
+│   │   ├── gnomad-dataframe-query.test.ts
+│   │   ├── gnomad-get-coverage.test.ts
+│   │   ├── gnomad-get-gene-constraint.test.ts
+│   │   ├── gnomad-get-variant.batch-config.test.ts
+│   │   ├── gnomad-get-variant.test.ts
+│   │   ├── gnomad-list-gene-variants.test.ts
+│   │   └── gnomad-search-clinvar.test.ts
+│   └── index.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-09-20
+
+The mcp-ts-core ^0.13.6 upgrade changes how invalid tool arguments are rejected: InvalidParams with a schema-derived recovery hint, and a camelCase spelling of a declared parameter now accepted. The server declares its stateless session posture in code, and the linux/amd64 image carries the target platform @duckdb binding again.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-08-30
 
 Hardens variant and ClinVar boundaries: trims gene inputs, validates and canonicalizes coordinate IDs and upstream build labels, preserves variant hits when the optional ClinVar join fails, returns candidate IDs for ambiguous rsIDs, adds gnomAD attribution, and drops unused fast-check while refreshing dev dependencies.
