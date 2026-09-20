@@ -254,7 +254,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
-To enable the SQL analytics path, also set `CANVAS_PROVIDER_TYPE=duckdb` (requires the `@duckdb/node-api` peer dependency).
+To enable the SQL analytics path, also set `CANVAS_PROVIDER_TYPE=duckdb` — `@duckdb/node-api` ships as a dependency, so nothing extra to install.
 
 ### Prerequisites
 
