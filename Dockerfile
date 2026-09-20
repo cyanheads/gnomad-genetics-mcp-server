@@ -71,14 +71,6 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
         @opentelemetry/semantic-conventions; \
     fi
 
-# DataCanvas (DuckDB) native binary: @duckdb/node-api ships its platform binary
-# in a separate @duckdb/node-bindings-<platform> optional-dependency package. A
-# production `--ignore-scripts` install can resolve against the build-host's
-# lockfile platform and miss the linux binary, so copy the fully-resolved
-# @duckdb tree from the build stage (linux) over the production node_modules. A
-# CANVAS_PROVIDER_TYPE=duckdb server crashes at runtime without it.
-COPY --from=build /usr/src/app/node_modules/@duckdb ./node_modules/@duckdb
-
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
 
