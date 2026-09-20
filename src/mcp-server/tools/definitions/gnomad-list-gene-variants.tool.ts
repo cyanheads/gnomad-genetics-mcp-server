@@ -9,7 +9,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { spillover } from '@cyanheads/mcp-ts-core/canvas';
+import { CanvasIdSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas-accessor.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
@@ -85,12 +85,9 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .describe(
         'Keep only variants with allele frequency ≤ this value (0–1). Variants with null AF are always kept.',
       ),
-    canvas_id: z
-      .string()
-      .optional()
-      .describe(
-        "Optional canvas ID from a prior call, to reuse the same canvas. Reusing it REPLACES (overwrites) the gene_variants table with this call's results — it does not append. Omit to start a fresh canvas; the response returns a new one.",
-      ),
+    canvas_id: CanvasIdSchema.optional().describe(
+      "Optional canvas ID from a prior call, to reuse the same canvas. Reusing it REPLACES (overwrites) the gene_variants table with this call's results — it does not append. Omit to start a fresh canvas; the response returns a new one.",
+    ),
     dataset: datasetField,
     reference_genome: referenceGenomeField,
   }),

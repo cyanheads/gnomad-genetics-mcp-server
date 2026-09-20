@@ -9,6 +9,7 @@
  */
 
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
+import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas-accessor.js';
@@ -24,7 +25,7 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
     idempotentHint: false,
   },
   input: z.object({
-    canvas_id: z.string().min(1).describe('Canvas ID holding the table to drop.'),
+    canvas_id: CanvasIdSchema.describe('Canvas ID holding the table to drop.'),
     table_name: z
       .string()
       .min(1)

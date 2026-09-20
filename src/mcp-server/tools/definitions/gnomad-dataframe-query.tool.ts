@@ -6,6 +6,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
@@ -15,10 +16,9 @@ export const gnomadDataframeQuery = tool('gnomad_dataframe_query', {
     'Run a read-only SQL SELECT against a canvas table staged by gnomad_list_gene_variants (table gene_variants) or gnomad_search_clinvar (table clinvar_variants). Use the canvas_id and table_name those tools returned to rank by allele frequency, group by consequence class, count loss-of-function variants, or filter the full set the inline preview only sampled. SELECT statements only — writes, DDL, and file/HTTP table functions are rejected by the canvas gate. Call gnomad_dataframe_describe first to discover staged table and column names.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
-    canvas_id: z
-      .string()
-      .min(1)
-      .describe('Canvas ID returned by gnomad_list_gene_variants or gnomad_search_clinvar.'),
+    canvas_id: CanvasIdSchema.describe(
+      'Canvas ID returned by gnomad_list_gene_variants or gnomad_search_clinvar.',
+    ),
     sql: z
       .string()
       .min(1)

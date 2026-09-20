@@ -7,7 +7,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { spillover } from '@cyanheads/mcp-ts-core/canvas';
+import { CanvasIdSchema, spillover } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas-accessor.js';
 import { getClinVarService } from '@/services/clinvar/clinvar-service.js';
@@ -72,12 +72,9 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .max(4)
       .optional()
       .describe('Keep only variants with at least this gold-star review rating (0–4).'),
-    canvas_id: z
-      .string()
-      .optional()
-      .describe(
-        "Optional canvas ID from a prior call, to reuse the same canvas. Reusing it REPLACES (overwrites) the clinvar_variants table with this call's results — it does not append. Omit to start a fresh canvas; the response returns a new one.",
-      ),
+    canvas_id: CanvasIdSchema.optional().describe(
+      "Optional canvas ID from a prior call, to reuse the same canvas. Reusing it REPLACES (overwrites) the clinvar_variants table with this call's results — it does not append. Omit to start a fresh canvas; the response returns a new one.",
+    ),
   }),
   output: z.object({
     preview: z.array(ClinVarRowSchema).describe('Inline preview rows — the immediate answer.'),

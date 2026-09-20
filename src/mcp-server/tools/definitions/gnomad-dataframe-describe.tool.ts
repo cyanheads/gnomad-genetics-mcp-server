@@ -6,6 +6,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
@@ -15,12 +16,9 @@ export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
     'List the tables staged on a canvas and their columns (name and type) so you can write correct SQL for gnomad_dataframe_query. Use the canvas_id returned by gnomad_list_gene_variants or gnomad_search_clinvar. Returns one entry per table with its row count and column schema.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
-    canvas_id: z
-      .string()
-      .min(1)
-      .describe(
-        'Canvas ID returned by a prior staging call (gnomad_list_gene_variants or gnomad_search_clinvar).',
-      ),
+    canvas_id: CanvasIdSchema.describe(
+      'Canvas ID returned by a prior staging call (gnomad_list_gene_variants or gnomad_search_clinvar).',
+    ),
   }),
   output: z.object({
     tables: z

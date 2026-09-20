@@ -12,6 +12,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { gnomadDataframeQuery } from '@/mcp-server/tools/definitions/gnomad-dataframe-query.tool.js';
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 
+/** A well-formed canvas ID — the minted `^[A-Za-z0-9_-]{10}$` shape CanvasIdSchema advertises. */
+const CANVAS_ID = 'cnvquery01';
+
 /** Build a canvas whose acquired instance returns a fixed query result. */
 function stubCanvas(queryResult: {
   rows: Record<string, unknown>[];
@@ -20,7 +23,7 @@ function stubCanvas(queryResult: {
   truncated?: boolean;
 }) {
   const query = vi.fn(async () => queryResult);
-  const instance = { canvasId: 'cnvq', query };
+  const instance = { canvasId: CANVAS_ID, query };
   const canvas = { acquire: vi.fn(async () => instance) };
   vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
   return { canvas, instance, query };
@@ -36,7 +39,7 @@ describe('gnomad_dataframe_query handler', () => {
 
     const ctx = createMockContext({ errors: gnomadDataframeQuery.errors });
     const input = gnomadDataframeQuery.input.parse({
-      canvas_id: 'cnvq',
+      canvas_id: CANVAS_ID,
       sql: 'SELECT variant_id, af FROM gene_variants ORDER BY af DESC',
     });
     const result = await gnomadDataframeQuery.handler(input, ctx as never);
@@ -56,7 +59,10 @@ describe('gnomad_dataframe_query handler', () => {
     });
 
     const ctx = createMockContext({ errors: gnomadDataframeQuery.errors });
-    const input = gnomadDataframeQuery.input.parse({ canvas_id: 'cnvq', sql: 'SELECT n FROM t' });
+    const input = gnomadDataframeQuery.input.parse({
+      canvas_id: CANVAS_ID,
+      sql: 'SELECT n FROM t',
+    });
     const result = await gnomadDataframeQuery.handler(input, ctx as never);
 
     expect(result.truncated).toBe(true);
@@ -66,16 +72,19 @@ describe('gnomad_dataframe_query handler', () => {
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadDataframeQuery.errors });
-    const input = gnomadDataframeQuery.input.parse({ canvas_id: 'cnvq', sql: 'SELECT 1' });
+    const input = gnomadDataframeQuery.input.parse({ canvas_id: CANVAS_ID, sql: 'SELECT 1' });
     await expect(gnomadDataframeQuery.handler(input, ctx as never)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'canvas_disabled' },
     });
   });
 
-  it('rejects an empty canvas_id or empty sql at parse time', () => {
+  it('rejects a canvas_id outside the minted shape, or empty sql, at parse time', () => {
     expect(() => gnomadDataframeQuery.input.parse({ canvas_id: '', sql: 'SELECT 1' })).toThrow();
-    expect(() => gnomadDataframeQuery.input.parse({ canvas_id: 'cnvq', sql: '' })).toThrow();
+    expect(() =>
+      gnomadDataframeQuery.input.parse({ canvas_id: 'cnvq', sql: 'SELECT 1' }),
+    ).toThrow();
+    expect(() => gnomadDataframeQuery.input.parse({ canvas_id: CANVAS_ID, sql: '' })).toThrow();
   });
 
   it('renders the row count, columns, and a truncated marker in format()', () => {

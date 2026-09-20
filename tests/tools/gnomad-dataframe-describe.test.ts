@@ -12,11 +12,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { gnomadDataframeDescribe } from '@/mcp-server/tools/definitions/gnomad-dataframe-describe.tool.js';
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 
+/** A well-formed canvas ID — the minted `^[A-Za-z0-9_-]{10}$` shape CanvasIdSchema advertises. */
+const CANVAS_ID = 'cnvdescrib';
+
 /** Build a canvas whose acquired instance returns a fixed describe() result. */
 function stubCanvas(
   tables: Array<{ name: string; rowCount: number; columns: { name: string; type: string }[] }>,
 ) {
-  const instance = { canvasId: 'cnvd', describe: vi.fn(async () => tables) };
+  const instance = { canvasId: CANVAS_ID, describe: vi.fn(async () => tables) };
   const canvas = { acquire: vi.fn(async () => instance) };
   vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
   return { canvas, instance };
@@ -36,7 +39,7 @@ describe('gnomad_dataframe_describe handler', () => {
     ]);
 
     const ctx = createMockContext({ errors: gnomadDataframeDescribe.errors });
-    const input = gnomadDataframeDescribe.input.parse({ canvas_id: 'cnvd' });
+    const input = gnomadDataframeDescribe.input.parse({ canvas_id: CANVAS_ID });
     const result = await gnomadDataframeDescribe.handler(input, ctx as never);
 
     expect(result.tables).toHaveLength(1);
@@ -52,7 +55,7 @@ describe('gnomad_dataframe_describe handler', () => {
     stubCanvas([]);
 
     const ctx = createMockContext({ errors: gnomadDataframeDescribe.errors });
-    const input = gnomadDataframeDescribe.input.parse({ canvas_id: 'cnvd' });
+    const input = gnomadDataframeDescribe.input.parse({ canvas_id: CANVAS_ID });
     const result = await gnomadDataframeDescribe.handler(input, ctx as never);
 
     expect(result.tables).toEqual([]);
@@ -62,7 +65,7 @@ describe('gnomad_dataframe_describe handler', () => {
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadDataframeDescribe.errors });
-    const input = gnomadDataframeDescribe.input.parse({ canvas_id: 'cnvd' });
+    const input = gnomadDataframeDescribe.input.parse({ canvas_id: CANVAS_ID });
     await expect(gnomadDataframeDescribe.handler(input, ctx as never)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'canvas_disabled' },
