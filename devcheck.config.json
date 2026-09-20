@@ -14,6 +14,9 @@
   "outdated": {
     "allowlist": []
   },
+  "lint": {
+    "truncationAllowlist": []
+  },
   "packaging": {
     "pluginManifests": true
   }
