@@ -6,7 +6,9 @@
  * @module tests/prompts/variant-triage.prompt.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { describe, expect, it } from 'vitest';
+import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { variantTriagePrompt } from '@/mcp-server/prompts/definitions/variant-triage.prompt.js';
 
 /** Flatten the generated messages to a single string for substring assertions. */
@@ -104,5 +106,51 @@ describe('gnomad_variant_triage prompt', () => {
   it('omits the dataset clause entirely when dataset is not supplied', async () => {
     const text = await renderText({ variant: 'rs11591147', gene: 'PCSK9' });
     expect(text).not.toContain('dataset:');
+  });
+
+  it.each(['banana', 'GNOMAD_R4', 'gnomad_r5', ' gnomad_r4'])(
+    'rejects an unsupported dataset %j before prompt generation',
+    (dataset) => {
+      expect(variantTriagePrompt.args!.safeParse({ variant: 'rs11591147', dataset }).success).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(GNOMAD_DATASETS)(
+    'quotes a supported dataset %s in every emitted call',
+    async (dataset) => {
+      const text = await renderText({ variant: '1-55051215-G-GA', gene: 'PCSK9', dataset });
+      const calls = text.match(/`gnomad_[a-z_]+\([^`]*\)`/g) ?? [];
+      expect(calls).toHaveLength(3);
+      for (const call of calls) expect(call).toContain(`dataset: "${dataset}"`);
+    },
+  );
+
+  it('treats an empty-string dataset as omitted (form-client payload)', async () => {
+    const text = await renderText({ variant: '1-55051215-G-GA', gene: 'PCSK9', dataset: '' });
+    expect(text).not.toContain('dataset:');
+  });
+
+  it('lists the four supported datasets in the dataset description', () => {
+    const description = variantTriagePrompt.args!.shape.dataset.description ?? '';
+    for (const dataset of GNOMAD_DATASETS) expect(description).toContain(dataset);
+  });
+
+  it('advertises only variant as a required argument', () => {
+    const schema = z.toJSONSchema(variantTriagePrompt.args!) as { required?: string[] };
+    expect(schema.required).toEqual(['variant']);
+  });
+
+  it.each(['   ', '', '\t'])('treats a blank gene %j as omitted', async (gene) => {
+    const text = await renderText({ variant: 'rs11591147', gene });
+    expect(text).toContain('gnomad_get_gene_constraint(gene: <symbol>');
+    expect(text).not.toMatch(/gene: "\s*"/);
+    expect(text).toContain('gene- or transcript-level coverage is a weaker fallback');
+  });
+
+  it('trims a padded gene before quoting it', async () => {
+    const text = await renderText({ variant: 'rs11591147', gene: ' PCSK9 ' });
+    expect(text).toContain('gnomad_get_gene_constraint(gene: "PCSK9")');
   });
 });

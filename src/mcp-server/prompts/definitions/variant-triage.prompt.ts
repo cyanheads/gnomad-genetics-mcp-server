@@ -9,6 +9,7 @@
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
+import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { normalizeVariantIdentifier, VARIANT_OR_RSID_REGEX } from '../../tools/shared-schemas.js';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
@@ -27,15 +28,21 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
       ),
     gene: z
       .string()
+      .trim()
       .optional()
       .describe(
-        'Gene symbol or Ensembl ID for the constraint step (e.g. PCSK9). Omit if not yet known.',
+        'Gene symbol or Ensembl ID for the constraint step (e.g. PCSK9). Omit (or leave blank) if not yet known.',
       ),
     dataset: z
-      .string()
+      .union([
+        z.literal(''),
+        z
+          .enum(GNOMAD_DATASETS)
+          .describe('gnomAD dataset: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac.'),
+      ])
       .optional()
       .describe(
-        'gnomAD dataset to use (e.g. gnomad_r4, gnomad_r2_1). Defaults to the server default when omitted.',
+        'gnomAD dataset to use: gnomad_r4 (GRCh38), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), or exac (GRCh37). Omit or leave blank to use the server default.',
       ),
   }),
   generate: (args) => {
