@@ -71,6 +71,28 @@ export const geneField = z
   );
 
 /**
+ * Optional gene reference for the tools that take one of gene / transcript_id /
+ * region. A value blank after trimming reads as omitted — form clients send ''
+ * for unset fields — so resolveGenomeTarget falls through to the other target;
+ * any other value still needs geneField's shape. A rejected value reports both
+ * alternatives joined by "or", so geneField leads and the blank member's
+ * message completes the sentence.
+ */
+export const optionalGeneField = z
+  .union([
+    geneField,
+    z
+      .string()
+      .trim()
+      .max(0, 'blank to omit the gene')
+      .describe('Blank — the gene is treated as omitted.'),
+  ])
+  .optional()
+  .describe(
+    'Gene — HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mutually exclusive with transcript_id and region; blank means omitted.',
+  );
+
+/**
  * Resolve the mutually-exclusive gene / transcript_id / region inputs (shared by
  * the list and coverage tools) into exactly one GenomeTarget. Throws via the
  * caller's `invalid_target` contract when not exactly one is present.

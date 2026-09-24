@@ -11,7 +11,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   datasetField,
-  geneField,
+  optionalGeneField,
   REGION_REGEX,
   referenceGenomeField,
   resolveGenomeTarget,
@@ -76,12 +76,13 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
-    gene: geneField.optional(),
+    gene: optionalGeneField,
     transcript_id: z
       .string()
+      .trim()
       .optional()
       .describe(
-        'Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region.',
+        'Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.',
       ),
     region: z
       .union([

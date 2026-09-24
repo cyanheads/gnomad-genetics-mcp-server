@@ -8,7 +8,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
@@ -176,5 +176,102 @@ describe('gnomad_get_coverage handler', () => {
     expect(text).toContain('exome');
     expect(text).toContain('45.2');
     expect(text).toContain('20×=95.0%');
+  });
+});
+
+describe('gnomad_get_coverage blank transcript_id (#31)', () => {
+  it.each([
+    [{ gene: 'PCSK9' }, { kind: 'gene', value: 'PCSK9' }],
+    [{ region: '1-55039447-55064852' }, { kind: 'region', value: '1-55039447-55064852' }],
+  ])('treats a whitespace-only transcript_id beside %j as omitted', async (other, target) => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, { ...other, transcript_id: '   ' });
+
+    expect(result.isError).toBeFalsy();
+    expect(fake.getCoverage).toHaveBeenCalledWith(target, expect.anything(), expect.anything());
+    expect(result.structuredContent).toMatchObject({ target: target.value });
+  });
+
+  it('rejects a whitespace-only transcript_id alone as no target', async () => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, { transcript_id: ' \t ' });
+
+    expect(result.isError).toBe(true);
+    expect(
+      (result.structuredContent as { error: { data: { reason: string } } }).error.data.reason,
+    ).toBe('invalid_target');
+    expect(fake.getCoverage).not.toHaveBeenCalled();
+  });
+
+  it('trims a padded transcript_id before the upstream call', async () => {
+    const fake = stubService(async () => [summary('genome')]);
+
+    await runToolContract(gnomadGetCoverage, { transcript_id: ' ENST00000302118 ' });
+
+    expect(fake.getCoverage).toHaveBeenCalledWith(
+      { kind: 'transcript', value: 'ENST00000302118' },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+});
+
+describe('gnomad_get_coverage blank gene (#31)', () => {
+  it.each(['', '   ', '\t'])('treats gene %j beside a region as omitted', async (gene) => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, {
+      gene,
+      region: '1-55039974-55039980',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(fake.getCoverage).toHaveBeenCalledWith(
+      { kind: 'region', value: '1-55039974-55039980' },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(result.structuredContent).toMatchObject({ target_kind: 'region' });
+  });
+
+  it.each(['', '   '])('rejects gene %j alone as no target', async (gene) => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, { gene });
+
+    expect(result.isError).toBe(true);
+    expect(
+      (result.structuredContent as { error: { data: { reason: string } } }).error.data.reason,
+    ).toBe('invalid_target');
+    expect(fake.getCoverage).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a non-blank one-character gene at parse time', async () => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, {
+      gene: 'A',
+      region: '1-55039974-55039980',
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+      JsonRpcErrorCode.InvalidParams,
+    );
+    expect(fake.getCoverage).not.toHaveBeenCalled();
+  });
+
+  it('trims a padded gene before the upstream call', async () => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    await runToolContract(gnomadGetCoverage, { gene: ' PCSK9 ' });
+
+    expect(fake.getCoverage).toHaveBeenCalledWith(
+      { kind: 'gene', value: 'PCSK9' },
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });
