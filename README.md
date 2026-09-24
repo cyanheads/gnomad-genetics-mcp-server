@@ -39,7 +39,7 @@ Population genetics over gnomAD (Broad Institute), with ClinVar clinical signifi
 | `gnomad_get_gene_constraint` | Gene loss-of-function constraint — pLI, LOEUF (`oe_lof_upper`) with confidence interval, observed/expected ratios, and Z-scores. By HGNC symbol or Ensembl gene ID. |
 | `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies and predicted consequences, filterable by consequence class and max allele frequency. |
 | `gnomad_get_coverage` | Sequencing coverage across a gene, transcript, or region — mean/median depth and the fraction of samples over depth thresholds, per callset track. |
-| `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status, conditions, and submission counts. |
+| `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status, conditions, submission counts, and gnomAD-compatible variant IDs, paged by offset. |
 | `gnomad_dataframe_query` | Run a read-only SQL `SELECT` across canvas tables staged by the list tools. |
 | `gnomad_dataframe_describe` | List the tables staged on a canvas and their columns before writing SQL. |
 | `gnomad_dataframe_drop` | Drop a named table from a canvas to reclaim memory. Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` — off by default. |
@@ -84,15 +84,17 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive)
 - Optional filters: one `consequence_class` (`lof` / `missense` / `synonymous` / `other`) and/or a maximum allele frequency
-- The full result is staged on a DataCanvas table named `gene_variants` with an inline preview returned alongside `canvas_id` and `table_name` — query it with `gnomad_dataframe_query` to rank by AF, count by consequence, or group across the complete set
-- Reusing a `canvas_id` REPLACES the staged table; it does not append
-- When the canvas is disabled (`CANVAS_PROVIDER_TYPE` != `duckdb`) the tool returns a capped inline preview (100 rows) with `spilled=false` and the SQL path is unavailable
+- A result too large to inline (the preview holds about 14,000 characters of rows, keeping a response near 24 KB) is staged on a DataCanvas table named `gene_variants`, returned as `canvas_id` and `table_name` beside the preview — inspect it with `gnomad_dataframe_describe`, then query it with `gnomad_dataframe_query` to rank by AF, count by consequence, or group across every row. The response notice names the table and both tools
+- A result that fits inline stages no table and uses no canvas (`canvas_id` is empty) unless you pass a `canvas_id`
+- Passing a `canvas_id` always writes the result to `gene_variants` on that canvas, REPLACING the previous table (it never appends), even when the result fits inline; a result with no variants removes the table
+- When the canvas is disabled (`CANVAS_PROVIDER_TYPE` != `duckdb`) the tool returns the same capped inline preview (as many rows as fit about 14,000 characters) and the SQL path is unavailable
+- A blank `gene` or `transcript_id` counts as omitted
 
 ---
 
 ### `gnomad_get_coverage` <sub>tool</sub>
 
-- Supply exactly one of `gene`, `transcript_id`, or `region`
+- Supply exactly one of `gene`, `transcript_id`, or `region`; a blank `gene` or `transcript_id` counts as omitted
 - Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track
 - `coverage_source` narrows to one track (`exome` / `genome`); omit to return every available track
 - A variant missing from a well-covered region is informative; one missing from a poorly-covered region is not
@@ -102,9 +104,12 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 ### `gnomad_search_clinvar` <sub>tool</sub>
 
 - Returns a gene's classified ClinVar variants — clinical significance, review status with a 0–4 star rating, associated conditions, molecular consequences, and submission counts
-- Optional filters: `clinical_significance` (e.g. `pathogenic`) and a minimum star rating (`min_review_stars`, 0–4)
-- Accepts an HGNC symbol only — ClinVar's gene index doesn't resolve Ensembl gene IDs, unlike the other gnomAD tools
-- The full set is staged on the `clinvar_variants` canvas table with an inline preview; reusing a `canvas_id` REPLACES that table
+- Each row carries gnomAD-compatible identifiers: `canonical_spdi`, `rsids`, and `grch38_variant_id` (`chrom-pos-ref-alt`, set for SNVs, MNVs, and delins), which `gnomad_get_variant` resolves in the GRCh38 datasets
+- Optional filters: `clinical_significance` (e.g. `pathogenic`; blank means no filter) and a minimum star rating (`min_review_stars`, 0–4)
+- Returns one window of up to 500 ClinVar records per call: `total_found` is ClinVar's candidate count for the gene and filter terms (taken before the significance and star filters narrow each window), `truncated` and `next_offset` say whether more remain, and `offset` / `limit` (1–500) page through them. `limit` counts records before the filters, so a window can return fewer rows
+- VariationIDs ClinVar returns no summary for are listed in `unavailable_ids` rather than returned as blank rows
+- Accepts an HGNC symbol only — ClinVar's gene index doesn't resolve Ensembl gene IDs, unlike the other gnomAD tools. An Ensembl gene ID returns guidance to resolve its symbol and searches nothing, leaving any `canvas_id` you pass untouched
+- A window too large to inline (the preview holds about 11,000 characters of rows, keeping a response near 24 KB) is staged on the `clinvar_variants` canvas table — inspect it with `gnomad_dataframe_describe`, then query it with `gnomad_dataframe_query`. A window that fits inline stages no table unless you pass a `canvas_id`; passing one always writes the window to `clinvar_variants`, REPLACING the previous table, and a window with no rows removes it. With the canvas disabled, the preview is the same capped preview (as many rows as fit about 11,000 characters)
 - Keyless, but honors `NCBI_API_KEY` for a higher rate limit (10 vs 3 req/s)
 
 ---
@@ -152,7 +157,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 ### `gnomad_variant_triage` <sub>prompt</sub>
 
-- Arguments: `variant` required (chrom-pos-ref-alt or rsID); `gene` and `dataset` optional
+- Arguments: `variant` required (chrom-pos-ref-alt or rsID); `gene` and `dataset` optional. `dataset` is one of `gnomad_r4`, `gnomad_r3`, `gnomad_r2_1`, `exac` — any other value is rejected; omitted or blank, the emitted calls carry no `dataset` and use the server default. A blank `gene` counts as omitted
 - Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`) → gene constraint (`gnomad_get_gene_constraint`) → callability check (`gnomad_get_coverage` on the exact position, not gene-level)
 - Rejects a malformed `variant` with a validation error before generating the chain
 
@@ -165,7 +170,7 @@ gnomAD-specific:
 - Single keyless GraphQL source for the entire core surface — ClinVar significance is joined per variant inside gnomAD's own response
 - `dataset` and `reference_genome` are distinct, coherence-validated parameters (v4/v3 ⇒ GRCh38, v2.1/ExAC ⇒ GRCh37); both are echoed in every tool's output so a wrong-build coordinate mismatch is visible
 - Polite client — conservative concurrency cap (`GNOMAD_MAX_CONCURRENCY`, default 2) and exponential backoff against a community-funded, rate-limited API
-- In-conversation SQL analytics: `gnomad_list_gene_variants` and `gnomad_search_clinvar` stage their full result on a DuckDB-backed canvas table queryable via `gnomad_dataframe_query`
+- In-conversation SQL analytics: `gnomad_list_gene_variants` and `gnomad_search_clinvar` stage results too large to inline on a DuckDB-backed canvas table — `gnomad_dataframe_describe` lists its columns, `gnomad_dataframe_query` runs SQL over every row
 
 Agent-friendly output:
 

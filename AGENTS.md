@@ -105,14 +105,17 @@ export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/c
 
 ```ts
 import { prompt, z } from '@cyanheads/mcp-ts-core';
+import { GNOMAD_DATASETS } from '@/config/server-config.js';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description: 'Guided rare-disease variant-triage workflow over gnomAD: frequency → constraint → coverage.',
   title: 'gnomAD variant triage',
   args: z.object({
     variant: z.string().describe('Variant to triage — a chrom-pos-ref-alt variantId or an rsID.'),
-    gene: z.string().optional().describe('Gene symbol or Ensembl ID for the constraint step.'),
-    dataset: z.string().optional().describe('gnomAD dataset to use. Defaults to the server default.'),
+    gene: z.string().trim().optional().describe('Gene symbol or Ensembl ID for the constraint step.'),
+    // Prompt arguments carry no schema on the wire — the description lists the values.
+    dataset: z.union([z.literal(''), z.enum(GNOMAD_DATASETS)]).optional()
+      .describe('gnomAD dataset: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac. Blank uses the server default.'),
   }),
   generate: (args) => [
     { role: 'user', content: { type: 'text', text: `Triage variant ${args.variant} for rare-disease causality…` } },
@@ -267,6 +270,7 @@ src/
   mcp-server/
     tools/
       shared-schemas.ts                      # Reused Zod field fragments + resolveGenomeTarget()
+      canvas-staging.ts                      # stageRows() fit-vs-spill staging shared by the two row tools
       definitions/
         gnomad-get-variant.tool.ts           # 5 gnomAD tools + 3 canvas dataframe tools
         …
