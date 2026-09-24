@@ -32,7 +32,12 @@ interface Column<Value> {
       : never;
 }
 
-/** One column per declared row field — a missing, extra, or mistyped field is a compile error. */
+/**
+ * One column per declared row field — a missing or extra field, a string/number
+ * mismatch, or wrong nullability is a compile error. DOUBLE vs BIGINT is not:
+ * the type system can't tell fractional from integral numbers, so that choice
+ * is the declaration's.
+ */
 export type RowColumns<Row> = { [K in DeclaredKeys<Row>]: Column<Row[K]> };
 
 /**
