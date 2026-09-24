@@ -136,6 +136,8 @@ function grch38VariantId(spdi: string | null): string | null {
 
 /** Default and maximum ESearch window, in candidate VariationIDs. */
 export const CLINVAR_WINDOW_MAX = 500;
+/** Largest ESearch `retstart` NCBI accepts (signed 32-bit); past it ESearch answers 200 with an empty body. */
+export const CLINVAR_OFFSET_MAX = 2_147_483_647;
 /** esummary batch size per request. */
 const SUMMARY_BATCH = 50;
 /** Recovery hint for a sanitized NCBI upstream failure — no internal detail. */

@@ -785,19 +785,33 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
     expect(textOf(result)).toContain('**Unavailable IDs:** 999999999, 12345678');
   });
 
-  it.each([{ offset: -1 }, { limit: 0 }, { limit: 501 }, { offset: 1.5 }])(
-    'rejects out-of-range window input %j with InvalidParams',
-    async (window) => {
-      const fetch = vi.spyOn(globalThis, 'fetch');
-      const result = await runToolContract(gnomadSearchClinvar, { gene: 'PCSK9', ...window });
+  it('accepts the largest offset ESearch takes as retstart', async () => {
+    const urls = fakeNcbi({ count: '1571', idlist: [] });
 
-      expect(result.isError).toBe(true);
-      expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
-        JsonRpcErrorCode.InvalidParams,
-      );
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
+    const result = await run({ gene: 'PCSK9', offset: 2_147_483_647 });
+
+    expect(urls[0]?.searchParams.get('retstart')).toBe('2147483647');
+    expect(result.structuredContent).toMatchObject({ total: 0, total_found: 1571 });
+    expect((result.structuredContent as { notice: string }).notice).toMatch(/past the end/);
+  });
+
+  it.each([
+    { offset: -1 },
+    { limit: 0 },
+    { limit: 501 },
+    { offset: 1.5 },
+    // ESearch retstart is a signed 32-bit integer; past it NCBI answers 200 with an empty body.
+    { offset: 2_147_483_648 },
+  ])('rejects out-of-range window input %j with InvalidParams', async (window) => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const result = await runToolContract(gnomadSearchClinvar, { gene: 'PCSK9', ...window });
+
+    expect(result.isError).toBe(true);
+    expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+      JsonRpcErrorCode.InvalidParams,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it.each([
     { offset: 0, limit: 1 },

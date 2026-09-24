@@ -12,6 +12,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
+  CLINVAR_OFFSET_MAX,
   CLINVAR_WINDOW_MAX,
   getClinVarService,
   normalizeSignificance,
@@ -126,6 +127,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .number()
       .int()
       .min(0)
+      .max(CLINVAR_OFFSET_MAX)
       .default(0)
       .describe(
         'Zero-based position of the first ClinVar record in this window. Pass next_offset from the previous call to continue.',
