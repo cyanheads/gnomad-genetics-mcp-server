@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-09-23
+
+gnomad_search_clinvar pages through ClinVar in windows that report completeness and returns gnomAD-compatible variant IDs. Canvas staging no longer mints empty canvases, replaces a reused table, and keeps responses near 24 KB.
+
 ## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-09-20
 
 The mcp-ts-core ^0.13.6 upgrade changes how invalid tool arguments are rejected: InvalidParams with a schema-derived recovery hint, and a camelCase spelling of a declared parameter now accepted. The server declares its stateless session posture in code, and the linux/amd64 image carries the target platform @duckdb binding again.

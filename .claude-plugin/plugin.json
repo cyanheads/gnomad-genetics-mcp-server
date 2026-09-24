@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "gnomad-genetics-mcp-server",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in.",
   "author": {
     "name": "Casey Hand",

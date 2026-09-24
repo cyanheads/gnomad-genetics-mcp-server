@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-09-20 18:34:47
+Generated on: 2026-09-24 06:41:53
 
 ```text
 gnomad-genetics-mcp-server/
@@ -26,6 +26,7 @@ gnomad-genetics-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -154,6 +155,7 @@ gnomad-genetics-mcp-server/
 │   │       │   ├── gnomad-get-variant.tool.ts
 │   │       │   ├── gnomad-list-gene-variants.tool.ts
 │   │       │   └── gnomad-search-clinvar.tool.ts
+│   │       ├── canvas-staging.ts
 │   │       └── shared-schemas.ts
 │   ├── services/
 │   │   ├── clinvar/
@@ -167,9 +169,14 @@ gnomad-genetics-mcp-server/
 │   │   └── upstream-error.ts
 │   └── index.ts
 ├── tests/
+│   ├── fixtures/
+│   │   ├── clinvar-esummary-heavy.live.json
+│   │   ├── clinvar-esummary.live.json
+│   │   └── pcsk9-gene-variants.live.json
 │   ├── fuzz/
 │   │   └── identifiers-and-responses.fuzz.test.ts
 │   ├── integration/
+│   │   ├── canvas-staging.integration.test.ts
 │   │   ├── clinvar-boundary.integration.test.ts
 │   │   ├── dataframe-tools.integration.test.ts
 │   │   ├── gnomad-boundary.integration.test.ts
