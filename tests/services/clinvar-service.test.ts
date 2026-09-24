@@ -1,67 +1,99 @@
 /**
  * @fileoverview Service-level tests for ClinVarService.searchGene — the
- * post-fetch classification filter (#2). NCBI's [clinical_significance] field
- * tag matches broadly and leaks non-matching significances into a filtered
- * query, so searchGene filters the normalized rows itself. Spies the two NCBI
- * calls (esearch → idlist, esummary → rows) and asserts which classifications
- * survive a `pathogenic` query and that the significance filter composes with
- * the star floor.
+ * post-fetch classification filter (#2). NCBI indexes the significance phrase
+ * across all fields, so a filtered query leaks non-matching significances and
+ * searchGene filters the normalized rows itself. Fakes the NCBI boundary
+ * (esearch → idlist + count, esummary → records) and asserts which
+ * classifications survive a `pathogenic` query and that the significance filter
+ * composes with the star floor.
  * @module tests/services/clinvar-service.test
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { ClinVarService } from '@/services/clinvar/clinvar-service.js';
-import type { ClinVarRow } from '@/services/clinvar/types.js';
 
-/** One normalized ClinVar row with a given classification + star rating. */
-function row(uid: string, significance: string, stars: number): ClinVarRow {
+/** Review-status text for each gold-star rating the fixtures use. */
+const STATUS_FOR_STARS: Record<number, string> = {
+  1: 'criteria provided, single submitter',
+  2: 'criteria provided, multiple submitters, no conflicts',
+  3: 'reviewed by expert panel',
+};
+
+/** One raw ESummary record with a given classification + star rating. */
+function record(uid: string, significance: string, stars: number) {
   return {
-    clinvar_variation_id: uid,
+    uid,
     accession: `VCV00${uid}`,
     title: `NM_000371.4(TTR):c.${uid}A>G`,
     obj_type: 'single nucleotide variant',
-    clinical_significance: significance,
-    review_status: 'criteria provided, single submitter',
-    gold_stars: stars,
-    last_evaluated: '2024-01-01',
-    molecular_consequences: 'missense_variant',
-    protein_change: `p.X${uid}`,
-    conditions: 'Hereditary amyloidosis',
-    submission_count: 2,
+    germline_classification: {
+      description: significance,
+      review_status: STATUS_FOR_STARS[stars],
+      last_evaluated: '2024-01-01',
+      trait_set: [{ trait_name: 'Hereditary amyloidosis' }],
+    },
   };
 }
 
 /**
- * The mixed-significance set the live NCBI field tag returns for a TTR
+ * The mixed-significance set the live NCBI search returns for a TTR
  * pathogenic query: real pathogenic classifications alongside the leaks
  * (Uncertain / Benign / Conflicting) the post-filter must drop.
  */
-const ROWS: ClinVarRow[] = [
-  row('1', 'Pathogenic', 3),
-  row('2', 'Likely pathogenic', 1),
-  row('3', 'Pathogenic/Likely pathogenic', 2),
-  row('4', 'Uncertain significance', 1),
-  row('5', 'Benign', 3),
-  row('6', 'Conflicting classifications of pathogenicity', 1),
+const RECORDS = [
+  record('1', 'Pathogenic', 3),
+  record('2', 'Likely pathogenic', 1),
+  record('3', 'Pathogenic/Likely pathogenic', 2),
+  record('4', 'Uncertain significance', 1),
+  record('5', 'Benign', 3),
+  record('6', 'Conflicting classifications of pathogenicity', 1),
 ];
 
-/** Spy the two NCBI calls: esearch yields the ids, esummary yields the rows. */
-function stubNcbi(svc: ClinVarService) {
-  vi.spyOn(svc as any, 'esearch').mockResolvedValue(ROWS.map((r) => r.clinvar_variation_id));
-  vi.spyOn(svc as any, 'esummary').mockImplementation((async (batch: string[]) =>
-    ROWS.filter((r) => batch.includes(r.clinvar_variation_id))) as any);
+function requestUrl(input: string | URL | Request): URL {
+  if (input instanceof URL) return input;
+  if (input instanceof Request) return new URL(input.url);
+  return new URL(input);
 }
 
+/** Fake NCBI: esearch returns every fixture UID, esummary returns the records. */
+function stubNcbi() {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = requestUrl(input);
+    if (url.pathname.endsWith('/esearch.fcgi')) {
+      return new Response(
+        JSON.stringify({
+          esearchresult: { count: String(RECORDS.length), idlist: RECORDS.map((r) => r.uid) },
+        }),
+      );
+    }
+    if (url.pathname.endsWith('/esummary.fcgi')) {
+      const ids = (url.searchParams.get('id') ?? '').split(',');
+      const result: Record<string, unknown> = { uids: ids };
+      for (const r of RECORDS) if (ids.includes(r.uid)) result[r.uid] = r;
+      return new Response(JSON.stringify({ result }));
+    }
+    throw new Error('unmocked fetch');
+  });
+}
+
+/** Keyed config: 100 ms pacing keeps the two-request round trip short. */
+const service = () => new ClinVarService({ ...getServerConfig(), ncbiApiKey: 'test-key' });
+
+beforeEach(() => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  stubNcbi();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe('ClinVarService.searchGene — clinical_significance post-filter', () => {
   it('keeps only pathogenic classifications for a pathogenic query', async () => {
-    const svc = new ClinVarService(getServerConfig());
-    stubNcbi(svc);
-    const ctx = createMockContext();
-    const rows = await svc.searchGene('TTR', { clinicalSignificance: 'pathogenic' }, ctx);
+    const { rows } = await service().searchGene(
+      'TTR',
+      { clinicalSignificance: 'pathogenic' },
+      createMockContext(),
+    );
 
     // The compound and likely- forms survive; the leaks do not.
     expect(rows.map((r) => r.clinical_significance)).toEqual([
@@ -77,35 +109,41 @@ describe('ClinVarService.searchGene — clinical_significance post-filter', () =
   });
 
   it('treats the documented likely_pathogenic underscore form as a space', async () => {
-    const svc = new ClinVarService(getServerConfig());
-    stubNcbi(svc);
-    const ctx = createMockContext();
-    const rows = await svc.searchGene('TTR', { clinicalSignificance: 'likely_pathogenic' }, ctx);
+    const { rows } = await service().searchGene(
+      'TTR',
+      { clinicalSignificance: 'likely_pathogenic' },
+      createMockContext(),
+    );
 
     // "Likely pathogenic" plus the compound that contains it; not the bare "Pathogenic".
     expect(rows.map((r) => r.clinvar_variation_id)).toEqual(['2', '3']);
   });
 
   it('returns every classification when no significance filter is set', async () => {
-    const svc = new ClinVarService(getServerConfig());
-    stubNcbi(svc);
-    const ctx = createMockContext();
-    const rows = await svc.searchGene('TTR', {}, ctx);
+    const { rows } = await service().searchGene('TTR', {}, createMockContext());
     expect(rows.map((r) => r.clinvar_variation_id)).toEqual(['1', '2', '3', '4', '5', '6']);
   });
 
   it('composes the significance filter with the star floor', async () => {
-    const svc = new ClinVarService(getServerConfig());
-    stubNcbi(svc);
-    const ctx = createMockContext();
-    const rows = await svc.searchGene(
+    const { rows } = await service().searchGene(
       'TTR',
       { clinicalSignificance: 'pathogenic', minReviewStars: 2 },
-      ctx,
+      createMockContext(),
     );
 
     // uid 1 (3★) and uid 3 (2★) are pathogenic AND clear the floor; uid 2
     // (Likely pathogenic, 1★) is pathogenic but below it. Both filters apply.
     expect(rows.map((r) => r.clinvar_variation_id)).toEqual(['1', '3']);
+  });
+
+  it('keeps total_found at the candidate count the filters narrowed', async () => {
+    const result = await service().searchGene(
+      'TTR',
+      { clinicalSignificance: 'pathogenic', minReviewStars: 3 },
+      createMockContext(),
+    );
+
+    expect(result.rows.map((r) => r.clinvar_variation_id)).toEqual(['1']);
+    expect(result).toMatchObject({ totalFound: 6, truncated: false, nextOffset: null });
   });
 });

@@ -12,7 +12,7 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import { invalidUpstreamResponse, sanitizeUpstreamError } from '@/services/upstream-error.js';
-import type { ClinVarFilters, ClinVarRow } from './types.js';
+import type { ClinVarFilters, ClinVarRow, ClinVarSearchResult } from './types.js';
 
 /** ClinVar review-status text → gold-star rating (the standard convention). */
 const REVIEW_STATUS_STARS: Record<string, number> = {
@@ -37,19 +37,105 @@ function starsForReviewStatus(status: string | null | undefined): number {
  * Whole-word, case-insensitive classification match. A `pathogenic` query keeps
  * "Pathogenic", "Likely pathogenic", and "Pathogenic/Likely pathogenic" but not
  * "Conflicting classifications of pathogenicity" — the word boundary stops the
- * query from matching inside "pathogenicity". Underscores in the query are read
- * as spaces so the documented `likely_pathogenic` form works.
+ * query from matching inside "pathogenicity". `requested` is already
+ * normalized by normalizeSignificance().
  */
 function matchesSignificance(value: string | null, requested: string): boolean {
   if (!value) return false;
-  const term = requested.trim().replace(/_/g, ' ');
-  if (!term) return true;
-  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`\\b${escaped}\\b`, 'i').test(value);
 }
 
-/** Cap on records pulled per gene search — politeness + bounded canvas size. */
-const MAX_RECORDS = 500;
+/**
+ * The clinical-significance filter as both the ESearch term and the post-fetch
+ * filter use it: `"` dropped (the term quotes the phrase itself), underscores
+ * read as spaces so the documented `likely_pathogenic` form works, trimmed.
+ * Blank after that means no filter — form clients send `""` or whitespace for
+ * an untouched field.
+ */
+export function normalizeSignificance(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/"/g, '').replace(/_/g, ' ').trim();
+  return normalized ? normalized : undefined;
+}
+
+/**
+ * Build the ESearch term. The gene goes out as a quoted phrase, so query
+ * syntax in it — parentheses, brackets, a trailing `OR` — stays inside the
+ * `[gene]` field instead of detaching the tag and searching all fields. NCBI
+ * rewrites the `[clinical_significance]` tag to `[All Fields]`, where an
+ * unquoted multi-word phrase matches nothing, so the significance goes out
+ * quoted too. The star floor goes out as an OR of the exact review-status
+ * values at or above it; a floor of 0 admits every status, including ones the
+ * star map does not know, so it adds no clause. Both filter clauses only
+ * narrow the candidate set — the post-fetch filters in searchGene() stay
+ * authoritative. `symbol` and `significance` arrive with `"` already removed.
+ */
+function buildEsearchTerm(
+  symbol: string,
+  significance: string | undefined,
+  minReviewStars: number | undefined,
+): string {
+  const clauses = [`"${symbol}"[gene]`];
+  if (significance) clauses.push(`"${significance}"[clinical_significance]`);
+  if (minReviewStars != null && minReviewStars > 0) {
+    const statuses = Object.entries(REVIEW_STATUS_STARS)
+      .filter(([, stars]) => stars >= minReviewStars)
+      .map(([status]) => `"${status}"[Review status]`);
+    clauses.push(`(${statuses.join(' OR ')})`);
+  }
+  return clauses.join(' AND ');
+}
+
+/** GRCh38 chromosome RefSeq accessions (GRCh38.p14 assembly report) → gnomAD chrom. */
+const GRCH38_CHROM_BY_ACCESSION: Record<string, string> = {
+  'NC_000001.11': '1',
+  'NC_000002.12': '2',
+  'NC_000003.12': '3',
+  'NC_000004.12': '4',
+  'NC_000005.10': '5',
+  'NC_000006.12': '6',
+  'NC_000007.14': '7',
+  'NC_000008.11': '8',
+  'NC_000009.12': '9',
+  'NC_000010.11': '10',
+  'NC_000011.10': '11',
+  'NC_000012.12': '12',
+  'NC_000013.11': '13',
+  'NC_000014.9': '14',
+  'NC_000015.10': '15',
+  'NC_000016.10': '16',
+  'NC_000017.11': '17',
+  'NC_000018.10': '18',
+  'NC_000019.10': '19',
+  'NC_000020.11': '20',
+  'NC_000021.9': '21',
+  'NC_000022.11': '22',
+  'NC_000023.11': 'X',
+  'NC_000024.10': 'Y',
+};
+
+const SPDI = /^([^:]+):(\d+):([ACGT]*):([ACGT]*)$/;
+
+/**
+ * Derive a gnomAD `chrom-pos-ref-alt` ID from a canonical SPDI (0-based
+ * position). Only unanchored changes map one-to-one: both alleles non-empty and
+ * differing at their first and last base (SNVs, MNVs, delins). Canonical SPDI
+ * repeat-expands deletions, insertions, and duplications and drops the VCF
+ * anchor base, and mitochondrial and non-GRCh38 accessions have no gnomAD ID
+ * here — all of those return null.
+ */
+function grch38VariantId(spdi: string | null): string | null {
+  const match = spdi ? SPDI.exec(spdi) : null;
+  if (!match) return null;
+  const [, accession = '', position = '', deleted = '', inserted = ''] = match;
+  const chrom = GRCH38_CHROM_BY_ACCESSION[accession];
+  if (!chrom || !deleted || !inserted) return null;
+  if (deleted[0] === inserted[0] || deleted.at(-1) === inserted.at(-1)) return null;
+  return `${chrom}-${Number(position) + 1}-${deleted}-${inserted}`;
+}
+
+/** Default and maximum ESearch window, in candidate VariationIDs. */
+export const CLINVAR_WINDOW_MAX = 500;
 /** esummary batch size per request. */
 const SUMMARY_BATCH = 50;
 /** Recovery hint for a sanitized NCBI upstream failure — no internal detail. */
@@ -59,7 +145,10 @@ const NCBI_RETRY_HINT =
 const EsearchResponse = z.object({
   esearchresult: z.object({
     idlist: z.array(z.string()).default([]),
-    count: z.string().optional(),
+    count: z
+      .string()
+      .regex(/^\d+$/)
+      .transform((c) => Number.parseInt(c, 10)),
   }),
 });
 
@@ -88,6 +177,27 @@ const EsummaryRecord = z
     protein_change: z.string().nullable().optional(),
     molecular_consequence_list: z.array(z.string()).nullable().optional(),
     germline_classification: ClassificationSchema.nullable().optional(),
+    variation_set: z
+      .array(
+        z
+          .object({
+            canonical_spdi: z.string().nullable().optional(),
+            variation_xrefs: z
+              .array(
+                z
+                  .object({
+                    db_source: z.string().nullable().optional(),
+                    db_id: z.string().nullable().optional(),
+                  })
+                  .passthrough(),
+              )
+              .nullable()
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .nullable()
+      .optional(),
     supporting_submissions: z
       .object({
         scv: z.array(z.string()).nullable().optional(),
@@ -162,48 +272,77 @@ export class ClinVarService {
     return url;
   }
 
-  /** Search ClinVar for a gene, returning normalized rows (the handler spills them). */
-  async searchGene(gene: string, filters: ClinVarFilters, ctx: Context): Promise<ClinVarRow[]> {
-    const ids = await this.esearch(gene.trim(), filters.clinicalSignificance, ctx);
-    if (ids.length === 0) return [];
+  /**
+   * Search one window of ClinVar candidates for a gene. `offset`/`limit` page
+   * the ESearch ID list; the significance and star filters then narrow the
+   * window's rows, so a window can hold fewer rows than `limit`.
+   */
+  async searchGene(
+    gene: string,
+    filters: ClinVarFilters,
+    ctx: Context,
+  ): Promise<ClinVarSearchResult> {
+    const offset = filters.offset ?? 0;
+    const limit = filters.limit ?? CLINVAR_WINDOW_MAX;
+    const significance = normalizeSignificance(filters.clinicalSignificance);
+    /**
+     * NCBI ignores an empty quoted phrase and falls back to searching every
+     * field for "gene" — all of ClinVar — so a gene of nothing but quotes and
+     * whitespace matches no record, without a request.
+     */
+    const symbol = gene.replace(/"/g, '').trim();
+    if (!symbol) {
+      return { rows: [], totalFound: 0, truncated: false, nextOffset: null, unavailableIds: [] };
+    }
+    const term = buildEsearchTerm(symbol, significance, filters.minReviewStars);
+    const { ids, count } = await this.esearch(term, offset, limit, ctx);
+
     const rows: ClinVarRow[] = [];
+    const unavailableIds: string[] = [];
     for (let i = 0; i < ids.length; i += SUMMARY_BATCH) {
       if (ctx.signal.aborted) break;
-      const batch = ids.slice(i, i + SUMMARY_BATCH);
-      rows.push(...(await this.esummary(batch, ctx)));
+      const batch = await this.esummary(ids.slice(i, i + SUMMARY_BATCH), ctx);
+      rows.push(...batch.rows);
+      unavailableIds.push(...batch.unavailable);
     }
-    // NCBI's [clinical_significance] field tag matches broadly — a pathogenic
-    // query leaks "Benign"/"Uncertain significance"/"Conflicting…" rows — so the
-    // classification filter is enforced here, post-fetch. Both filters compose:
-    // the significance term and the star floor each narrow the set when set.
+    // The ESearch clauses only narrow the candidate set — the significance
+    // phrase matches across all fields, so a pathogenic query still leaks
+    // "Benign"/"Uncertain significance"/"Conflicting…" rows. Both filters are
+    // enforced here, post-fetch, and compose when both are set.
     let filtered = rows;
-    if (filters.clinicalSignificance) {
-      const sig = filters.clinicalSignificance;
-      filtered = filtered.filter((r) => matchesSignificance(r.clinical_significance, sig));
+    if (significance) {
+      filtered = filtered.filter((r) => matchesSignificance(r.clinical_significance, significance));
     }
     if (filters.minReviewStars != null) {
       const floor = filters.minReviewStars;
       filtered = filtered.filter((r) => r.gold_stars >= floor);
     }
-    return filtered;
+    const truncated = offset + limit < count;
+    return {
+      rows: filtered,
+      totalFound: count,
+      truncated,
+      nextOffset: truncated ? offset + limit : null,
+      unavailableIds,
+    };
   }
 
   private esearch(
-    gene: string,
-    clinicalSignificance: string | undefined,
+    term: string,
+    offset: number,
+    limit: number,
     ctx: Context,
-  ): Promise<string[]> {
+  ): Promise<{ ids: string[]; count: number }> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esearch',
       parentContext: ctx,
     });
-    let term = `${gene}[gene]`;
-    if (clinicalSignificance) term += ` AND ${clinicalSignificance}[clinical_significance]`;
     const url = this.withKey(new URL(`${this.baseUrl}/esearch.fcgi`));
     url.searchParams.set('db', 'clinvar');
     url.searchParams.set('term', term);
     url.searchParams.set('retmode', 'json');
-    url.searchParams.set('retmax', String(MAX_RECORDS));
+    url.searchParams.set('retstart', String(offset));
+    url.searchParams.set('retmax', String(limit));
 
     return withRetry(
       async () => {
@@ -222,7 +361,8 @@ export class ClinVarService {
           );
         }
         try {
-          return EsearchResponse.parse(JSON.parse(text)).esearchresult.idlist;
+          const { idlist, count } = EsearchResponse.parse(JSON.parse(text)).esearchresult;
+          return { ids: idlist, count };
         } catch (err) {
           invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
         }
@@ -231,7 +371,15 @@ export class ClinVarService {
     );
   }
 
-  private esummary(ids: string[], ctx: Context): Promise<ClinVarRow[]> {
+  /**
+   * Summarize one batch of VariationIDs. A requested ID that ESummary answers
+   * with an `error` entry, or leaves out of `result`, yields no row and is
+   * reported in `unavailable` instead.
+   */
+  private esummary(
+    ids: string[],
+    ctx: Context,
+  ): Promise<{ rows: ClinVarRow[]; unavailable: string[] }> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esummary',
       parentContext: ctx,
@@ -263,14 +411,21 @@ export class ClinVarService {
         } catch (err) {
           invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
         }
+        const rows: ClinVarRow[] = [];
+        const unavailable: string[] = [];
         try {
-          return result.uids
-            .map((uid) => result[uid])
-            .filter((r): r is Record<string, unknown> => r != null)
-            .map((raw) => this.normalize(EsummaryRecord.parse(raw)));
+          for (const id of ids) {
+            const raw = result[id] as { error?: unknown } | null | undefined;
+            if (raw == null || (typeof raw.error === 'string' && raw.error !== '')) {
+              unavailable.push(id);
+              continue;
+            }
+            rows.push(this.normalize(EsummaryRecord.parse(raw)));
+          }
         } catch (err) {
           invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
         }
+        return { rows, unavailable };
       },
       { operation: 'clinvar.esummary', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
     );
@@ -283,6 +438,16 @@ export class ClinVarService {
       .filter((n): n is string => n != null && n !== '')
       .join('; ');
     const scv = r.supporting_submissions?.scv ?? [];
+    // Identifiers describe one allele: multi-allele records (haplotypes,
+    // compound genotypes) carry no single SPDI or rsID set, so they stay empty.
+    const allele = r.variation_set?.length === 1 ? r.variation_set[0] : undefined;
+    const canonicalSpdi = allele?.canonical_spdi || null;
+    const rsids = new Set<string>();
+    for (const xref of allele?.variation_xrefs ?? []) {
+      if (xref.db_source === 'dbSNP' && xref.db_id && /^\d+$/.test(xref.db_id)) {
+        rsids.add(`rs${xref.db_id}`);
+      }
+    }
     return {
       clinvar_variation_id: r.uid,
       accession: r.accession ?? '',
@@ -296,6 +461,9 @@ export class ClinVarService {
       protein_change: r.protein_change ?? '',
       conditions,
       submission_count: scv.length,
+      canonical_spdi: canonicalSpdi,
+      rsids: [...rsids].join(';'),
+      grch38_variant_id: grch38VariantId(canonicalSpdi),
     };
   }
 }

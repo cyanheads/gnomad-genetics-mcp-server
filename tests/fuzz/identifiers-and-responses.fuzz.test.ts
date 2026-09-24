@@ -190,12 +190,51 @@ describe('ClinVar response-envelope fuzz', () => {
     expect(error).toBeDefined();
   });
 
+  it.each([
+    JSON.stringify({ esearchresult: {} }),
+    JSON.stringify({ esearchresult: { idlist: ['1', '2'] } }),
+    JSON.stringify({ esearchresult: { count: null, idlist: [] } }),
+    JSON.stringify({ esearchresult: { count: '', idlist: [] } }),
+    JSON.stringify({ esearchresult: { count: 'many', idlist: [] } }),
+    JSON.stringify({ esearchresult: { count: '-1', idlist: [] } }),
+    JSON.stringify({ esearchresult: { count: '1.5', idlist: [] } }),
+    JSON.stringify({ esearchresult: { count: 7, idlist: [] } }),
+    JSON.stringify({ esearchresult: { ERROR: 'Invalid query' } }),
+  ])(
+    'rejects an esearch envelope without a usable count as an invalid response: %s',
+    async (body) => {
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(body));
+      const svc = new ClinVarService(getServerConfig());
+
+      const error = await rejectAfterRetries(() =>
+        svc.searchGene('PCSK9', {}, createMockContext()),
+      );
+      expect(error).toMatchObject({ data: { reason: 'invalid_upstream_response' } });
+    },
+  );
+
   it('treats an omitted idlist in a valid esearch envelope as an empty result', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ esearchresult: {} })),
+      new Response(JSON.stringify({ esearchresult: { count: '0' } })),
     );
     const svc = new ClinVarService(getServerConfig());
 
-    await expect(svc.searchGene('PCSK9', {}, createMockContext())).resolves.toEqual([]);
+    await expect(svc.searchGene('PCSK9', {}, createMockContext())).resolves.toMatchObject({
+      rows: [],
+      totalFound: 0,
+      nextOffset: null,
+    });
+  });
+
+  it('reads a count with leading zeros as its decimal value', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ esearchresult: { count: '0012', idlist: [] } })),
+    );
+    const svc = new ClinVarService(getServerConfig());
+
+    await expect(
+      svc.searchGene('PCSK9', { offset: 0, limit: 10 }, createMockContext()),
+    ).resolves.toMatchObject({ totalFound: 12, truncated: true, nextOffset: 10 });
   });
 });

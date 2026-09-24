@@ -26,13 +26,13 @@ describe('known correctness defects', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = input instanceof Request ? new URL(input.url) : new URL(input);
       term = url.searchParams.get('term');
-      return new Response(JSON.stringify({ esearchresult: { idlist: [] } }));
+      return new Response(JSON.stringify({ esearchresult: { count: '0', idlist: [] } }));
     });
     const svc = new ClinVarService(getServerConfig());
 
     await svc.searchGene(' PCSK9 ', {}, createMockContext());
 
-    expect(term).toBe('PCSK9[gene]');
+    expect(term).toBe('"PCSK9"[gene]');
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/12
