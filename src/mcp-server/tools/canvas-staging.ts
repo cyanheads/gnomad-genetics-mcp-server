@@ -5,7 +5,8 @@
  * inline without a canvas_id never mints a canvas, and a supplied canvas_id
  * always leaves the named table holding exactly this call's rows. Tables are
  * registered with a column schema declared from the row type, never sniffed
- * from a preview sample.
+ * from a preview sample. previewLength() is the row-JSON character measure the
+ * preview and gnomad_dataframe_query's page budget share.
  * @module mcp-server/tools/canvas-staging
  */
 
@@ -147,8 +148,11 @@ export async function stageRows<Row extends Record<string, unknown>>(opts: {
   };
 }
 
-/** Rows in the longest prefix whose summed JSON length stays within `previewChars`. */
-function previewLength(rows: Record<string, unknown>[], previewChars: number): number {
+/**
+ * Rows in the longest prefix whose summed JSON length stays within `previewChars`.
+ * Also sizes gnomad_dataframe_query pages, so a preview and a page measure rows alike.
+ */
+export function previewLength(rows: Record<string, unknown>[], previewChars: number): number {
   let chars = 0;
   for (const [i, row] of rows.entries()) {
     chars += JSON.stringify(row).length;
