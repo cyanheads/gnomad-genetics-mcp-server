@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-09-30 · ⚠️ Breaking
+
+gnomad_dataframe_query returns pages, with total in place of row_count and 100 rows by default. Bad regions and mitochondrial targets fail with typed errors instead of retries or false absence, every failure carries a declared reason and hint, exac serves ExAC constraint under a named release, and gnomad_r3 SpliceAI scores parse.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-09-23
 
 gnomad_search_clinvar pages through ClinVar in windows that report completeness and returns gnomAD-compatible variant IDs. Canvas staging no longer mints empty canvases, replaces a reused table, and keeps responses near 24 KB.

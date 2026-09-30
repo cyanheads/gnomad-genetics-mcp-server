@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-09-30 16:09:20
+Generated on: 2026-09-30 16:27:13
 
 ```text
 gnomad-genetics-mcp-server/
@@ -27,6 +27,7 @@ gnomad-genetics-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
+│   ├── 0.4.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
