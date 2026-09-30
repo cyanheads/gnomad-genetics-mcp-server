@@ -89,6 +89,14 @@ describe('gnomad://gene constraint resource', () => {
     expect(geneConstraintResource.description).toMatch(/exac[^.]*ExAC r0\.3/);
     expect(geneConstraintResource.description).toMatch(/gnomad_r3[^.]*v4\.1\.2/);
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it('states gnomAD’s LoF-intolerance guidance per release in its description', () => {
+    expect(geneConstraintResource.description).toMatch(/< 0\.45[^.]*v4\.1\.2/);
+    expect(geneConstraintResource.description).toMatch(/< 0\.35[^.]*v2\.1\.1/);
+    expect(geneConstraintResource.description).toMatch(/on exac[^.]*pLI/);
+    expect(geneConstraintResource.description).not.toMatch(/beta|experimental|0\.6\b/i);
+  });
 });
 
 describe('gnomad://gene constraint resource — through the real service (wire)', () => {

@@ -14,7 +14,7 @@ import type { Dataset } from '@/services/gnomad/types.js';
 
 export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/constraint', {
   description:
-    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI, observed/expected ratios, and Z-scores, with constraint_release naming the release they come from. Mirrors gnomad_get_gene_constraint: the exac segment serves ExAC r0.3 constraint (pLI, Z-scores, and counts only), and gnomad_r3 serves the GRCh38 gnomAD v4.1.2 table because gnomAD publishes no v3 constraint. The gene segment is an HGNC symbol or Ensembl gene ID.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI, observed/expected ratios, and Z-scores, with constraint_release naming the release they come from. Mirrors gnomad_get_gene_constraint: the exac segment serves ExAC r0.3 constraint (pLI, Z-scores, and counts only), and gnomad_r3 serves the GRCh38 gnomAD v4.1.2 table because gnomAD publishes no v3 constraint. gnomAD recommends LOEUF < 0.45 to call a gene LoF-intolerant on v4.1.2 and LOEUF < 0.35 on v2.1.1; on exac, which has no LOEUF, pLI (>0.9 intolerant) is the intolerance measure. The gene segment is an HGNC symbol or Ensembl gene ID.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   name: 'gnomAD gene constraint',
   mimeType: 'application/json',
   params: z.object({
