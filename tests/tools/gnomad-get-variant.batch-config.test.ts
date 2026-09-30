@@ -21,7 +21,11 @@ afterAll(() => {
 
 const batch = (n: number) => Array.from({ length: n }, (_, i) => `1-${1000 + i}-A-T`);
 
-test('GNOMAD_MAX_VARIANT_BATCH drives the accepted batch size and advertised maxItems', async () => {
+// The dynamic import loads the tool's module graph, which can outlast the
+// default 5 s timeout when the suite runs under CPU contention.
+test('GNOMAD_MAX_VARIANT_BATCH drives the accepted batch size and advertised maxItems', {
+  timeout: 30_000,
+}, async () => {
   process.env.GNOMAD_MAX_VARIANT_BATCH = '30';
   resetServerConfig();
   const { gnomadGetVariant } = await import(

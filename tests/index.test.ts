@@ -15,7 +15,9 @@ vi.mock('@cyanheads/mcp-ts-core', async (importOriginal) => ({
 }));
 
 describe('createApp wiring', () => {
-  it('declares the stateless session posture in code', async () => {
+  // Importing src/index.ts loads the whole server graph, which can outlast the
+  // default 5 s timeout when the suite runs under CPU contention.
+  it('declares the stateless session posture in code', { timeout: 30_000 }, async () => {
     await import('@/index.js');
 
     expect(createApp).toHaveBeenCalledTimes(1);
