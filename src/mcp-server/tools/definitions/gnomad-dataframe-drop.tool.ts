@@ -52,9 +52,6 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
       throw ctx.fail(
         'canvas_disabled',
         'DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb.',
-        {
-          ...ctx.recoveryFor('canvas_disabled'),
-        },
       );
     }
     const instance = await canvas.acquire(input.canvas_id, ctx);
