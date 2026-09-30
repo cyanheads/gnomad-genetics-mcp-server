@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-09-24 06:41:53
+Generated on: 2026-09-30 16:09:20
 
 ```text
 gnomad-genetics-mcp-server/
@@ -129,6 +129,7 @@ gnomad-genetics-mcp-server/
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
@@ -175,13 +176,19 @@ gnomad-genetics-mcp-server/
 │   │   └── pcsk9-gene-variants.live.json
 │   ├── fuzz/
 │   │   └── identifiers-and-responses.fuzz.test.ts
+│   ├── helpers/
+│   │   ├── minimal-variant.ts
+│   │   └── worker-resource-read.ts
 │   ├── integration/
 │   │   ├── canvas-staging.integration.test.ts
+│   │   ├── chromosome-scope.integration.test.ts
 │   │   ├── clinvar-boundary.integration.test.ts
 │   │   ├── dataframe-tools.integration.test.ts
+│   │   ├── error-contracts.integration.test.ts
 │   │   ├── gnomad-boundary.integration.test.ts
 │   │   ├── known-issues.integration.test.ts
-│   │   └── unresolved-correctness.integration.test.ts
+│   │   ├── unresolved-correctness.integration.test.ts
+│   │   └── upstream-errors.integration.test.ts
 │   ├── prompts/
 │   │   └── variant-triage.prompt.test.ts
 │   ├── resources/

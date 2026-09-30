@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.1.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -63,8 +63,10 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 ### `gnomad_get_variant` <sub>tool</sub>
 
-- Batch up to 25 IDs per call (default; raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
+- Batch up to 25 IDs per call (default; raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId on chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
 - Per-item partial success — a malformed or absent ID lands in `failed[]` without failing the others
+- Each `failed[]` item is `{ variant, error, reason, recovery }`: `reason` is typed (`invalid_variant_id`, `variant_not_found`, `upstream_unavailable`, …) and `recovery` is the hint the tool declares for it; an ambiguous rsID adds `candidates`
+- Mitochondrial IDs (`M`, `MT`, `chrM`) are refused per item as `mitochondrial_unsupported` with no fetch — gnomAD models mitochondrial variants separately, and they are outside this server
 - Per-ancestry frequency vector is returned in full, never collapsed to a single global AF
 - Reports which callset(s) (`exome` / `genome`) carry the variant, quality flags, transcript consequence, in-silico predictor scores, and the ClinVar significance gnomAD joins per variant
 - An empty `found[]` for a well-formed ID means the variant is not in the chosen dataset — pair with `gnomad_get_coverage` to confirm the position is callable before concluding true absence
@@ -74,15 +76,27 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 ### `gnomad_get_gene_constraint` <sub>tool</sub>
 
 - Accepts an HGNC symbol (`PCSK9`) or an Ensembl gene ID (`ENSG00000169174`)
-- Returns pLI (>0.9 intolerant), LOEUF / `oe_lof_upper` (<0.6 intolerant in v4, <0.35 in v2) with its lower bound, observed/expected ratios for LoF / missense / synonymous, and the three Z-scores
+- Returns pLI (>0.9 intolerant), LOEUF / `oe_lof_upper` with its lower bound, observed/expected ratios for LoF / missense / synonymous, and the three Z-scores
+- `constraint_release` names the release the metrics come from:
+
+  | `dataset` | Source | `constraint_release` | LoF-intolerance guidance |
+  |:--|:--|:--|:--|
+  | `gnomad_r4` | GRCh38 gnomAD constraint | `gnomAD v4.1.2` | LOEUF < 0.45 |
+  | `gnomad_r3` | GRCh38 gnomAD constraint (gnomAD publishes no v3 constraint) | `gnomAD v4.1.2` | LOEUF < 0.45 |
+  | `gnomad_r2_1` | GRCh37 gnomAD constraint | `gnomAD v2.1.1` | LOEUF < 0.35 |
+  | `exac` | GRCh37 ExAC constraint | `ExAC r0.3` | pLI only |
+
+- ExAC publishes pLI, the Z-scores, and observed/expected counts only, so on `exac` the ratios and LOEUF are null and `constraint_flags` is empty
 - Many genes have null constraint (sparse upstream) — null fields are reported as such, never fabricated
-- `constraint_flags` surfaces v4 beta caveats flagged by the gnomAD team
+- `constraint_flags` carries the caveat flags gnomAD attaches to a gene's constraint (e.g. `no_exp_lof`, `syn_outlier`)
 
 ---
 
 ### `gnomad_list_gene_variants` <sub>tool</sub>
 
-- Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive)
+- Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive, chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix)
+- A region must span less than 2,500,000 bp (stop − start) and hold at most ~30,000 variants; an unserved chromosome or out-of-range coordinate fails as `invalid_region` and an over-wide span as `region_too_large`, both before any fetch, while a region over the variant ceiling fails as `region_too_large` after one request, carrying gnomAD's own message
+- Mitochondrial targets (an `M`/`MT` region, or a gene or transcript gnomAD places on chromosome M) fail as `mitochondrial_unsupported` instead of returning an empty list
 - Optional filters: one `consequence_class` (`lof` / `missense` / `synonymous` / `other`) and/or a maximum allele frequency
 - A result too large to inline (the preview holds about 14,000 characters of rows, keeping a response near 24 KB) is staged on a DataCanvas table named `gene_variants`, returned as `canvas_id` and `table_name` beside the preview — inspect it with `gnomad_dataframe_describe`, then query it with `gnomad_dataframe_query` to rank by AF, count by consequence, or group across every row. The response notice names the table and both tools
 - A result that fits inline stages no table and uses no canvas (`canvas_id` is empty) unless you pass a `canvas_id`
@@ -95,6 +109,8 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 ### `gnomad_get_coverage` <sub>tool</sub>
 
 - Supply exactly one of `gene`, `transcript_id`, or `region`; a blank `gene` or `transcript_id` counts as omitted
+- `region` takes the same `chrom-start-stop` form as `gnomad_list_gene_variants` — chromosome `1`–`22`, `X`, or `Y`, optional `chr` prefix, a span under 2,500,000 bp — and fails with `invalid_region` or `region_too_large` before any fetch otherwise
+- Mitochondrial targets fail as `mitochondrial_unsupported` instead of returning empty coverage
 - Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track
 - `coverage_source` narrows to one track (`exome` / `genome`); omit to return every available track
 - A variant missing from a well-covered region is informative; one missing from a poorly-covered region is not
@@ -118,7 +134,10 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Runs single-statement, read-only SQL `SELECT`s against a canvas table staged by `gnomad_list_gene_variants` or `gnomad_search_clinvar` — writes, DDL, and file/HTTP table functions are rejected by the canvas gate
 - Reference tables by the name the staging tool returned (`gene_variants` or `clinvar_variants`)
-- Output columns are dynamic per the SQL projection; `truncated: true` marks a result clipped at the canvas row cap
+- Returns one page of the result: `offset` (default 0) and `limit` (default 100, max 500) select it, and a page also ends before its rows pass 10,000 characters of JSON, which keeps a full page under about 24 KB
+- Output: `rows` (dynamic columns per the SQL projection), `columns`, `offset`, `returned`, `total` (exact row count; `null` when the result exceeds the canvas row cap), `truncated` (rows exist after this page), and `next_offset` (`null` on the last page) — follow `next_offset` until it is `null`
+- Each page re-runs the SQL: stable paging needs an `ORDER BY` over a unique key (such as `variant_id`) and an unchanged table. Paging stops at the canvas row cap (`CANVAS_DEFAULT_ROW_LIMIT`, 10,000 by default); filter or aggregate in SQL to reach rows past it
+- A row over the 10,000-character budget fails with `row_too_large` — select fewer or narrower columns
 - Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
 
 ---
@@ -143,15 +162,15 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Population record for one variant as `application/json` — mirrors `gnomad_get_variant`; the `dataset` segment keeps the URI self-describing
 - `variantId` accepts a chrom-pos-ref-alt ID or an rsID, same grammar as the tool
-- Typed errors: `invalid_variant_id` (outside the coordinate/rsID grammar) and `variant_not_found`
+- Typed errors: `invalid_variant_id` (outside the coordinate/rsID grammar), `mitochondrial_unsupported` (an `M`/`MT`/`chrM` ID), `variant_not_found`, `ambiguous_rsid` (with `candidates`), and the gnomAD failures `graphql_error`, `upstream_build_mismatch`, `upstream_unavailable`, `upstream_timeout`, `upstream_access`, and `invalid_upstream_response` — each with its declared recovery hint
 
 ---
 
 ### `gnomad://gene/{dataset}/{gene}/constraint` <sub>resource</sub>
 
-- Gene loss-of-function constraint as `application/json` — mirrors `gnomad_get_gene_constraint`
+- Gene loss-of-function constraint as `application/json` — mirrors `gnomad_get_gene_constraint`, including the same `constraint_release` for each `dataset` segment (`exac` serves ExAC r0.3 constraint; `gnomad_r3` serves the GRCh38 gnomAD v4.1.2 table)
 - `gene` accepts an HGNC symbol or Ensembl gene ID
-- Typed error `gene_not_found` when no gene matches in the requested build
+- Typed errors: `gene_not_found` when no gene matches in the requested build, `invalid_constraint_data` when gnomAD's metrics fall outside their valid ranges, and the gnomAD failures `graphql_error`, `upstream_unavailable`, `upstream_timeout`, `upstream_access`, and `invalid_upstream_response` — each with its declared recovery hint
 
 ---
 
@@ -175,9 +194,9 @@ gnomAD-specific:
 Agent-friendly output:
 
 - Per-ancestry allele-frequency vector returned in full, never collapsed to a single global AF — the cross-ancestry contrast is the signal clinical interpretation needs
-- Graceful partial failure — `gnomad_get_variant` returns per-item `failed[]` rows with actionable messages instead of failing the whole batch
+- Graceful partial failure — `gnomad_get_variant` returns per-item `failed[]` rows, each with a typed reason and its recovery hint, instead of failing the whole batch
 - Provenance on every response — effective `dataset` and `reference_genome` echoed back; null upstream fields preserved as null, never fabricated
-- Recovery hints on errors (`incoherent_build`, `invalid_target`, `gene_not_found`, `canvas_disabled`) so callers know the next move
+- Every error carries a typed `reason` and the recovery hint its tool or resource declares for that reason, so callers know the next move: input problems (`incoherent_build`, `invalid_target`, `invalid_variant_id`, `invalid_region`, `region_too_large`, `mitochondrial_unsupported`, `ambiguous_rsid`), absences (`gene_not_found`, `variant_not_found`), gnomAD refusals (`graphql_error`, `upstream_build_mismatch`, `invalid_constraint_data`), upstream faults (`upstream_unavailable`, `upstream_timeout`, `upstream_access`, `invalid_upstream_response`), and the canvas (`canvas_disabled`, `row_too_large`). `gnomad_get_variant` puts the same reason and hint on each `failed[]` item
 
 ## Getting started
 
