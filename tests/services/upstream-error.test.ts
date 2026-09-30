@@ -14,7 +14,13 @@ import {
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { describe, expect, it } from 'vitest';
-import { sanitizeUpstreamError } from '@/services/upstream-error.js';
+import {
+  invalidUpstreamResponse,
+  readUpstreamText,
+  sanitizeUpstreamError,
+  upstreamGraphqlMessages,
+  upstreamUnavailable,
+} from '@/services/upstream-error.js';
 
 /** The internals that must never reach the client, as literal substrings. */
 const LEAKED_VALUES = [
@@ -45,7 +51,7 @@ function httpError(code: JsonRpcErrorCode, status: number, upstreamUrl: string):
 /** Run the sanitizer and capture the re-thrown error. */
 function caught(err: unknown): McpError {
   try {
-    sanitizeUpstreamError(err, 'gnomAD', 'wait and retry');
+    sanitizeUpstreamError(err, 'gnomAD');
   } catch (e) {
     return e as McpError;
   }
@@ -134,25 +140,175 @@ describe('sanitizeUpstreamError', () => {
     expect(err.cause).toBe(raw);
   });
 
-  it('surfaces a recovery hint for the transient class', () => {
-    const err = caught(
-      httpError(JsonRpcErrorCode.ServiceUnavailable, 503, 'https://gnomad.broadinstitute.org/api'),
-    );
-    expect((err.data?.recovery as { hint?: string } | undefined)?.hint).toBe('wait and retry');
+  it.each([
+    ['transient', httpError(JsonRpcErrorCode.ServiceUnavailable, 503, 'https://x.test/api')],
+    ['access', httpError(JsonRpcErrorCode.Forbidden, 403, 'https://x.test/api')],
+    [
+      'timeout',
+      new McpError(JsonRpcErrorCode.Timeout, 'timed out', { errorSource: 'FetchTimeout' }),
+    ],
+  ])('leaves the %s class without a recovery, for the surface’s declaration to fill', (_c, raw) => {
+    const err = caught(raw);
+    expect(err.data).toHaveProperty('reason');
+    expect(err.data).not.toHaveProperty('recovery');
   });
 
   it('passes a service-raised NotFound straight through (so typed not-found contracts fire)', () => {
     const nf = notFound('Gene not found');
-    expect(() => sanitizeUpstreamError(nf, 'gnomAD', 'hint')).toThrow(nf);
+    expect(() => sanitizeUpstreamError(nf, 'gnomAD')).toThrow(nf);
   });
 
   it('passes a service-raised ValidationError straight through', () => {
     const ve = validationError('Invalid variant ID');
-    expect(() => sanitizeUpstreamError(ve, 'gnomAD', 'hint')).toThrow(ve);
+    expect(() => sanitizeUpstreamError(ve, 'gnomAD')).toThrow(ve);
   });
 
   it('passes a plain non-McpError straight through unchanged', () => {
     const e = new Error('boom');
-    expect(() => sanitizeUpstreamError(e, 'gnomAD', 'hint')).toThrow(e);
+    expect(() => sanitizeUpstreamError(e, 'gnomAD')).toThrow(e);
+  });
+});
+
+/** Capture what a throwing helper raised. */
+function thrown(run: () => unknown): McpError {
+  try {
+    run();
+  } catch (e) {
+    return e as McpError;
+  }
+  throw new Error('helper did not throw');
+}
+
+describe('upstreamUnavailable and invalidUpstreamResponse', () => {
+  it('raises upstream_unavailable with the cause kept and no recovery', () => {
+    const cause = new Error('gnomAD GraphQL error: Service overloaded');
+    const err = thrown(() => upstreamUnavailable(cause, 'gnomAD'));
+    expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(err.message).toBe('gnomAD is unavailable or rate-limited.');
+    expect(err.data).toEqual({ reason: 'upstream_unavailable', retryable: true });
+    expect(err.cause).toBe(cause);
+  });
+
+  it('raises invalid_upstream_response with the cause kept and no recovery', () => {
+    const cause = new SyntaxError('Unexpected end of JSON input');
+    const err = thrown(() => invalidUpstreamResponse(cause, 'NCBI ClinVar'));
+    expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(err.message).toBe('NCBI ClinVar returned an invalid response.');
+    expect(err.data).toEqual({ reason: 'invalid_upstream_response', retryable: true });
+    expect(err.cause).toBe(cause);
+  });
+});
+
+/** A 200 response whose body stream fails on the first read with `error`. */
+function failingBody(error: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(error);
+      },
+    }),
+    { status: 200 },
+  );
+}
+
+/** Capture what a body read rejected with. */
+async function readFailure(response: Response, upstream: string): Promise<McpError> {
+  try {
+    await readUpstreamText(response, upstream);
+  } catch (e) {
+    return e as McpError;
+  }
+  throw new Error('readUpstreamText did not reject');
+}
+
+describe('readUpstreamText', () => {
+  it('returns the body text', async () => {
+    await expect(readUpstreamText(new Response('{"data":{}}'), 'gnomAD')).resolves.toBe(
+      '{"data":{}}',
+    );
+  });
+
+  it('turns a body deadline into a leak-free upstream_timeout', async () => {
+    const deadline = new McpError(JsonRpcErrorCode.Timeout, 'fetch POST … timed out.', {
+      errorSource: 'FetchTimeout',
+    });
+    const err = await readFailure(failingBody(deadline), 'gnomAD');
+    expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+    expect(err.data).toEqual({ reason: 'upstream_timeout', retryable: true });
+    expect(err.cause).toBe(deadline);
+  });
+
+  it('turns a raw stream reset into upstream_unavailable, keeping the cause', async () => {
+    const reset = new TypeError('terminated');
+    const err = await readFailure(failingBody(reset), 'NCBI ClinVar');
+    expect(err).toBeInstanceOf(McpError);
+    expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(err.message).toBe('NCBI ClinVar is unavailable or rate-limited.');
+    expect(err.data).toEqual({ reason: 'upstream_unavailable', retryable: true });
+    expect(err.cause).toBe(reset);
+  });
+});
+
+/** The McpError fetchWithTimeout throws on a non-2xx, carrying the bounded response body. */
+function fetchError(status: number, body: string): McpError {
+  return new McpError(
+    status >= 500 ? JsonRpcErrorCode.ServiceUnavailable : JsonRpcErrorCode.InvalidParams,
+    `Fetch failed for https://gnomad.broadinstitute.org/api. Status: ${status}`,
+    {
+      status,
+      statusText: 'Internal Server Error',
+      body,
+      statusCode: status,
+      responseBody: body,
+      errorSource: 'FetchHttpError',
+    },
+  );
+}
+
+describe('upstreamGraphqlMessages', () => {
+  const envelope = JSON.stringify({
+    errors: [
+      { message: 'This region has too many variants to display.' },
+      { message: 'Select a smaller region to view variants', path: ['region'] },
+    ],
+    data: null,
+  });
+
+  it('returns every message of a GraphQL error envelope on a 5xx', () => {
+    expect(upstreamGraphqlMessages(fetchError(500, envelope))).toEqual([
+      'This region has too many variants to display.',
+      'Select a smaller region to view variants',
+    ]);
+    expect(upstreamGraphqlMessages(fetchError(503, envelope))).toHaveLength(2);
+  });
+
+  it('ignores the same envelope on a non-5xx status', () => {
+    expect(upstreamGraphqlMessages(fetchError(400, envelope))).toBeUndefined();
+    expect(upstreamGraphqlMessages(fetchError(429, envelope))).toBeUndefined();
+  });
+
+  it.each([
+    ['a non-JSON body', '<html>Internal Server Error</html>'],
+    ['a body truncated mid-JSON', envelope.slice(0, 40)],
+    ['an empty body', ''],
+    ['JSON with no errors', '{"data":null}'],
+    ['an empty errors list', '{"errors":[],"data":null}'],
+    ['an error without a string message', '{"errors":[{"message":42}]}'],
+    ['a JSON array', '[]'],
+    ['JSON null', 'null'],
+  ])('returns undefined for %s', (_label, body) => {
+    expect(upstreamGraphqlMessages(fetchError(500, body))).toBeUndefined();
+  });
+
+  it('returns undefined for anything that is not a framework HTTP error', () => {
+    expect(upstreamGraphqlMessages(new Error(envelope))).toBeUndefined();
+    expect(upstreamGraphqlMessages(validationError('Invalid variant ID'))).toBeUndefined();
+    expect(
+      upstreamGraphqlMessages(
+        new McpError(JsonRpcErrorCode.ServiceUnavailable, 'Network error during fetch', {
+          errorSource: 'FetchNetworkErrorWrapper',
+        }),
+      ),
+    ).toBeUndefined();
   });
 });

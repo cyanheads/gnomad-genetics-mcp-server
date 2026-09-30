@@ -104,6 +104,28 @@ describe('upstream leak guard (e2e through real services)', () => {
     assertLeakFree(err);
   });
 
+  it('relays only the GraphQL message when gnomAD rejects a region with a 500', async () => {
+    const message =
+      'This region has too many variants to display. Select a smaller region to view variants.';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ errors: [{ message }], data: null }), {
+          status: 500,
+          statusText: 'Service Unavailable',
+        }),
+    );
+    const svc = new GnomadService(getServerConfig());
+    const ctx = createMockContext();
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+
+    const err = await runExhausting(() =>
+      svc.listGeneVariants({ kind: 'region', value: '1-1000000-3400000' }, {}, dsCtx, ctx),
+    );
+    assertLeakFree(err);
+    expect(err.message).toBe(message);
+    expect(err.data).toEqual({ reason: 'region_too_large', retryable: false });
+  });
+
   it('does not leak when fetch throws a raw network error', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(
       new TypeError('fetch failed: connect ECONNREFUSED 1.2.3.4:443'),

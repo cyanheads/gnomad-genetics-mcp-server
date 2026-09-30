@@ -12,10 +12,20 @@
  * clean typed domain error: a generic message, leak-free `data`
  * (`reason` + `retryable`), and the original carried as `cause` for
  * server-side logs only (an `Error` `cause` is never serialized onto the wire).
+ * {@link readUpstreamText} gives a failed body read the same treatment, and
+ * {@link readUpstreamJson} adds the checks a 2xx JSON body must pass.
+ * {@link upstreamGraphqlMessages} reads the one part of that body a service may
+ * relay: the GraphQL error messages the upstream wrote for its caller.
+ *
+ * None of these errors carries a recovery hint. Each tool and resource declares
+ * every reason its services raise, and the framework fills the declared
+ * `recovery` onto the wire, so the hint a caller reads names that surface's
+ * next move.
  *
  * @module services/upstream-error
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import {
   JsonRpcErrorCode,
   McpError,
@@ -52,6 +62,48 @@ function hasLeakMarker(data: Record<string, unknown> | undefined): boolean {
   return LEAK_MARKER_KEYS.some((k) => k in data);
 }
 
+/** The body a GraphQL server sends when a resolver fails. */
+const GraphqlErrorEnvelope = z.object({
+  errors: z.array(z.object({ message: z.string() })).min(1),
+});
+
+/**
+ * The `errors[].message` list of a GraphQL error envelope an upstream sent with
+ * an HTTP 5xx, read from the bounded response body the framework HTTP layer
+ * captured on the thrown error. Returns `undefined` for anything else — a
+ * non-5xx status, a body that is not JSON or not an envelope, or an error that
+ * never came from an HTTP response — so a caller only ever sees text the
+ * upstream wrote as a GraphQL message, never the rest of the body.
+ */
+export function upstreamGraphqlMessages(err: unknown): string[] | undefined {
+  if (!(err instanceof McpError)) return;
+  const { status, body }: Record<string, unknown> = err.data ?? {};
+  if (typeof status !== 'number' || status < 500 || status > 599 || typeof body !== 'string') {
+    return;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return;
+  }
+  const envelope = GraphqlErrorEnvelope.safeParse(json);
+  return envelope.success ? envelope.data.errors.map((error) => error.message) : undefined;
+}
+
+/**
+ * Raise the leak-free transient error for an upstream that is down, overloaded,
+ * or throttling: a generic message, `upstream_unavailable`, and retryable, with
+ * `err` kept as `cause` for server-side logs only.
+ */
+export function upstreamUnavailable(err: unknown, upstream: string): never {
+  throw serviceUnavailable(
+    `${upstream} is unavailable or rate-limited.`,
+    { reason: 'upstream_unavailable', retryable: true },
+    { cause: err },
+  );
+}
+
 /**
  * Re-throw a clean, leak-free domain error for an upstream/transport failure
  * raised by the framework HTTP layer, or rethrow anything else unchanged.
@@ -65,10 +117,9 @@ function hasLeakMarker(data: Record<string, unknown> | undefined): boolean {
  *
  * @param err - The caught error.
  * @param upstream - Human label for the dependency (e.g. `'gnomAD'`, `'NCBI ClinVar'`).
- * @param retryHint - Recovery guidance surfaced to the agent (no internal detail).
  * @throws A sanitized `McpError`, or the original error if it isn't a framework HTTP error.
  */
-export function sanitizeUpstreamError(err: unknown, upstream: string, retryHint: string): never {
+export function sanitizeUpstreamError(err: unknown, upstream: string): never {
   if (!(err instanceof McpError) || !(SANITIZED_CODES.has(err.code) || hasLeakMarker(err.data))) {
     throw err;
   }
@@ -93,23 +144,56 @@ export function sanitizeUpstreamError(err: unknown, upstream: string, retryHint:
   }
 
   // ServiceUnavailable / RateLimited / InternalError / Conflict / any leak-marked
-  // error → a single clean transient class with the supplied recovery hint.
+  // error → a single clean transient class.
+  upstreamUnavailable(err, upstream);
+}
+
+/** Raise a leak-free transient error for malformed HTTP 2xx JSON or schema payloads. */
+export function invalidUpstreamResponse(err: unknown, upstream: string): never {
   throw serviceUnavailable(
-    `${upstream} is unavailable or rate-limited.`,
-    { reason: 'upstream_unavailable', retryable: true, recovery: { hint: retryHint } },
+    `${upstream} returned an invalid response.`,
+    { reason: 'invalid_upstream_response', retryable: true },
     { cause: err },
   );
 }
 
-/** Raise a leak-free transient error for malformed HTTP 2xx JSON or schema payloads. */
-export function invalidUpstreamResponse(err: unknown, upstream: string, retryHint: string): never {
-  throw serviceUnavailable(
-    `${upstream} returned an invalid response.`,
-    {
-      reason: 'invalid_upstream_response',
-      retryable: true,
-      recovery: { hint: retryHint },
-    },
-    { cause: err },
-  );
+/**
+ * Read a 2xx response body as text, failing like the fetch it belongs to.
+ * `fetchWithTimeout` keeps its deadline on the body, so a read can reject with
+ * the framework's leak-marked `Timeout` (or its caller-abort error), which is
+ * sanitized; a stream the upstream resets mid-read rejects with a raw runtime
+ * error, which becomes `upstream_unavailable`. Either way the caller gets a
+ * typed reason, never an unclassified throw.
+ */
+export async function readUpstreamText(response: Response, upstream: string): Promise<string> {
+  try {
+    return await response.text();
+  } catch (err) {
+    if (err instanceof McpError) sanitizeUpstreamError(err, upstream);
+    upstreamUnavailable(err, upstream);
+  }
+}
+
+/** An HTML page where a JSON body belongs. */
+const HTML_BODY = /^\s*<(!doctype\s+html|html[\s>])/i;
+
+/**
+ * Read a 2xx response body as JSON validated against `schema`. A failed read
+ * fails as in {@link readUpstreamText}; an HTML page, unparseable JSON, or a
+ * payload off the schema raises `invalid_upstream_response`.
+ */
+export async function readUpstreamJson<T>(
+  response: Response,
+  upstream: string,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  const text = await readUpstreamText(response, upstream);
+  if (HTML_BODY.test(text)) {
+    invalidUpstreamResponse(new Error(`${upstream} returned HTML instead of JSON.`), upstream);
+  }
+  try {
+    return schema.parse(JSON.parse(text));
+  } catch (err) {
+    invalidUpstreamResponse(err, upstream);
+  }
 }

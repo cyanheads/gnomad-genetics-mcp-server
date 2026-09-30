@@ -172,6 +172,7 @@ describe('constraint metric ranges', () => {
             exp_syn: -1,
             flags: [],
           },
+          exac_constraint: null,
         },
       },
     }));
@@ -192,6 +193,7 @@ describe('constraint metric ranges', () => {
             gene_id: 'ENSG00000169174',
             symbol: 'PCSK9',
             gnomad_constraint: constraint,
+            exac_constraint: null,
           },
         },
       }));
@@ -205,6 +207,66 @@ describe('constraint metric ranges', () => {
       });
     },
   );
+
+  /** A plausible ExAC constraint object with some fields overridden. */
+  function exacConstraint(override: Record<string, unknown>) {
+    return {
+      pli: 0.912,
+      lof_z: 3.5,
+      mis_z: 1.4,
+      syn_z: -0.04,
+      obs_lof: 2,
+      exp_lof: 16.35,
+      obs_mis: 125,
+      exp_mis: 160.7,
+      obs_syn: 67,
+      exp_syn: 66.4,
+      ...override,
+    };
+  }
+
+  function fakeExac(exac_constraint: unknown): void {
+    fakeGraphql(() => ({
+      data: {
+        gene: {
+          gene_id: 'ENSG00000141510',
+          symbol: 'TP53',
+          gnomad_constraint: null,
+          exac_constraint,
+        },
+      },
+    }));
+  }
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it.each([
+    ['pLI above 1', exacConstraint({ pli: 1.2 })],
+    ['pLI below 0', exacConstraint({ pli: -0.1 })],
+    ['a negative observed count', exacConstraint({ obs_lof: -1 })],
+    ['a negative expected count', exacConstraint({ exp_syn: -0.5 })],
+    ['a non-numeric Z-score', exacConstraint({ mis_z: 'high' })],
+    ['a falsy non-object payload', false],
+  ])('rejects ExAC constraint with %s as invalid_constraint_data', async (_label, payload) => {
+    fakeExac(payload);
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('TP53', svc.resolveDatasetContext('exac'), createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_constraint_data' },
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it('keeps signed ExAC Z-scores and the pLI bounds themselves', async () => {
+    fakeExac(exacConstraint({ pli: 1, lof_z: -2.5, mis_z: -18.5, syn_z: 0, obs_lof: 0 }));
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('TP53', svc.resolveDatasetContext('exac'), createMockContext()),
+    ).resolves.toMatchObject({ pli: 1, lof_z: -2.5, mis_z: -18.5, syn_z: 0, obs_lof: 0 });
+  });
 });
 
 describe('GraphQL error and partial-data contracts', () => {
@@ -336,4 +398,141 @@ describe('GraphQL error and partial-data contracts', () => {
       });
     },
   );
+});
+
+describe('coordinate-ID absence', () => {
+  /** ClinVar record gnomAD returns beside `variant: null` when ClinVar knows the variant. */
+  const clinvarRecord = {
+    clinical_significance: 'Pathogenic',
+    review_status: 'criteria provided, multiple submitters, no conflicts',
+    gold_stars: 3,
+    clinvar_variation_id: '9589',
+  };
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
+  it.each([
+    ['live shape, ClinVar null', [{ message: 'Variant not found' }], null],
+    ['live shape, ClinVar populated', [{ message: 'Variant not found' }], clinvarRecord],
+    ['error at the variant path', [{ message: 'Variant not found', path: ['variant'] }], null],
+    [
+      'repeated pathless not-found errors',
+      [{ message: 'Variant not found' }, { message: 'Variant not found' }],
+      clinvarRecord,
+    ],
+  ])('returns null after one fetch for gnomAD absence: %s', async (_label, errors, clinvar) => {
+    const { fetch } = fakeGraphql(() => ({
+      errors,
+      data: { variant: null, clinvar_variant: clinvar },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getVariant(
+      '1-1-A-T',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(result).toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
+  it.each([
+    ['not-found beside a populated variant, no path', [{ message: 'Variant not found' }], true],
+    [
+      'not-found beside a populated variant, variant path',
+      [{ message: 'Variant not found', path: ['variant'] }],
+      true,
+    ],
+    ['Invalid variant ID', [{ message: 'Invalid variant ID' }], false],
+    ['Multiple variants found', [{ message: 'Multiple variants found' }], false],
+    [
+      'not-found mixed with another error',
+      [{ message: 'Variant not found' }, { message: 'Unexpected resolver failure' }],
+      false,
+    ],
+    [
+      'not-found mixed with a ClinVar-path error',
+      [
+        { message: 'Variant not found' },
+        { message: 'ClinVar resolver failed', path: ['clinvar_variant'] },
+      ],
+      false,
+    ],
+    ['nested path', [{ message: 'Variant not found', path: ['variant', 'exome'] }], false],
+    ['unrelated path', [{ message: 'Variant not found', path: ['gene'] }], false],
+  ])('keeps %s a fatal graphql_error', async (_label, errors, populated) => {
+    const { fetch } = fakeGraphql(({ variables }) => ({
+      errors,
+      data: {
+        variant: populated ? variant(String(variables.variantId)) : null,
+        clinvar_variant: null,
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getVariant('1-1-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'graphql_error', retryable: false },
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
+  it('keeps rsID absence a null result after one fetch', async () => {
+    const { fetch } = fakeGraphql(() => ({
+      errors: [{ message: 'Variant not found' }],
+      data: { variant: null },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getVariant(
+      'rs999999999999',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(result).toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
+  it('gives an absent coordinate ID the same failed[] item as an absent rsID, in input order', async () => {
+    const { requests } = fakeGraphql(({ query, variables }) => {
+      if (query.includes('GnomadVariantByRsid')) {
+        return { errors: [{ message: 'Variant not found' }], data: { variant: null } };
+      }
+      if (query.includes('GnomadClinvar')) return { data: { clinvar_variant: null } };
+      if (variables.variantId === '1-55039974-G-T') {
+        return { data: { variant: variant('1-55039974-G-T'), clinvar_variant: null } };
+      }
+      return {
+        errors: [{ message: 'Variant not found' }],
+        data: { variant: null, clinvar_variant: clinvarRecord },
+      };
+    });
+    initGnomadService({} as never, {} as never);
+
+    const result = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({
+        variants: ['1-1-A-T', 'rs999999999999', '1-55039974-G-T', '2-1-C-G'],
+        dataset: 'gnomad_r4',
+      }),
+      createMockContext({ errors: gnomadGetVariant.errors }),
+    );
+
+    expect(result.found.map((record) => record.variant_id)).toEqual(['1-55039974-G-T']);
+    expect(result.failed.map((item) => item.variant)).toEqual([
+      '1-1-A-T',
+      'rs999999999999',
+      '2-1-C-G',
+    ]);
+    const [coordinate, rsid, second] = result.failed;
+    expect(coordinate?.error).toMatch(/^Not found in gnomad_r4\./);
+    expect(rsid?.error).toBe(coordinate?.error);
+    expect(second?.error).toBe(coordinate?.error);
+    expect(requests).toHaveLength(4);
+  });
 });

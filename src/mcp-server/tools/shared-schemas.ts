@@ -26,12 +26,19 @@ export const referenceGenomeField = z
     'Reference build. Derived from dataset when omitted (v4/v3=GRCh38, v2.1/ExAC=GRCh37). If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.',
   );
 
-/** Variant ID: chrom-pos-ref-alt (e.g. 1-55051215-G-GA). */
-export const VARIANT_ID_REGEX = /^(?:chr)?(?:[1-9]|1\d|2[0-2]|X|Y|M)-[1-9]\d*-[ACGT]+-[ACGT]+$/i;
+/**
+ * Variant ID: chrom-pos-ref-alt (e.g. 1-55051215-G-GA). M and MT parse so the
+ * service can reject them as mitochondrial_unsupported rather than malformed.
+ */
+export const VARIANT_ID_REGEX = /^(?:chr)?(?:[1-9]|1\d|2[0-2]|X|Y|MT|M)-[1-9]\d*-[ACGT]+-[ACGT]+$/i;
 /** rsID: rs followed by digits (e.g. rs11591147). */
 export const RSID_REGEX = /^rs\d+$/i;
-/** Region: chrom-start-stop (e.g. 1-55039447-55064852). */
-export const REGION_REGEX = /^[0-9XYM]+-\d+-\d+$/i;
+/**
+ * Region: chrom-start-stop (e.g. 1-55039447-55064852). Shape only — the service
+ * region parser owns the chromosome set, the coordinate bounds, and the span
+ * limit, so an unserved chromosome fails as invalid_region, not a parse error.
+ */
+export const REGION_REGEX = /^(?:chr)?[0-9A-Z]+-\d+-\d+$/i;
 
 /** Combined matcher — accepts a chrom-pos-ref-alt variantId OR an rsID. */
 export const VARIANT_OR_RSID_REGEX = new RegExp(
@@ -58,7 +65,7 @@ export const batchVariantIdField = z
   .string()
   .min(1)
   .describe(
-    'Variant ID — chrom-pos-ref-alt (1-based, e.g. 1-55051215-G-GA) or an rsID (rs11591147). Obtain a variantId from ensembl_predict_variant or a VCF. Malformed IDs are reported per-item in failed[], not rejected wholesale.',
+    'Variant ID — chrom-pos-ref-alt (1-based, e.g. 1-55051215-G-GA) on chromosome 1–22, X, or Y with an optional chr prefix, or an rsID (rs11591147). Mitochondrial IDs (M, MT, chrM) are not served. Obtain a variantId from ensembl_predict_variant or a VCF. Malformed IDs are reported per-item in failed[], not rejected wholesale.',
   );
 
 /** Gene reference — HGNC symbol or Ensembl gene ID. */
@@ -89,7 +96,7 @@ export const optionalGeneField = z
   ])
   .optional()
   .describe(
-    'Gene — HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mutually exclusive with transcript_id and region; blank means omitted.',
+    'Gene — HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mitochondrial genes (e.g. MT-TL1) are not served. Mutually exclusive with transcript_id and region; blank means omitted.',
   );
 
 /**
@@ -103,10 +110,7 @@ export function resolveGenomeTarget(
     transcript_id?: string | undefined;
     region?: string | undefined;
   },
-  ctx: {
-    fail: (reason: 'invalid_target', msg?: string, data?: Record<string, unknown>) => Error;
-    recoveryFor: (reason: 'invalid_target') => Record<string, unknown>;
-  },
+  ctx: { fail: (reason: 'invalid_target', msg?: string) => Error },
 ): GenomeTarget {
   const provided = [
     inputs.gene ? ({ kind: 'gene', value: inputs.gene } as const) : undefined,
@@ -119,7 +123,6 @@ export function resolveGenomeTarget(
     throw ctx.fail(
       'invalid_target',
       `Supply exactly one of gene, transcript_id, or region — received ${provided.length}.`,
-      ctx.recoveryFor('invalid_target'),
     );
   }
   return provided[0] as GenomeTarget;

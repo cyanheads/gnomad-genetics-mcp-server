@@ -86,6 +86,9 @@ describe('variant and rsID parser fuzz', () => {
     expect(result.found).toEqual([]);
     expect(result.failed.map((failure) => failure.variant)).toEqual(input.variants);
     expect(result.failed.every((failure) => failure.error.includes('Malformed ID'))).toBe(true);
+    expect(new Set(result.failed.map((failure) => failure.reason))).toEqual(
+      new Set(['invalid_variant_id']),
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
 });
@@ -116,6 +119,7 @@ describe('gene parser fuzz', () => {
               gene_id: 'ENSG00000169174',
               symbol: 'PCSK9',
               gnomad_constraint: null,
+              exac_constraint: null,
             },
           },
         }),
@@ -171,6 +175,60 @@ describe('gnomAD response-envelope fuzz', () => {
       expect(error).toBeDefined();
     },
   );
+});
+
+describe('in-silico predictor value fuzz', () => {
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/36
+  it('never maps a predictor string to a non-finite number, and every record keeps the output schema', async () => {
+    const numbers = ['0', '0.00', '-3.87', '1e-3', '1E5', '+2', '.5', '5.', '1e999', '-1e999'];
+    const oddNumbers = ['NaN', 'Infinity', '-Infinity', '0x10', '0b1', '1_000', '١٢', '--1', ''];
+    const suffixes = ['', ' (no_consequence)', '(acceptor_gain)', ' ()', ' (', ')', ' (a (b))'];
+    const prefixes = ['', ' ', '('];
+    const raws = prefixes.flatMap((prefix) =>
+      [...numbers, ...oddNumbers].flatMap((number) =>
+        suffixes.map((suffix) => `${prefix}${number}${suffix}`),
+      ),
+    );
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              variant: {
+                variant_id: '1-100-A-T',
+                reference_genome: 'GRCh38',
+                rsids: [],
+                flags: null,
+                exome: null,
+                genome: null,
+                transcript_consequences: null,
+                in_silico_predictors: raws.map((value, index) => ({ id: `p${index}`, value })),
+              },
+              clinvar_variant: null,
+            },
+          }),
+        ),
+    );
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getVariant(
+      '1-100-A-T',
+      svc.resolveDatasetContext('gnomad_r3'),
+      createMockContext(),
+    );
+
+    expect(result?.in_silico).toHaveLength(raws.length);
+    for (const [index, predictor] of (result?.in_silico ?? []).entries()) {
+      const raw = raws[index] ?? '';
+      expect(predictor.value === null || Number.isFinite(predictor.value), raw).toBe(true);
+      // A number is only ever read from a value that starts with one.
+      if (predictor.value !== null) expect(raw.trim(), raw).toMatch(/^[+-]?[\d.]/);
+      // Nothing gnomAD sent is dropped: a value with no number keeps its text.
+      if (predictor.value === null && raw.trim() !== '')
+        expect(predictor.annotation).not.toBeNull();
+    }
+    expect(result).toEqual(expect.schemaMatching(gnomadGetVariant.output.shape.found.element));
+  });
 });
 
 describe('ClinVar response-envelope fuzz', () => {

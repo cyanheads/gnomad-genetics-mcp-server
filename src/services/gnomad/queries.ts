@@ -1,7 +1,10 @@
 /**
  * @fileoverview Parameterized gnomAD GraphQL query documents — one per tool.
- * Each requests only the fields its tool returns. Field names are grounded
- * against the live schema (gnomad.broadinstitute.org/api).
+ * Each requests only the fields its tool returns, plus `chrom` on the gene and
+ * transcript list/coverage documents: gnomAD resolves mitochondrial features but
+ * answers their nuclear `variants`/`coverage` fields with nothing, so the
+ * service reads `chrom` to refuse them rather than report absence. Field names
+ * are grounded against the live schema (gnomad.broadinstitute.org/api).
  * @module services/gnomad/queries
  */
 
@@ -84,34 +87,36 @@ query GnomadClinvar($variantId: String!, $referenceGenome: ReferenceGenomeId!) {
   }
 }` as const;
 
+/**
+ * Shared gene constraint selection. `gnomad_constraint` holds the build's gnomAD
+ * table (v4.1.2 on GRCh38, v2.1.1 on GRCh37); `exac_constraint` holds ExAC r0.3
+ * (GRCh37 only, null on GRCh38), which publishes no ratios or flags. The
+ * service reads one of the two by dataset.
+ */
+const GENE_CONSTRAINT_SELECTION = `
+gene_id
+symbol
+gnomad_constraint {
+  pli oe_lof oe_lof_lower oe_lof_upper oe_mis oe_syn
+  lof_z mis_z syn_z
+  obs_lof exp_lof obs_mis exp_mis obs_syn exp_syn
+  flags
+}
+exac_constraint {
+  pli lof_z mis_z syn_z
+  obs_lof exp_lof obs_mis exp_mis obs_syn exp_syn
+}`;
+
 /** Gene loss-of-function constraint, by gene symbol. */
 export const GENE_CONSTRAINT_BY_SYMBOL_QUERY = `
 query GnomadGeneConstraintBySymbol($gene: String!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) {
-    gene_id
-    symbol
-    gnomad_constraint {
-      pli oe_lof oe_lof_lower oe_lof_upper oe_mis oe_syn
-      lof_z mis_z syn_z
-      obs_lof exp_lof obs_mis exp_mis obs_syn exp_syn
-      flags
-    }
-  }
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${GENE_CONSTRAINT_SELECTION} }
 }` as const;
 
 /** Gene loss-of-function constraint, by Ensembl gene ID. */
 export const GENE_CONSTRAINT_BY_ID_QUERY = `
 query GnomadGeneConstraintById($gene: String!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) {
-    gene_id
-    symbol
-    gnomad_constraint {
-      pli oe_lof oe_lof_lower oe_lof_upper oe_mis oe_syn
-      lof_z mis_z syn_z
-      obs_lof exp_lof obs_mis exp_mis obs_syn exp_syn
-      flags
-    }
-  }
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${GENE_CONSTRAINT_SELECTION} }
 }` as const;
 
 /** Shared selection for a flattened gene/region/transcript variant list element. */
@@ -126,17 +131,17 @@ variants(dataset: $dataset) {
 
 export const GENE_VARIANTS_BY_SYMBOL_QUERY = `
 query GnomadGeneVariantsBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${VARIANT_LIST_SELECTION} }
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
 }` as const;
 
 export const GENE_VARIANTS_BY_ID_QUERY = `
 query GnomadGeneVariantsById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${VARIANT_LIST_SELECTION} }
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
 }` as const;
 
 export const TRANSCRIPT_VARIANTS_QUERY = `
 query GnomadTranscriptVariants($transcriptId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { ${VARIANT_LIST_SELECTION} }
+  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
 }` as const;
 
 export const REGION_VARIANTS_QUERY = `
@@ -153,17 +158,17 @@ coverage(dataset: $dataset) {
 
 export const GENE_COVERAGE_BY_SYMBOL_QUERY = `
 query GnomadGeneCoverageBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${COVERAGE_SELECTION} }
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
 }` as const;
 
 export const GENE_COVERAGE_BY_ID_QUERY = `
 query GnomadGeneCoverageById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${COVERAGE_SELECTION} }
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
 }` as const;
 
 export const TRANSCRIPT_COVERAGE_QUERY = `
 query GnomadTranscriptCoverage($transcriptId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { ${COVERAGE_SELECTION} }
+  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
 }` as const;
 
 export const REGION_COVERAGE_QUERY = `

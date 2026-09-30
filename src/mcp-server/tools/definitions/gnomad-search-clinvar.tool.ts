@@ -205,6 +205,33 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       retryable: true,
       thrownBy: 'service',
     },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'Every attempt to reach NCBI E-utilities timed out.',
+      recovery:
+        'NCBI did not answer in time; wait a few seconds and retry, or pass a smaller limit so the window needs fewer summary requests.',
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_access',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'NCBI E-utilities refused the request (access denied).',
+      recovery:
+        'Do not retry: NCBI is refusing requests from this server. Tell the user ClinVar search is blocked upstream and point them to https://www.ncbi.nlm.nih.gov/clinvar/.',
+      retryable: false,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'invalid_upstream_response',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'NCBI E-utilities kept answering with a response that failed validation.',
+      recovery:
+        'Wait a few seconds and retry; NCBI returned a response this server could not validate.',
+      retryable: true,
+      thrownBy: 'service',
+    },
   ],
 
   async handler(input, ctx) {

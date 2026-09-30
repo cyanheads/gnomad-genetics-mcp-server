@@ -177,8 +177,8 @@ describe('GnomadService variant boundary', () => {
     });
   });
 
-  it('accepts mitochondrial, sex-chromosome, indel, and MNV identifiers through the tool', async () => {
-    fakeGraphql(({ query, variables }) => {
+  it('accepts sex-chromosome, indel, and MNV identifiers through the tool, and refuses a mitochondrial one before any fetch', async () => {
+    const requests = fakeGraphql(({ query, variables }) => {
       if (query.includes('GnomadVariantByRsid')) {
         return { data: { variant: rawVariant('1-101-A-G') } };
       }
@@ -200,31 +200,371 @@ describe('GnomadService variant boundary', () => {
       createMockContext({ errors: gnomadGetVariant.errors }),
     );
 
-    expect(result.failed).toEqual([]);
+    expect(result.failed).toEqual([
+      {
+        variant: 'M-100-A-G',
+        error: expect.stringMatching(/mitochondrial/i),
+        reason: 'mitochondrial_unsupported',
+        recovery: gnomadGetVariant.errors?.find(
+          (entry) => entry.reason === 'mitochondrial_unsupported',
+        )?.recovery,
+      },
+    ]);
     expect(result.found.map((variant) => variant.variant_id)).toEqual([
-      'M-100-A-G',
       'X-200-G-GA',
       'Y-300-AC-GT',
       '1-400-AC-GT',
       '1-101-A-G',
     ]);
+    expect(requests.some((request) => request.variables.variantId === 'M-100-A-G')).toBe(false);
     expect(result.reference_genome).toBe('GRCh38');
   });
 
-  it('rejects a pathless not-found error on the exact-path variant operation', async () => {
-    fakeGraphql(() => ({
+  it('reads a pathless not-found error beside a null variant as absence on the coordinate operation', async () => {
+    const requests = fakeGraphql(() => ({
       errors: [{ message: 'Variant not found' }],
       data: { variant: null, clinvar_variant: null },
     }));
     const svc = new GnomadService(getServerConfig());
 
-    await expect(
-      svc.getVariant('1-999-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
-    ).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-      data: { reason: 'graphql_error' },
+    const result = await svc.getVariant(
+      '1-999-A-T',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(result).toBeNull();
+    expect(requests).toHaveLength(1);
+  });
+});
+
+/** gnomad_r4 predictor ids and value strings, shaped like the live `in_silico_predictors`. */
+const R4_PREDICTORS = [
+  { id: 'cadd', value: '10.4' },
+  { id: 'revel_max', value: '0.028' },
+  { id: 'spliceai_ds_max', value: '0.00' },
+  { id: 'pangolin_largest_ds', value: '0.02' },
+  { id: 'phylop', value: '-3.87' },
+  { id: 'sift_max', value: '0.33' },
+  { id: 'polyphen_max', value: '0.001' },
+];
+
+describe('GnomadService in-silico predictor mapping', () => {
+  async function inSilicoFor(
+    predictors: readonly { id: string; value: string | null }[] | null,
+    dataset: 'gnomad_r4' | 'gnomad_r3' | 'gnomad_r2_1' | 'exac' = 'gnomad_r4',
+  ) {
+    fakeGraphql(({ variables }) => ({
+      data: {
+        variant: {
+          ...rawVariant(String(variables.variantId), String(variables.referenceGenome)),
+          in_silico_predictors: predictors,
+        },
+        clinvar_variant: null,
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+    const result = await svc.getVariant(
+      '1-55039974-G-T',
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+    return result?.in_silico;
+  }
+
+  it('maps plain numeric strings, negatives included, to numbers and leaves empty or null values null', async () => {
+    const inSilico = await inSilicoFor([
+      ...R4_PREDICTORS,
+      { id: 'empty', value: '' },
+      { id: 'missing', value: null },
+    ]);
+
+    expect(inSilico).toMatchObject([
+      { id: 'cadd', value: 10.4 },
+      { id: 'revel_max', value: 0.028 },
+      { id: 'spliceai_ds_max', value: 0 },
+      { id: 'pangolin_largest_ds', value: 0.02 },
+      { id: 'phylop', value: -3.87 },
+      { id: 'sift_max', value: 0.33 },
+      { id: 'polyphen_max', value: 0.001 },
+      { id: 'empty', value: null },
+      { id: 'missing', value: null },
+    ]);
+  });
+
+  it.each([
+    ['gnomad_r2_1', null],
+    ['exac', []],
+  ] as const)('returns no predictors for %s, which carries none', async (dataset, predictors) => {
+    await expect(inSilicoFor(predictors, dataset)).resolves.toEqual([]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/36
+  it('gives every plain numeric predictor a null annotation', async () => {
+    const inSilico = await inSilicoFor(R4_PREDICTORS);
+
+    expect(inSilico?.map((predictor) => predictor.annotation)).toEqual(
+      R4_PREDICTORS.map(() => null),
+    );
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/36
+  it('splits a gnomad_r3 SpliceAI score from its parenthesized event', async () => {
+    const inSilico = await inSilicoFor(
+      [
+        { id: 'revel', value: '0.0280' },
+        { id: 'cadd', value: '10.4' },
+        { id: 'splice_ai', value: '0.00 (no_consequence)' },
+        { id: 'primate_ai', value: '0.504' },
+      ],
+      'gnomad_r3',
+    );
+
+    expect(inSilico).toEqual([
+      { id: 'revel', value: 0.028, annotation: null },
+      { id: 'cadd', value: 10.4, annotation: null },
+      { id: 'splice_ai', value: 0, annotation: 'no_consequence' },
+      { id: 'primate_ai', value: 0.504, annotation: null },
+    ]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/36
+  it.each([
+    ['0.0100 (acceptor_gain)', 0.01, 'acceptor_gain'],
+    ['-0.5 (donor_loss)', -0.5, 'donor_loss'],
+    ['1e-3 (acceptor_loss)', 0.001, 'acceptor_loss'],
+    ['0.2(donor_gain)', 0.2, 'donor_gain'],
+    ['  0.3   ( spaced event )  ', 0.3, 'spaced event'],
+    ['0.4 ()', 0.4, null],
+    ['not scored', null, 'not scored'],
+    ['(no_consequence)', null, '(no_consequence)'],
+    ['0.5 no_parens', null, '0.5 no_parens'],
+    ['NaN', null, 'NaN'],
+    ['Infinity', null, 'Infinity'],
+    ['1e999', null, '1e999'],
+    ['1e999 (overflow)', null, '1e999 (overflow)'],
+    ['0x10', null, '0x10'],
+    ['   ', null, null],
+    ['', null, null],
+    [null, null, null],
+  ])(
+    'maps %j to value %j and annotation %j, never a non-finite number',
+    async (raw, value, annotation) => {
+      const inSilico = await inSilicoFor([{ id: 'splice_ai', value: raw }], 'gnomad_r3');
+
+      expect(inSilico).toEqual([{ id: 'splice_ai', value, annotation }]);
+    },
+  );
+});
+
+/** Live PCSK9 constraint objects per build, as `gene { gnomad_constraint exac_constraint }` returns them. */
+const PCSK9_CONSTRAINT = {
+  GRCh38: {
+    gnomad_constraint: {
+      pli: 2.765187110917756e-18,
+      oe_lof: 0.9176378304213768,
+      oe_lof_lower: 0.7416265467075939,
+      oe_lof_upper: 1.1441346736692857,
+      oe_mis: 0.906450937101462,
+      oe_syn: 0.9453046063830313,
+      lof_z: 0.5506733800624033,
+      mis_z: 1.2360458676592712,
+      syn_z: 0.6603188478981492,
+      obs_lof: 57,
+      exp_lof: 62.116009290752274,
+      obs_mis: 870,
+      exp_mis: 959.7871924342421,
+      obs_syn: 387,
+      exp_syn: 409.3918482855569,
+      flags: [],
+    },
+    exac_constraint: null,
+  },
+  GRCh37: {
+    gnomad_constraint: {
+      pli: 2.7059204562649786e-17,
+      oe_lof: 0.9662316499147062,
+      // biome-ignore lint/suspicious/noApproximativeNumericConstant: gnomAD's live PCSK9 v2.1.1 LOEUF lower bound, not √½.
+      oe_lof_lower: 0.707,
+      oe_lof_upper: 1.341,
+      oe_mis: 0.9632446051921747,
+      oe_syn: 0.9066008152125259,
+      lof_z: 0.16232122832806772,
+      mis_z: 0.2724115375371906,
+      syn_z: 1.005369593751177,
+      obs_lof: 26,
+      exp_lof: 26.90866108794422,
+      obs_mis: 419,
+      exp_mis: 434.9881616169615,
+      obs_syn: 170,
+      exp_syn: 187.5136191667206,
+      flags: [],
+    },
+    exac_constraint: {
+      pli: 1.02507611210468e-10,
+      lof_z: 0.221252094879999,
+      mis_z: 0.555820087234748,
+      syn_z: 1.37004966509371,
+      obs_lof: 16,
+      exp_lof: 16.9187162512,
+      obs_mis: 258,
+      exp_mis: 276.909800337,
+      obs_syn: 111,
+      exp_syn: 136.853201549,
+    },
+  },
+} as const;
+
+/** Answer every constraint query with PCSK9's objects for the requested build. */
+function fakePcsk9Constraint(): GraphqlRequest[] {
+  return fakeGraphql(({ variables }) => ({
+    data: {
+      gene: {
+        gene_id: 'ENSG00000169174',
+        symbol: 'PCSK9',
+        ...PCSK9_CONSTRAINT[variables.referenceGenome as 'GRCh38' | 'GRCh37'],
+      },
+    },
+  }));
+}
+
+describe('GnomadService constraint routing by dataset', () => {
+  it.each([
+    ['gnomad_r4', 'GRCh38'],
+    ['gnomad_r3', 'GRCh38'],
+    ['gnomad_r2_1', 'GRCh37'],
+  ] as const)(
+    'reads the %s build’s gnomad_constraint table on %s',
+    async (dataset, referenceGenome) => {
+      const requests = fakePcsk9Constraint();
+      const svc = new GnomadService(getServerConfig());
+
+      const result = await svc.getGeneConstraint(
+        'PCSK9',
+        svc.resolveDatasetContext(dataset),
+        createMockContext(),
+      );
+
+      expect(requests[0]?.variables).toEqual({ gene: 'PCSK9', referenceGenome });
+      const { flags, ...metrics } = PCSK9_CONSTRAINT[referenceGenome].gnomad_constraint;
+      expect(result).toMatchObject({
+        gene_id: 'ENSG00000169174',
+        symbol: 'PCSK9',
+        dataset,
+        reference_genome: referenceGenome,
+        ...metrics,
+        constraint_flags: flags,
+      });
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it.each([
+    ['gnomad_r4', 'gnomAD v4.1.2'],
+    ['gnomad_r3', 'gnomAD v4.1.2'],
+    ['gnomad_r2_1', 'gnomAD v2.1.1'],
+    ['exac', 'ExAC r0.3'],
+  ] as const)('labels %s constraint as %s', async (dataset, release) => {
+    fakePcsk9Constraint();
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getGeneConstraint(
+      'PCSK9',
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+
+    expect(result?.constraint_release).toBe(release);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it('reads exac from exac_constraint, not the GRCh37 gnomad_constraint beside it', async () => {
+    const requests = fakePcsk9Constraint();
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getGeneConstraint(
+      'PCSK9',
+      svc.resolveDatasetContext('exac'),
+      createMockContext(),
+    );
+
+    expect(requests[0]?.variables).toEqual({ gene: 'PCSK9', referenceGenome: 'GRCh37' });
+    expect(result).toEqual({
+      gene_id: 'ENSG00000169174',
+      symbol: 'PCSK9',
+      dataset: 'exac',
+      reference_genome: 'GRCh37',
+      constraint_release: 'ExAC r0.3',
+      ...PCSK9_CONSTRAINT.GRCh37.exac_constraint,
+      oe_lof: null,
+      oe_lof_lower: null,
+      oe_lof_upper: null,
+      oe_mis: null,
+      oe_syn: null,
+      constraint_flags: [],
     });
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it.each([
+    ['symbol', 'PCSK9', 'gene_symbol: $gene'],
+    ['Ensembl ID', 'ENSG00000169174', 'gene_id: $gene'],
+  ])('selects exac_constraint in the by-%s query document', async (_label, gene, argument) => {
+    const requests = fakePcsk9Constraint();
+    const svc = new GnomadService(getServerConfig());
+
+    await svc.getGeneConstraint(gene, svc.resolveDatasetContext('exac'), createMockContext());
+
+    expect(requests[0]?.query).toContain(argument);
+    expect(requests[0]?.query).toMatch(
+      /exac_constraint\s*\{[^}]*\bpli\b[^}]*\blof_z\b[^}]*\bobs_lof\b[^}]*\bexp_syn\b[^}]*\}/,
+    );
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it('returns all-null metrics with the release named when a gene has no ExAC constraint', async () => {
+    fakeGraphql(() => ({
+      data: {
+        gene: {
+          gene_id: 'ENSG00000143631',
+          symbol: 'FLG',
+          gnomad_constraint: PCSK9_CONSTRAINT.GRCh37.gnomad_constraint,
+          exac_constraint: null,
+        },
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const result = await svc.getGeneConstraint(
+      'FLG',
+      svc.resolveDatasetContext('exac'),
+      createMockContext(),
+    );
+
+    expect(result).toMatchObject({
+      symbol: 'FLG',
+      constraint_release: 'ExAC r0.3',
+      pli: null,
+      lof_z: null,
+      obs_lof: null,
+      exp_lof: null,
+      oe_lof_upper: null,
+      constraint_flags: [],
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it.each(['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac'] as const)(
+    'returns null for a gene gnomAD does not hold on %s',
+    async (dataset) => {
+      fakeGraphql(() => ({ errors: [{ message: 'Gene not found' }], data: { gene: null } }));
+      const svc = new GnomadService(getServerConfig());
+
+      await expect(
+        svc.getGeneConstraint('NOTAGENE', svc.resolveDatasetContext(dataset), createMockContext()),
+      ).resolves.toBeNull();
+    },
+  );
 });
 
 describe('GnomadService gene resolution and constraint normalization', () => {
@@ -260,6 +600,7 @@ describe('GnomadService gene resolution and constraint normalization', () => {
                 gene_id: resolved.geneId,
                 symbol: resolved.symbol,
                 gnomad_constraint: null,
+                exac_constraint: null,
               }
             : null,
         },
@@ -323,6 +664,7 @@ describe('GnomadService gene resolution and constraint normalization', () => {
                   exp_syn: 0,
                   flags: [],
                 },
+            exac_constraint: null,
           },
         },
       };
@@ -343,6 +685,7 @@ describe('GnomadService list and coverage boundary', () => {
     fakeGraphql(() => ({
       data: {
         gene: {
+          chrom: '1',
           variants: [
             {
               variant_id: '1-100-A-T',
@@ -385,6 +728,7 @@ describe('GnomadService list and coverage boundary', () => {
       return {
         data: {
           [key]: {
+            ...(key === 'region' ? {} : { chrom: '1' }),
             coverage: {
               exome: [
                 {

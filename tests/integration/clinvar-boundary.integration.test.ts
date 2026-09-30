@@ -601,7 +601,7 @@ describe('ClinVarService upstream error contracts', () => {
     vi.useFakeTimers();
   });
 
-  it('sanitizes NCBI 429 responses and preserves retry guidance', async () => {
+  it('sanitizes NCBI 429 responses and leaves the hint to the declaring tool', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('PRIVATE_RATE_LIMIT_DETAIL', {
         status: 429,
@@ -614,7 +614,7 @@ describe('ClinVarService upstream error contracts', () => {
 
     expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
     expect(error.data).toMatchObject({ reason: 'upstream_unavailable', retryable: true });
-    expect((error.data?.recovery as { hint?: string } | undefined)?.hint).toMatch(/NCBI.*retry/i);
+    expect(error.data).not.toHaveProperty('recovery');
     expect(JSON.stringify({ message: error.message, data: error.data })).not.toContain(
       'PRIVATE_RATE_LIMIT_DETAIL',
     );

@@ -543,6 +543,15 @@ describe('gnomad_list_gene_variants handler — input contracts', () => {
   it('rejects a malformed region string at parse time', () => {
     expect(() => gnomadListGeneVariants.input.parse({ region: 'chr1:100-200' })).toThrow();
     expect(() => gnomadListGeneVariants.input.parse({ region: '1-100' })).toThrow();
+    expect(() => gnomadListGeneVariants.input.parse({ region: '1-100-200-300' })).toThrow();
+  });
+
+  it('lets every chrom-start-stop shape through to the service parser', () => {
+    // The schema checks shape only; the service parser owns the chromosome set,
+    // so 23, 01, XY, and MT fail there with a typed reason, not InvalidParams.
+    for (const region of ['chr1-100-200', 'x-100-200', '23-1-2', '01-1-2', 'XY-1-2', 'MT-1-100']) {
+      expect(gnomadListGeneVariants.input.parse({ region }).region).toBe(region);
+    }
   });
 
   it('accepts a well-formed region and resolves it to a region target', async () => {

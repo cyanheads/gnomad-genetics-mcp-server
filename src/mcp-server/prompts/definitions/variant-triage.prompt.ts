@@ -12,6 +12,10 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { normalizeVariantIdentifier, VARIANT_OR_RSID_REGEX } from '../../tools/shared-schemas.js';
 
+/** gnomAD's LoF-intolerance guidance, per constraint release. */
+const CONSTRAINT_GUIDANCE =
+  'Read pLI (>0.9 intolerant) and LOEUF (oe_lof_upper): gnomAD recommends LOEUF < 0.45 for gnomAD v4.1.2 constraint (gnomad_r4, gnomad_r3) and < 0.35 for gnomAD v2.1.1 (gnomad_r2_1); ExAC constraint (exac) has no LOEUF, so judge it by pLI alone. The constraint_release field names the release the numbers come from.';
+
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description:
     'Guided rare-disease variant-triage workflow over gnomAD: pull the variant population record, weigh it against gene loss-of-function constraint, and — critically — confirm the position is well-covered before concluding a variant is absent. Emits the exact tool chain in order.',
@@ -21,7 +25,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
       .string()
       .regex(
         VARIANT_OR_RSID_REGEX,
-        'Expected chrom-pos-ref-alt on chromosome 1–22, X, Y, or M with a positive position and A/C/G/T alleles, or an rsID.',
+        'Expected chrom-pos-ref-alt on chromosome 1–22, X, or Y with a positive position and A/C/G/T alleles, or an rsID.',
       )
       .describe(
         'Variant to triage — a chrom-pos-ref-alt variantId (e.g. 1-55051215-G-GA) or an rsID (rs11591147).',
@@ -56,8 +60,8 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
     const variant = normalizedVariant.canonical;
     const datasetClause = args.dataset ? `, dataset: "${args.dataset}"` : '';
     const geneStep = args.gene
-      ? `2. **Gene constraint.** Call \`gnomad_get_gene_constraint(gene: "${args.gene}"${datasetClause})\`. Read pLI (>0.9 intolerant) and LOEUF / oe_lof_upper (<0.6 intolerant in v4, <0.35 in v2). High constraint weights a loss-of-function variant as more likely deleterious.`
-      : `2. **Gene constraint.** Identify the affected gene (from the variant's consequence in step 1, or via ensembl_lookup_gene), then call \`gnomad_get_gene_constraint(gene: <symbol>${datasetClause})\`. Read pLI and LOEUF (oe_lof_upper) to judge how intolerant the gene is to being broken.`;
+      ? `2. **Gene constraint.** Call \`gnomad_get_gene_constraint(gene: "${args.gene}"${datasetClause})\`. ${CONSTRAINT_GUIDANCE} High constraint weights a loss-of-function variant as more likely deleterious.`
+      : `2. **Gene constraint.** Identify the affected gene (from the variant's consequence in step 1, or via ensembl_lookup_gene), then call \`gnomad_get_gene_constraint(gene: <symbol>${datasetClause})\`. ${CONSTRAINT_GUIDANCE} High constraint means the gene is intolerant to being broken.`;
 
     // Coverage must confirm the EXACT variant position. Gene-level coverage
     // averages across the whole gene and can mask a poorly-covered base, so it
@@ -93,7 +97,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
             '',
             coverageStep,
             '',
-            `Synthesize: is the variant rare enough to be plausibly pathogenic, in a gene intolerant to its consequence class, at a callable position? State which axes support causality and which do not, and flag any uncertainty (sparse ancestry data, beta v4 constraint, low coverage) honestly.`,
+            `Synthesize: is the variant rare enough to be plausibly pathogenic, in a gene intolerant to its consequence class, at a callable position? State which axes support causality and which do not, cite the constraint_release behind any constraint figure, and flag any uncertainty (sparse ancestry data, null or flagged constraint, low coverage) honestly.`,
           ].join('\n'),
         },
       },

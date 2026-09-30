@@ -85,12 +85,12 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
           .string()
           .regex(REGION_REGEX, 'Region must be chrom-start-stop, e.g. 13-32315474-32400266.')
           .describe(
-            'Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266).',
+            'Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266) on chromosome 1–22, X, or Y, optional chr prefix.',
           ),
       ])
       .optional()
       .describe(
-        'Genomic region chrom-start-stop (1-based inclusive). Mutually exclusive with gene and transcript_id.',
+        'Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266): chromosome 1–22, X, or Y with an optional chr prefix (mitochondrial regions are not served), a span (stop − start) under 2,500,000 bp, and at most ~30,000 variants. Mutually exclusive with gene and transcript_id.',
       ),
     consequence_class: z
       .enum(['lof', 'missense', 'synonymous', 'other'])
@@ -157,16 +157,77 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       when: 'reference_genome was supplied but does not match the dataset.',
       recovery:
         'Omit reference_genome to let it derive, or pass the build matching the dataset (v4/v3=GRCh38, v2.1/ExAC=GRCh37).',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'invalid_region',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The region names a chromosome outside 1–22, X, Y, or breaks the coordinate bounds.',
+      recovery:
+        'Pass region as chrom-start-stop on chromosome 1–22, X, or Y (optional chr prefix, e.g. chr13-32315474-32400266), with start at least 1, stop below 1,000,000,000, and start ≤ stop.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'region_too_large',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The region spans 2,500,000 bp or more, or holds more variants (~30,000) than gnomAD lists at once.',
+      recovery:
+        'Narrow the region to a span (stop − start) under 2,500,000 bp holding at most ~30,000 variants, or split it into consecutive sub-regions and list each one.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'mitochondrial_unsupported',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The gene, transcript, or region is on the mitochondrial chromosome (M or MT).',
+      recovery:
+        'Mitochondrial variants are outside this server; look them up in the gnomAD browser at https://gnomad.broadinstitute.org/, or query a target on chromosomes 1–22, X, or Y.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'graphql_error',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'gnomAD rejected the variant-list query with a GraphQL error.',
+      recovery:
+        'Check the gene, transcript_id, or region and the dataset before retrying: gnomAD rejected this query as sent, so the same request fails again.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'gnomAD stayed unavailable or throttled through every retry.',
+      recovery:
+        'gnomAD is degraded or throttling; wait a few seconds and retry. gnomAD is a community-funded API — keep request volume low.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'Every attempt to reach gnomAD timed out.',
+      recovery:
+        'gnomAD did not answer in time; wait a few seconds and retry, or list a smaller region instead of a large gene.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_access',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'gnomAD refused the request (access denied).',
+      recovery:
+        'Do not retry: gnomAD is refusing requests from this server. Tell the user the lookup is blocked upstream and point them to https://gnomad.broadinstitute.org/.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'invalid_upstream_response',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'gnomAD kept answering with a response that failed validation.',
+      recovery:
+        'Wait a few seconds and retry; gnomAD returned a response this server could not validate.',
+      thrownBy: 'service',
     },
   ],
 
   async handler(input, ctx) {
     const svc = getGnomadService();
-    const dsCtx = svc.resolveDatasetContext(
-      input.dataset,
-      input.reference_genome,
-      ctx.recoveryFor('incoherent_build'),
-    );
+    const dsCtx = svc.resolveDatasetContext(input.dataset, input.reference_genome);
     const target = resolveGenomeTarget(
       { gene: input.gene, transcript_id: input.transcript_id, region: input.region || undefined },
       ctx,

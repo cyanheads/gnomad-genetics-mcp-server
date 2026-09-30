@@ -77,6 +77,20 @@ describe('gnomad_variant_triage prompt', () => {
     },
   );
 
+  it('names only the served chromosomes when it rejects a coordinate', () => {
+    const parsed = variantTriagePrompt.args!.safeParse({ variant: '23-100-A-T' });
+    const message = parsed.error?.issues[0]?.message ?? '';
+    expect(message).toContain('1–22, X, or Y');
+    expect(message).not.toMatch(/\bM\b/);
+  });
+
+  it.each(['M-3243-A-G', 'MT-3243-A-G', 'chrM-3243-A-G'])(
+    'passes mitochondrial %s through so gnomad_get_variant can refuse it with its typed reason',
+    (variant) => {
+      expect(variantTriagePrompt.args!.safeParse({ variant }).success).toBe(true);
+    },
+  );
+
   it('routes an rsID coverage check through the resolved variant_id, with gene as a fallback only', async () => {
     const text = await renderText({ variant: 'rs11591147', gene: 'PCSK9', dataset: 'gnomad_r4' });
     // Coordinates are unknown for an rsID, so coverage derives the region from the
@@ -99,8 +113,33 @@ describe('gnomad_variant_triage prompt', () => {
   it('threads an explicit, quoted dataset into every tool call clause', async () => {
     const text = await renderText({ variant: 'rs11591147', gene: 'PCSK9', dataset: 'gnomad_r2_1' });
     expect(text).toContain('dataset: "gnomad_r2_1"');
-    // v2 threshold guidance appears in the constraint step text.
-    expect(text).toContain('<0.35 in v2');
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it.each([
+    ['a known gene', { gene: 'PCSK9' }],
+    ['an unknown gene', {}],
+  ])(
+    'states LOEUF guidance per constraint release in the constraint step for %s',
+    async (_label, gene) => {
+      const text = await renderText({ variant: 'rs11591147', ...gene });
+      const constraintStep = text.split('\n').find((line) => line.startsWith('2. ')) ?? '';
+
+      expect(constraintStep).toContain('LOEUF < 0.45 for gnomAD v4.1.2 constraint');
+      expect(constraintStep).toContain('< 0.35 for gnomAD v2.1.1');
+      expect(constraintStep).toMatch(/ExAC[^.]*pLI alone/);
+      expect(constraintStep).toContain('constraint_release');
+      expect(text).not.toMatch(/beta|0\.6\b|in v4/i);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
+  it('asks the synthesis to cite the constraint release instead of a beta caveat', async () => {
+    const text = await renderText({ variant: '1-55051215-G-GA', gene: 'PCSK9' });
+    const synthesis = text.split('\n').find((line) => line.startsWith('Synthesize:')) ?? '';
+
+    expect(synthesis).toContain('constraint_release');
+    expect(synthesis).not.toMatch(/beta/i);
   });
 
   it('omits the dataset clause entirely when dataset is not supplied', async () => {

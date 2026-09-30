@@ -3,17 +3,24 @@
  * dataset→reference_genome derivation and pair validation, a politeness
  * concurrency cap, withRetry backoff over the full fetch+parse pipeline, and
  * typed-response validation. Handlers stay pure and throw; this service wraps the
- * upstream so transient 429/5xx surface as ServiceUnavailable, not parse errors.
+ * upstream so transient 429/5xx surface as ServiceUnavailable, not parse errors,
+ * while a region gnomAD refuses fails once as the caller's error.
  * @module services/gnomad/gnomad-service
  */
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { McpError, serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
-import { invalidUpstreamResponse, sanitizeUpstreamError } from '@/services/upstream-error.js';
+import {
+  invalidUpstreamResponse,
+  readUpstreamJson,
+  sanitizeUpstreamError,
+  upstreamGraphqlMessages,
+  upstreamUnavailable,
+} from '@/services/upstream-error.js';
 import {
   CLINVAR_BY_VARIANT_ID_QUERY,
   GENE_CONSTRAINT_BY_ID_QUERY,
@@ -32,11 +39,13 @@ import {
 } from './queries.js';
 import {
   type ConsequenceClass,
+  type ConstraintRelease,
   type CoverageSummary,
   type Dataset,
   type GeneConstraint,
   type GeneVariantRow,
   type GenomeTarget,
+  type InSilicoPredictor,
   isCanonicalAncestry,
   type PopulationFreq,
   type ReferenceGenome,
@@ -52,9 +61,142 @@ export interface DatasetContext {
 const ENSEMBL_GENE_ID = /^ENSG\d{6,}$/i;
 const RSID = /^rs\d+$/i;
 
+/** Chromosome tokens gnomAD's nuclear variant and coverage fields serve. */
+const NUCLEAR_CHROMOSOMES: ReadonlySet<string> = new Set([
+  ...Array.from({ length: 22 }, (_, index) => String(index + 1)),
+  'X',
+  'Y',
+]);
+/** gnomAD serves mitochondrial data through separate fields this server does not query. */
+const MITOCHONDRIAL_CHROMOSOMES: ReadonlySet<string> = new Set(['M', 'MT']);
+const MITOCHONDRIAL_VARIANT_ID = /^(?:chr)?mt?-/i;
+const REGION_SHAPE = /^(?:chr)?([0-9A-Z]+)-(\d+)-(\d+)$/i;
+/** gnomAD rejects a region coordinate at or above this bound. */
+const MAX_REGION_COORDINATE = 1_000_000_000;
+/** gnomAD's region variant and coverage queries reject a span (stop − start) at or above this. */
+const MAX_REGION_SPAN = 2_500_000;
+
+/** gnomAD's GraphQL messages for transient load: a queue timeout, a shed job, rate limiting. */
+const TRANSIENT_GRAPHQL_MESSAGE =
+  /request timed out|service overloaded|rate.?limit|too many requests/i;
+/** gnomAD's GraphQL message for an entity it does not hold ("Gene not found", "Variant not found"). */
+const NOT_FOUND_MESSAGE = /\bnot found\b/i;
+/** gnomAD's HTTP 500 messages for a region naming an unserved chromosome or out-of-range bound. */
+const INVALID_REGION_MESSAGE = /^(?:Invalid chromosome: |Region st(?:art|op) must be )/;
+/** gnomAD's HTTP 500 messages for a region too wide, or holding too many variants, to serve. */
+const REGION_TOO_LARGE_MESSAGE =
+  /^(?:This region has too many variants to display|Select a smaller region to view variants|Coverage is not available for a region this large)/;
+
 /** v4/v3 are GRCh38; v2.1 and ExAC are GRCh37. */
 function refGenomeForDataset(dataset: Dataset): ReferenceGenome {
   return dataset === 'gnomad_r2_1' || dataset === 'exac' ? 'GRCh37' : 'GRCh38';
+}
+
+/**
+ * The constraint release each dataset serves, matching the gnomAD browser. The
+ * GRCh38 table has been v4.1.2 since 2026-09-28 (values unchanged from v4.1.1);
+ * gnomAD publishes no v3 constraint, so gnomad_r3 serves that same table; exac
+ * reads gene.exac_constraint rather than the GRCh37 gnomAD v2.1.1 table.
+ */
+const CONSTRAINT_RELEASE = {
+  gnomad_r4: 'gnomAD v4.1.2',
+  gnomad_r3: 'gnomAD v4.1.2',
+  gnomad_r2_1: 'gnomAD v2.1.1',
+  exac: 'ExAC r0.3',
+} as const satisfies Record<Dataset, ConstraintRelease>;
+
+function mitochondrialUnsupported(subject: string): McpError {
+  return validationError(
+    `${subject} is on the mitochondrial chromosome. gnomAD models mitochondrial variants and coverage separately (heteroplasmy rather than genotype counts), and this server serves nuclear chromosomes 1–22, X, and Y only.`,
+    { reason: 'mitochondrial_unsupported', retryable: false },
+  );
+}
+
+/**
+ * gnomAD resolves a mitochondrial gene or transcript but answers its nuclear
+ * `variants` and `coverage` fields with nothing, so the chromosome is only
+ * knowable from the response: refuse the target rather than report absence.
+ */
+function assertNuclearFeature(
+  target: GenomeTarget,
+  feature: { chrom: string } | null | undefined,
+): void {
+  if (feature && MITOCHONDRIAL_CHROMOSOMES.has(feature.chrom)) {
+    throw mitochondrialUnsupported(
+      `${target.kind === 'transcript' ? 'Transcript' : 'Gene'} "${target.value}"`,
+    );
+  }
+}
+
+function invalidRegion(message: string): McpError {
+  return validationError(message, { reason: 'invalid_region', retryable: false });
+}
+
+/**
+ * Parse a caller's chrom-start-stop region, rejecting before any fetch whatever
+ * gnomAD would reject. gnomAD answers each of these with an HTTP 500 that the
+ * retry layer reads as a transient fault, so an unguarded region burns the
+ * retry budget and surfaces as a misleading "unavailable" error. Accepts an
+ * optional case-insensitive chr prefix and any-case X/Y, and returns the
+ * canonical token gnomAD expects.
+ */
+function parseRegion(value: string): { chrom: string; start: number; stop: number } {
+  const match = REGION_SHAPE.exec(value);
+  if (!match) {
+    throw invalidRegion(
+      `Invalid region "${value}". Expected chrom-start-stop, e.g. 1-55039447-55064852.`,
+    );
+  }
+  const [, token = '', startText = '', stopText = ''] = match;
+  const chrom = token.toUpperCase();
+  if (MITOCHONDRIAL_CHROMOSOMES.has(chrom)) throw mitochondrialUnsupported(`Region "${value}"`);
+  if (!NUCLEAR_CHROMOSOMES.has(chrom)) {
+    throw invalidRegion(
+      `Invalid chromosome "${token}" in region "${value}". gnomAD serves chromosomes 1–22, X, and Y.`,
+    );
+  }
+  const start = Number(startText);
+  const stop = Number(stopText);
+  if (start < 1) throw invalidRegion(`Region start must be at least 1: got ${start}.`);
+  if (stop >= MAX_REGION_COORDINATE) {
+    throw invalidRegion(`Region stop must be less than 1,000,000,000: got ${stop}.`);
+  }
+  // A single position is valid (start == stop), so only start > stop is rejected.
+  if (start > stop) {
+    throw invalidRegion(
+      `Region start must not exceed stop: ${start} > ${stop}. Provide chrom-start-stop with start ≤ stop (a single position uses start = stop).`,
+    );
+  }
+  const span = stop - start;
+  if (span >= MAX_REGION_SPAN) {
+    throw validationError(
+      `Region "${value}" spans ${span.toLocaleString('en-US')} bp (stop − start); gnomAD serves region queries spanning less than 2,500,000 bp.`,
+      { reason: 'region_too_large', retryable: false },
+    );
+  }
+  return { chrom, start, stop };
+}
+
+/**
+ * gnomAD answers a region it cannot serve with an HTTP 500 carrying a
+ * caller-facing GraphQL message. parseRegion() catches most of these before any
+ * fetch, but not a region under the span limit that holds more variants than
+ * gnomAD lists — only gnomAD knows the count. When every message is one of those
+ * region rejections, retrying cannot help, so this returns the caller's error
+ * carrying gnomAD's text alone; any other failure returns undefined and stays on
+ * the transient path.
+ */
+function regionRejection(err: unknown): McpError | undefined {
+  const messages = upstreamGraphqlMessages(err);
+  if (!messages) return;
+  const invalid = messages.filter((message) => INVALID_REGION_MESSAGE.test(message));
+  const tooLarge = messages.filter((message) => REGION_TOO_LARGE_MESSAGE.test(message));
+  if (invalid.length + tooLarge.length !== messages.length) return;
+  return validationError(
+    messages.join('; '),
+    { reason: invalid.length > 0 ? 'invalid_region' : 'region_too_large', retryable: false },
+    { cause: err },
+  );
 }
 
 // --- Raw upstream response Zod schemas (sparse: most fields nullable) ---
@@ -152,15 +294,39 @@ const ConstraintMetrics = z.object({
   flags: z.array(z.string()).nullable(),
 });
 
+/** ExAC r0.3 constraint: pLI, Z-scores, and counts in the same domains — no ratios or flags. */
+const ExacConstraintMetrics = ConstraintMetrics.omit({
+  oe_lof: true,
+  oe_lof_lower: true,
+  oe_lof_upper: true,
+  oe_mis: true,
+  oe_syn: true,
+  flags: true,
+});
+
 const ConstraintResponse = z.object({
   gene: z
     .object({
       gene_id: z.string(),
       symbol: z.string(),
       gnomad_constraint: z.unknown().nullable(),
+      exac_constraint: z.unknown().nullable(),
     })
     .nullable(),
 });
+
+/** Validate one constraint object against its metric domains; null stays null (no constraint). */
+function parseConstraint<T>(schema: z.ZodType<T>, raw: unknown): T | null {
+  if (raw === null) return null;
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    throw validationError('gnomAD returned constraint metrics outside their valid domains.', {
+      reason: 'invalid_constraint_data',
+      retryable: false,
+    });
+  }
+  return parsed.data;
+}
 
 const RawListSeqData = z
   .object({
@@ -179,15 +345,14 @@ const RawListVariant = z.object({
   genome: RawListSeqData,
 });
 
+const RawFeatureVariants = z
+  .object({ chrom: z.string(), variants: z.array(RawListVariant).nullable() })
+  .nullable()
+  .optional();
+
 const VariantListResponse = z.object({
-  gene: z
-    .object({ variants: z.array(RawListVariant).nullable() })
-    .nullable()
-    .optional(),
-  transcript: z
-    .object({ variants: z.array(RawListVariant).nullable() })
-    .nullable()
-    .optional(),
+  gene: RawFeatureVariants,
+  transcript: RawFeatureVariants,
   region: z
     .object({ variants: z.array(RawListVariant).nullable() })
     .nullable()
@@ -216,9 +381,14 @@ const RawCoverage = z
   })
   .nullable();
 
+const RawFeatureCoverage = z
+  .object({ chrom: z.string(), coverage: RawCoverage })
+  .nullable()
+  .optional();
+
 const CoverageResponse = z.object({
-  gene: z.object({ coverage: RawCoverage }).nullable().optional(),
-  transcript: z.object({ coverage: RawCoverage }).nullable().optional(),
+  gene: RawFeatureCoverage,
+  transcript: RawFeatureCoverage,
   region: z.object({ coverage: RawCoverage }).nullable().optional(),
 });
 
@@ -245,10 +415,36 @@ function classifyConsequence(term: string | null): ConsequenceClass {
   return 'other';
 }
 
+/** True when a GraphQL `data` payload holds an explicit null at the named root field. */
+function isNullRoot(data: unknown, root: string): boolean {
+  return typeof data === 'object' && data !== null && Reflect.get(data, root) === null;
+}
+
 /** AF from counts: ac/an, or null when an is 0/absent. */
 function computeAf(ac: number | null | undefined, an: number | null | undefined): number | null {
   if (ac == null || an == null || an === 0) return null;
   return ac / an;
+}
+
+/** A decimal score as gnomAD writes one: optional sign, fraction, and exponent. */
+const PREDICTOR_NUMBER = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?`;
+const PLAIN_PREDICTOR_VALUE = new RegExp(`^${PREDICTOR_NUMBER}$`, 'i');
+/** A score followed by text in parentheses, as gnomad_r3 writes SpliceAI: "0.00 (no_consequence)". */
+const ANNOTATED_PREDICTOR_VALUE = new RegExp(`^(${PREDICTOR_NUMBER})\\s*\\((.*)\\)$`, 'i');
+
+/**
+ * Split a predictor value into its score and the text gnomAD attaches to it.
+ * Never yields a non-finite number: a value with no finite score keeps its
+ * text in `annotation` beside a null `value`.
+ */
+function parsePredictorValue(raw: string | null): Omit<InSilicoPredictor, 'id'> {
+  const text = raw?.trim() ?? '';
+  if (text === '') return { value: null, annotation: null };
+  const annotated = ANNOTATED_PREDICTOR_VALUE.exec(text);
+  const score = annotated ? annotated[1] : PLAIN_PREDICTOR_VALUE.test(text) ? text : undefined;
+  const value = score === undefined ? Number.NaN : Number(score);
+  if (!Number.isFinite(value)) return { value: null, annotation: text };
+  return { value, annotation: annotated?.[2]?.trim() || null };
 }
 
 export class GnomadService {
@@ -268,7 +464,6 @@ export class GnomadService {
   resolveDatasetContext(
     dataset: Dataset | undefined,
     referenceGenome?: ReferenceGenome,
-    recovery?: Record<string, unknown>,
   ): DatasetContext {
     const ds = dataset ?? this.serverConfig.defaultDataset;
     const derived = refGenomeForDataset(ds);
@@ -281,7 +476,6 @@ export class GnomadService {
           dataset: ds,
           expected: derived,
           supplied: referenceGenome,
-          ...recovery,
         },
       );
     }
@@ -304,7 +498,15 @@ export class GnomadService {
     if (next) next();
   }
 
-  /** Execute a GraphQL document with retry + concurrency cap + typed validation. */
+  /**
+   * Execute a GraphQL document with retry + concurrency cap + typed validation.
+   * `absentRoot` names a nullable root field whose null, beside only not-found
+   * errors that are pathless or at that root, is absence rather than a failure —
+   * for an operation whose `allowedErrorPath` turns off the generic not-found
+   * fallback. `relayRegionRejections` marks an operation whose target gnomAD
+   * can refuse as a bad or oversized region (the variant-list and coverage
+   * queries), so those HTTP 500 messages reach the caller as its own error.
+   */
   private graphql<T>(
     query: string,
     variables: Record<string, unknown>,
@@ -315,6 +517,8 @@ export class GnomadService {
       allowedErrorPath?: readonly (string | number)[];
       acceptPartialData?: (data: T) => boolean;
       onAllowedPartial?: () => void;
+      absentRoot?: string;
+      relayRegionRejections?: boolean;
     },
   ): Promise<T> {
     const reqCtx = requestContextService.createRequestContext({
@@ -327,44 +531,27 @@ export class GnomadService {
         try {
           // fetchWithTimeout throws a status-mapped McpError on non-2xx whose data
           // carries upstream internals (statusCode/responseBody/requestId/URL).
-          // Sanitize it here so none of that reaches the client; the typed
+          // A region rejection relays gnomAD's message alone; everything else is
+          // sanitized so none of that reaches the client. The typed
           // validation/not-found paths below raise their own clean errors.
           const response = await fetchWithTimeout(this.baseUrl, this.timeoutMs, reqCtx, {
             method: 'POST',
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ query, variables }),
             signal: ctx.signal,
-          }).catch((err: unknown) =>
-            sanitizeUpstreamError(
-              err,
-              'gnomAD',
-              'gnomAD is degraded or throttling; wait a few seconds and retry. gnomAD is a community-funded API — keep request volume low.',
-            ),
-          );
-          const text = await response.text();
-          if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-            invalidUpstreamResponse(
-              new Error('gnomAD returned HTML instead of JSON.'),
-              'gnomAD',
-              'Wait a few seconds and retry; the upstream response could not be validated.',
-            );
-          }
-          let body: z.infer<typeof GraphqlEnvelope>;
-          try {
-            body = GraphqlEnvelope.parse(JSON.parse(text));
-          } catch (err) {
-            invalidUpstreamResponse(
-              err,
-              'gnomAD',
-              'Wait a few seconds and retry; the upstream response could not be validated.',
-            );
-          }
+          }).catch((err: unknown) => {
+            const rejection = options?.relayRegionRejections ? regionRejection(err) : undefined;
+            if (rejection) throw rejection;
+            return sanitizeUpstreamError(err, 'gnomAD');
+          });
+          const body = await readUpstreamJson(response, 'gnomAD', GraphqlEnvelope);
           let hasAllowedPartialErrors = false;
           if (body.errors?.length) {
             const message = body.errors.map((e) => e.message).join('; ');
-            // gnomAD reports rate limiting as a GraphQL error; treat that one as transient.
-            if (/rate.?limit|too many requests/i.test(message)) {
-              throw serviceUnavailable(`gnomAD rate limit: ${message}`);
+            // On a nullable root (gene, transcript, variant) gnomAD reports load
+            // shedding and rate limiting as GraphQL errors on an HTTP 200; retry those.
+            if (body.errors.some((e) => TRANSIENT_GRAPHQL_MESSAGE.test(e.message))) {
+              upstreamUnavailable(new Error(`gnomAD GraphQL error: ${message}`), 'gnomAD');
             }
             // gnomAD returns "<entity> not found" as a GraphQL error *alongside* a
             // valid `data` payload with the entity nulled (e.g. errors:["Gene not
@@ -373,7 +560,7 @@ export class GnomadService {
             // typed not-found contract (gene_not_found / variant_not_found) fires.
             // Any other error (Invalid variant ID, Multiple variants found, …) is a
             // real failure and still throws.
-            const allNotFound = body.errors.every((e) => /\bnot found\b/i.test(e.message));
+            const allNotFound = body.errors.every((e) => NOT_FOUND_MESSAGE.test(e.message));
             const allAllowed =
               options?.allowedErrorPath != null &&
               body.errors.every((error) => {
@@ -385,9 +572,21 @@ export class GnomadService {
             const allowedPartial = allAllowed && body.data != null;
             const legacyNotFound =
               options?.allowedErrorPath == null && allNotFound && body.data != null;
+            // gnomAD strips `path` from every error, so its "Variant not found"
+            // arrives pathless beside `variant: null` — and beside whatever
+            // `clinvar_variant` holds, since ClinVar may know a variant gnomAD lacks.
+            const absentRoot = options?.absentRoot;
+            const absent =
+              absentRoot != null &&
+              allNotFound &&
+              body.errors.every(
+                (error) =>
+                  error.path == null || (error.path.length === 1 && error.path[0] === absentRoot),
+              ) &&
+              isNullRoot(body.data, absentRoot);
             if (allowedPartial) {
               hasAllowedPartialErrors = true;
-            } else if (!legacyNotFound) {
+            } else if (!legacyNotFound && !absent) {
               throw validationError(`gnomAD GraphQL error: ${message}`, {
                 reason: 'graphql_error',
                 retryable: false,
@@ -408,11 +607,7 @@ export class GnomadService {
             return data;
           } catch (err) {
             if (err instanceof McpError) throw err;
-            invalidUpstreamResponse(
-              err,
-              'gnomAD',
-              'Wait a few seconds and retry; the upstream response could not be validated.',
-            );
+            invalidUpstreamResponse(err, 'gnomAD');
           }
         } finally {
           this.releaseSlot();
@@ -434,13 +629,18 @@ export class GnomadService {
    * dataset. gnomAD's `variant(variantId:)` rejects rsIDs, so rsIDs route
    * through the `rsid` argument and the ClinVar join is fetched on the resolved
    * variant_id; an rsID that maps to multiple variants surfaces as the upstream
-   * GraphQL error (a per-item failure for the batch handler).
+   * GraphQL error (a per-item failure for the batch handler). A mitochondrial
+   * coordinate ID is refused before any fetch: gnomAD's nuclear `variant` field
+   * answers it with "Variant not found" even when gnomAD holds the variant.
    */
   async getVariant(
     idOrRsid: string,
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<VariantRecord | null> {
+    if (MITOCHONDRIAL_VARIANT_ID.test(idOrRsid)) {
+      throw mitochondrialUnsupported(`Variant "${idOrRsid}"`);
+    }
     if (RSID.test(idOrRsid)) {
       let resolved: z.infer<typeof VariantByRsidResponse>;
       try {
@@ -516,6 +716,7 @@ export class GnomadService {
         onAllowedPartial: () => {
           clinvarUnavailable = true;
         },
+        absentRoot: 'variant',
       },
     );
     if (!data.variant) return null;
@@ -599,7 +800,7 @@ export class GnomadService {
       gene_symbol: tc?.gene_symbol ?? null,
       in_silico: (v.in_silico_predictors ?? []).map((p) => ({
         id: p.id,
-        value: p.value != null && p.value !== '' ? Number(p.value) : null,
+        ...parsePredictorValue(p.value),
       })),
       clinvar:
         clinvar && (clinvar.clinical_significance != null || clinvar.clinvar_variation_id != null)
@@ -614,7 +815,11 @@ export class GnomadService {
     };
   }
 
-  /** Fetch gene loss-of-function constraint by symbol or Ensembl gene ID. */
+  /**
+   * Fetch gene loss-of-function constraint by symbol or Ensembl gene ID. gnomAD
+   * picks the table by build alone, so exac reads gene.exac_constraint beside
+   * the GRCh37 gnomAD table, and every result names its constraint release.
+   */
   async getGeneConstraint(
     gene: string,
     dsCtx: DatasetContext,
@@ -629,22 +834,16 @@ export class GnomadService {
       ctx,
     );
     if (!data.gene) return null;
-    let c: z.infer<typeof ConstraintMetrics> | null = null;
-    if (data.gene.gnomad_constraint !== null) {
-      const parsed = ConstraintMetrics.safeParse(data.gene.gnomad_constraint);
-      if (!parsed.success) {
-        throw validationError('gnomAD returned constraint metrics outside their valid domains.', {
-          reason: 'invalid_constraint_data',
-          retryable: false,
-        });
-      }
-      c = parsed.data;
-    }
+    const c: Partial<z.infer<typeof ConstraintMetrics>> | null =
+      dsCtx.dataset === 'exac'
+        ? parseConstraint(ExacConstraintMetrics, data.gene.exac_constraint)
+        : parseConstraint(ConstraintMetrics, data.gene.gnomad_constraint);
     return {
       gene_id: data.gene.gene_id,
       symbol: data.gene.symbol,
       dataset: dsCtx.dataset,
       reference_genome: dsCtx.reference_genome,
+      constraint_release: CONSTRAINT_RELEASE[dsCtx.dataset],
       pli: c?.pli ?? null,
       oe_lof: c?.oe_lof ?? null,
       oe_lof_lower: c?.oe_lof_lower ?? null,
@@ -681,7 +880,9 @@ export class GnomadService {
       VariantListResponse,
       'gnomad.listGeneVariants',
       ctx,
+      { relayRegionRejections: true },
     );
+    assertNuclearFeature(target, data.gene ?? data.transcript);
     const raw = (data.gene ?? data.transcript ?? data.region)?.variants ?? [];
     const rows = raw.map((r) => this.normalizeListVariant(r));
     return rows.filter((row) => {
@@ -726,7 +927,10 @@ export class GnomadService {
     ctx: Context,
   ): Promise<CoverageSummary[]> {
     const { query, variables, regionBounds } = this.buildTargetQuery(target, dsCtx, 'coverage');
-    const data = await this.graphql(query, variables, CoverageResponse, 'gnomad.getCoverage', ctx);
+    const data = await this.graphql(query, variables, CoverageResponse, 'gnomad.getCoverage', ctx, {
+      relayRegionRejections: true,
+    });
+    assertNuclearFeature(target, data.gene ?? data.transcript);
     const cov = (data.gene ?? data.transcript ?? data.region)?.coverage;
     const summaries: CoverageSummary[] = [];
     for (const [src, rawBins] of [
@@ -803,31 +1007,10 @@ export class GnomadService {
       };
     }
     if (target.kind === 'region') {
-      const m = /^([0-9XYM]+)-(\d+)-(\d+)$/.exec(target.value);
-      if (!m) {
-        throw validationError(
-          `Invalid region "${target.value}". Expected chrom-start-stop, e.g. 1-55039447-55064852.`,
-          {
-            reason: 'invalid_region',
-          },
-        );
-      }
-      const start = Number(m[2]);
-      const stop = Number(m[3]);
-      // Reject an inverted range up front. gnomAD answers start > stop with an
-      // HTTP 500 the retry layer reads as a transient fault, so without this guard
-      // a malformed region burns the full retry budget and surfaces as a
-      // misleading "unavailable" error instead of a validation error. A single
-      // position is valid (start == stop), so only start > stop is rejected.
-      if (start > stop) {
-        throw validationError(
-          `Region start must not exceed stop: ${start} > ${stop}. Provide chrom-start-stop with start ≤ stop (a single position uses start = stop).`,
-          { reason: 'invalid_region', retryable: false },
-        );
-      }
+      const { chrom, start, stop } = parseRegion(target.value);
       return {
         query: kind === 'variants' ? REGION_VARIANTS_QUERY : REGION_COVERAGE_QUERY,
-        variables: { chrom: m[1], start, stop, ...base },
+        variables: { chrom, start, stop, ...base },
         regionBounds: { start, stop },
       };
     }

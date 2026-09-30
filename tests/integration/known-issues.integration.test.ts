@@ -4,7 +4,7 @@
  * @module tests/integration/known-issues.integration.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
@@ -38,20 +38,20 @@ describe('known correctness defects', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/12
   it('includes the declared recovery hint on incoherent-build validation', async () => {
     initGnomadService({} as never, {} as never);
-    const ctx = createMockContext({ errors: gnomadGetGeneConstraint.errors });
-    const input = gnomadGetGeneConstraint.input.parse({
+
+    const result = await runToolContract(gnomadGetGeneConstraint, {
       gene: 'PCSK9',
       dataset: 'gnomad_r4',
       reference_genome: 'GRCh37',
     });
 
-    const error = await Promise.resolve(gnomadGetGeneConstraint.handler(input, ctx)).catch(
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      data: {
-        reason: 'incoherent_build',
-        recovery: { hint: expect.stringMatching(/omit reference_genome|GRCh38/i) },
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'incoherent_build',
+          recovery: { hint: expect.stringMatching(/omit reference_genome|GRCh38/i) },
+        },
       },
     });
   });
@@ -59,16 +59,16 @@ describe('known correctness defects', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/12
   it('includes the declared recovery hint when no genome target is supplied', async () => {
     initGnomadService({} as never, {} as never);
-    const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
-    const input = gnomadListGeneVariants.input.parse({});
 
-    const error = await Promise.resolve(gnomadListGeneVariants.handler(input, ctx)).catch(
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      data: {
-        reason: 'invalid_target',
-        recovery: { hint: expect.stringMatching(/exactly one target/i) },
+    const result = await runToolContract(gnomadListGeneVariants, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'invalid_target',
+          recovery: { hint: expect.stringMatching(/exactly one target/i) },
+        },
       },
     });
   });
@@ -103,6 +103,9 @@ describe('known correctness defects', () => {
       {
         variant: 'rs11591147',
         error: 'rs11591147 maps to multiple variants; retry with a candidate variant ID.',
+        reason: 'ambiguous_rsid',
+        recovery: gnomadGetVariant.errors?.find((entry) => entry.reason === 'ambiguous_rsid')
+          ?.recovery,
         candidates: ['1-55039974-G-T', '1-55039974-G-A'],
       },
     ]);

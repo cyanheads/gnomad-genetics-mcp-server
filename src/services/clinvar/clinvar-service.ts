@@ -11,7 +11,11 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
-import { invalidUpstreamResponse, sanitizeUpstreamError } from '@/services/upstream-error.js';
+import {
+  invalidUpstreamResponse,
+  readUpstreamJson,
+  sanitizeUpstreamError,
+} from '@/services/upstream-error.js';
 import type { ClinVarFilters, ClinVarRow, ClinVarSearchResult } from './types.js';
 
 /** ClinVar review-status text → gold-star rating (the standard convention). */
@@ -140,9 +144,6 @@ export const CLINVAR_WINDOW_MAX = 500;
 export const CLINVAR_OFFSET_MAX = 2_147_483_647;
 /** esummary batch size per request. */
 const SUMMARY_BATCH = 50;
-/** Recovery hint for a sanitized NCBI upstream failure — no internal detail. */
-const NCBI_RETRY_HINT =
-  'NCBI is degraded or throttling; wait a few seconds and retry, or set NCBI_API_KEY for a higher rate limit.';
 
 const EsearchResponse = z.object({
   esearchresult: z.object({
@@ -353,21 +354,9 @@ export class ClinVarService {
         // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
           signal: ctx.signal,
-        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
-        const text = await response.text();
-        if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-          invalidUpstreamResponse(
-            new Error('NCBI returned HTML instead of JSON.'),
-            'NCBI ClinVar',
-            NCBI_RETRY_HINT,
-          );
-        }
-        try {
-          const { idlist, count } = EsearchResponse.parse(JSON.parse(text)).esearchresult;
-          return { ids: idlist, count };
-        } catch (err) {
-          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
-        }
+        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
+        const { esearchresult } = await readUpstreamJson(response, 'NCBI ClinVar', EsearchResponse);
+        return { ids: esearchresult.idlist, count: esearchresult.count };
       },
       { operation: 'clinvar.esearch', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
     );
@@ -398,21 +387,8 @@ export class ClinVarService {
         // can't leak its URL/status/body/requestId to the client.
         const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
           signal: ctx.signal,
-        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar', NCBI_RETRY_HINT));
-        const text = await response.text();
-        if (/^\s*<(!doctype\s+html|html[\s>])/i.test(text)) {
-          invalidUpstreamResponse(
-            new Error('NCBI returned HTML instead of JSON.'),
-            'NCBI ClinVar',
-            NCBI_RETRY_HINT,
-          );
-        }
-        let result: z.infer<typeof EsummaryResponse>['result'];
-        try {
-          result = EsummaryResponse.parse(JSON.parse(text)).result;
-        } catch (err) {
-          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
-        }
+        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
+        const { result } = await readUpstreamJson(response, 'NCBI ClinVar', EsummaryResponse);
         const rows: ClinVarRow[] = [];
         const unavailable: string[] = [];
         try {
@@ -425,7 +401,7 @@ export class ClinVarService {
             rows.push(this.normalize(EsummaryRecord.parse(raw)));
           }
         } catch (err) {
-          invalidUpstreamResponse(err, 'NCBI ClinVar', NCBI_RETRY_HINT);
+          invalidUpstreamResponse(err, 'NCBI ClinVar');
         }
         return { rows, unavailable };
       },

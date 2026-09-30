@@ -53,8 +53,14 @@ export interface PopulationFreq {
   source: CallsetSource;
 }
 
-/** In-silico predictor score (e.g. REVEL, CADD, SpliceAI). Values arrive as strings upstream. */
+/**
+ * In-silico predictor score (e.g. REVEL, CADD, SpliceAI). Values arrive as strings
+ * upstream, and gnomad_r3 writes SpliceAI as a score followed by its event in
+ * parentheses ("0.00 (no_consequence)").
+ */
 export interface InSilicoPredictor {
+  /** Text gnomAD attaches to the score, or the raw value when it holds no number. */
+  annotation: string | null;
   id: string;
   value: number | null;
 }
@@ -92,9 +98,19 @@ export interface VariantRecord {
   variant_id: string;
 }
 
-/** gnomAD gene loss-of-function constraint — the gene.gnomad_constraint subobject. */
+/**
+ * The constraint release a dataset serves. gnomAD's API carries no release
+ * identifier, so the service labels each dataset from a fixed map.
+ */
+export type ConstraintRelease = 'gnomAD v4.1.2' | 'gnomAD v2.1.1' | 'ExAC r0.3';
+
+/**
+ * Gene loss-of-function constraint — gene.gnomad_constraint for the gnomAD
+ * datasets, gene.exac_constraint for exac (which carries no ratios or flags).
+ */
 export interface GeneConstraint {
   constraint_flags: string[];
+  constraint_release: ConstraintRelease;
   dataset: Dataset;
   exp_lof: number | null;
   exp_mis: number | null;
