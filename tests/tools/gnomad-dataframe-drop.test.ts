@@ -1,14 +1,15 @@
 /**
  * @fileoverview Behavior tests for the gnomad_dataframe_drop handler — the opt-in
  * mutator. Drops a named canvas table (true when it existed, false when it did
- * not) and fails with the canvas_disabled contract when DataCanvas is off. The
+ * not), fails with the canvas_disabled contract when DataCanvas is off, and
+ * re-raises an unknown canvas through its own canvas_not_found contract. The
  * exported definition is wrapped by disabledTool() when the gate is off, but the
  * handler stays callable, so these exercise the real drop logic. Stubs the
  * canvas accessor.
  * @module tests/tools/gnomad-dataframe-drop.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { gnomadDataframeDrop } from '@/mcp-server/tools/definitions/gnomad-dataframe-drop.tool.js';
@@ -66,6 +67,46 @@ describe('gnomad_dataframe_drop handler', () => {
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'canvas_disabled' },
     });
+  });
+
+  it('re-raises an unknown canvas as its own canvas_not_found, without the re-stage hint', async () => {
+    const acquireError = new McpError(JsonRpcErrorCode.NotFound, 'Canvas not found.', {
+      reason: 'canvas_not_found',
+      recovery: { hint: 'Re-run the tool that staged the data.' },
+    });
+    const canvas = { acquire: vi.fn(async () => Promise.reject(acquireError)) };
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
+
+    const ctx = createMockContext({ errors: gnomadDataframeDrop.errors });
+    const input = gnomadDataframeDrop.input.parse({
+      canvas_id: CANVAS_ID,
+      table_name: 'gene_variants',
+    });
+    const rejection = (await Promise.resolve()
+      .then(() => gnomadDataframeDrop.handler(input, ctx as never))
+      .catch((e: unknown) => e)) as McpError;
+
+    expect(rejection).toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'canvas_not_found' },
+    });
+    expect(rejection.cause).toBe(acquireError);
+    expect(JSON.stringify(rejection.data ?? {})).not.toContain('Re-run the tool');
+  });
+
+  it('passes any other acquire() failure through unchanged', async () => {
+    const acquireError = new McpError(JsonRpcErrorCode.ValidationError, 'Malformed canvas id.', {
+      reason: 'canvas_id_malformed',
+    });
+    const canvas = { acquire: vi.fn(async () => Promise.reject(acquireError)) };
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
+
+    const ctx = createMockContext({ errors: gnomadDataframeDrop.errors });
+    const input = gnomadDataframeDrop.input.parse({
+      canvas_id: CANVAS_ID,
+      table_name: 'gene_variants',
+    });
+    await expect(gnomadDataframeDrop.handler(input, ctx as never)).rejects.toBe(acquireError);
   });
 
   it('rejects a canvas_id outside the minted shape, or an empty table_name, at parse time', () => {

@@ -10,7 +10,7 @@
 
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
@@ -44,6 +44,13 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
       recovery:
         'Set CANVAS_PROVIDER_TYPE=duckdb and restart; the staging tools then return a queryable canvas_id.',
     },
+    {
+      reason: 'canvas_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The canvas_id is unknown or has expired, so it holds no tables.',
+      recovery:
+        'Nothing is left to drop: the canvas and its tables are already gone. Stop here; no further cleanup is needed.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -54,7 +61,15 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
         'DataCanvas is not enabled. Set CANVAS_PROVIDER_TYPE=duckdb.',
       );
     }
-    const instance = await canvas.acquire(input.canvas_id, ctx);
+    // acquire()'s canvas_not_found carries a re-stage hint, which is wrong for a drop.
+    const instance = await canvas.acquire(input.canvas_id, ctx).catch((err: unknown) => {
+      if (err instanceof McpError && err.data?.reason === 'canvas_not_found') {
+        throw ctx.fail('canvas_not_found', `Canvas ${input.canvas_id} not found.`, undefined, {
+          cause: err,
+        });
+      }
+      throw err;
+    });
     const dropped = await instance.drop(input.table_name);
     ctx.log.info('gnomad_dataframe_drop executed', {
       canvas_id: instance.canvasId,
