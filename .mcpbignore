@@ -12,3 +12,5 @@
 /biome.json
 /tsconfig*.json
 /vitest.config.ts
+/tests/
+/coverage/
