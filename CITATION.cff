@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: gnomad-genetics-mcp-server
-abstract: "Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in — via MCP. STDIO or Streamable HTTP."
+abstract: "Ancestry allele frequencies, LoF constraint, variant lists, and coverage from gnomAD, joined with ClinVar clinical significance via MCP. STDIO or Streamable HTTP."
 type: software
 authors:
   - family-names: Hand
