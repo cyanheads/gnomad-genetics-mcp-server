@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/gnomad-genetics-mcp-server</h1>
-  <p><b>Look up variant allele frequencies by ancestry, gene loss-of-function constraint, gene variant lists, and sequencing coverage over gnomAD — with ClinVar significance joined in — via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Ancestry allele frequencies, LoF constraint, variant lists, and coverage from gnomAD, joined with ClinVar clinical significance via MCP. STDIO or Streamable HTTP.</b>
   <div>7 Tools (+1 opt-in) • 2 Resources • 1 Prompt</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.1.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -69,6 +69,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 - Mitochondrial IDs (`M`, `MT`, `chrM`) are refused per item as `mitochondrial_unsupported` with no fetch — gnomAD models mitochondrial variants separately, and they are outside this server
 - Per-ancestry frequency vector is returned in full, never collapsed to a single global AF
 - Reports which callset(s) (`exome` / `genome`) carry the variant, quality flags, transcript consequence, in-silico predictor scores, and the ClinVar significance gnomAD joins per variant
+- The ClinVar join is best-effort: when its lookup fails or passes a 45 s budget counted from the start of the call (shared by every ID in a batch), the record still returns with `clinvar: null`, `clinvar_unavailable: true`, and a notice. `clinvar_unavailable: false` with `clinvar: null` means ClinVar answered and holds no entry
 - An empty `found[]` for a well-formed ID means the variant is not in the chosen dataset — pair with `gnomad_get_coverage` to confirm the position is callable before concluding true absence
 
 ---
@@ -112,6 +113,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 - `region` takes the same `chrom-start-stop` form as `gnomad_list_gene_variants` — chromosome `1`–`22`, `X`, or `Y`, optional `chr` prefix, a span under 2,500,000 bp — and fails with `invalid_region` or `region_too_large` before any fetch otherwise
 - Mitochondrial targets fail as `mitochondrial_unsupported` instead of returning empty coverage
 - Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track
+- gnomAD reports coverage in buckets: 1 bp for a region spanning under 850 bp, wider for larger targets. Each summary states its `bucket_size` and `bucket_count`, and `positions` counts the target bases those buckets cover — `start..stop` for a region, the exons ±75 bp for a gene or transcript, never the introns between them. Where a track has no records at the target's edges (typically outside the exome capture), `positions` falls short of the target and those bases are left out rather than counted as zero
 - `coverage_source` narrows to one track (`exome` / `genome`); omit to return every available track
 - A variant missing from a well-covered region is informative; one missing from a poorly-covered region is not
 
@@ -154,6 +156,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Drops a named table from a canvas to reclaim memory — a deliberate mutation (`readOnlyHint: false`, `destructiveHint: true`) on an otherwise read-only surface
 - Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true`; absent from `tools/list` when off, since per-table TTL already reclaims memory automatically
+- An unknown or expired `canvas_id` fails as `canvas_not_found`: the canvas and its tables are already gone, so nothing is left to drop
 - Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
 
 ---
@@ -196,7 +199,7 @@ Agent-friendly output:
 - Per-ancestry allele-frequency vector returned in full, never collapsed to a single global AF — the cross-ancestry contrast is the signal clinical interpretation needs
 - Graceful partial failure — `gnomad_get_variant` returns per-item `failed[]` rows, each with a typed reason and its recovery hint, instead of failing the whole batch
 - Provenance on every response — effective `dataset` and `reference_genome` echoed back; null upstream fields preserved as null, never fabricated
-- Every error carries a typed `reason` and the recovery hint its tool or resource declares for that reason, so callers know the next move: input problems (`incoherent_build`, `invalid_target`, `invalid_variant_id`, `invalid_region`, `region_too_large`, `mitochondrial_unsupported`, `ambiguous_rsid`), absences (`gene_not_found`, `variant_not_found`), gnomAD refusals (`graphql_error`, `upstream_build_mismatch`, `invalid_constraint_data`), upstream faults (`upstream_unavailable`, `upstream_timeout`, `upstream_access`, `invalid_upstream_response`), and the canvas (`canvas_disabled`, `row_too_large`). `gnomad_get_variant` puts the same reason and hint on each `failed[]` item
+- Every error carries a typed `reason` and the recovery hint its tool or resource declares for that reason, so callers know the next move: input problems (`incoherent_build`, `invalid_target`, `invalid_variant_id`, `invalid_region`, `region_too_large`, `mitochondrial_unsupported`, `ambiguous_rsid`), absences (`gene_not_found`, `variant_not_found`), gnomAD refusals (`graphql_error`, `upstream_build_mismatch`, `invalid_constraint_data`), upstream faults (`upstream_unavailable`, `upstream_timeout`, `upstream_access`, `invalid_upstream_response`), and the canvas (`canvas_disabled`, `canvas_not_found`, `row_too_large`). `gnomad_get_variant` puts the same reason and hint on each `failed[]` item
 
 ## Getting started
 
