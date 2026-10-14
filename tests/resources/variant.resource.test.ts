@@ -10,6 +10,7 @@
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getServerConfig } from '@/config/server-config.js';
 import { variantResource } from '@/mcp-server/resources/definitions/variant.resource.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import type { VariantRecord } from '@/services/gnomad/types.js';
@@ -217,4 +218,58 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
       expect(fetch).toHaveBeenCalledOnce();
     },
   );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('keeps the record with clinvar_unavailable when only the ClinVar-only request fails', async () => {
+    const origin = new URL(getServerConfig().gnomadApiBaseUrl).origin;
+    const variant = {
+      variant_id: '1-55051215-G-GA',
+      reference_genome: 'GRCh38',
+      rsids: ['rs527413419'],
+      flags: null,
+      exome: null,
+      genome: {
+        ac: 3,
+        an: 1000,
+        af: 0.003,
+        homozygote_count: 0,
+        hemizygote_count: null,
+        populations: [],
+      },
+      transcript_consequences: null,
+      in_silico_predictors: null,
+    };
+    const operations: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url).origin !== origin) throw new Error(`Unmocked fetch to ${url}`);
+      const operation = /query\s+(\w+)/.exec(String(JSON.parse(String(init?.body)).query))?.[1];
+      operations.push(String(operation));
+      if (operation === 'GnomadVariant') {
+        return Response.json({
+          errors: [{ message: 'Invalid variant ID' }],
+          data: { variant, clinvar_variant: null },
+        });
+      }
+      if (operation === 'GnomadVariantOnly') return Response.json({ data: { variant } });
+      if (operation === 'GnomadClinvar') {
+        return Response.json({
+          errors: [{ message: 'Invalid variant ID' }],
+          data: { clinvar_variant: null },
+        });
+      }
+      throw new Error(`Unmocked gnomAD operation ${operation}`);
+    });
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const record = await readRecord('gnomad://variant/gnomad_r4/1-55051215-G-GA');
+
+    expect(record).toMatchObject({
+      variant_id: '1-55051215-G-GA',
+      ac: 3,
+      clinvar: null,
+      clinvar_unavailable: true,
+    });
+    expect(operations).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+  });
 });

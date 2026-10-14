@@ -547,7 +547,16 @@ const coverageTool: Surface<ToolInput> = {
 };
 
 const coverageToolScenarios = [
-  ...regionToolScenarios((chrom) => ({ chrom, coverage: { exome: [], genome: [] } })),
+  ...regionToolScenarios((chrom) => ({ chrom, exons: [], coverage: { exome: [], genome: [] } })),
+  {
+    label: 'gene coverage arriving without the exons that bound it',
+    reason: 'invalid_upstream_response',
+    input: { gene: 'PCSK9' },
+    route: always({
+      status: 200,
+      body: { data: { gene: { chrom: '1', coverage: { exome: [], genome: [] } } } },
+    }),
+  },
   {
     label: 'gnomAD refusing a region too large for coverage on HTTP 500',
     reason: 'region_too_large',

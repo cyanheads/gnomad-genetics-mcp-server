@@ -124,7 +124,9 @@ const VariantRecordSchema = z
     clinvar: ClinVar.nullable().describe('ClinVar annotation, or null when no entry exists.'),
     clinvar_unavailable: z
       .boolean()
-      .describe('True when the optional ClinVar resolver failed; false when no entry exists.'),
+      .describe(
+        'True when the ClinVar lookup failed or ran out of its time budget, so clinvar is null for want of an answer; false when it succeeded, with or without an entry.',
+      ),
   })
   .describe('Full population record for one variant.');
 
@@ -322,7 +324,10 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     // found[]/failed[] deterministic. A failure carrying a declared reason
     // becomes that ID's outcome, preserving per-item partial success — one bad
     // ID never fails the batch. A cancelled call, or a failure no declared
-    // reason covers, is not about one ID and fails the whole call.
+    // reason covers, is not about one ID and fails the whole call. One start
+    // time for the batch gives every item's ClinVar side lookup the same
+    // deadline, however long the item queued behind the concurrency cap.
+    const startedAt = Date.now();
     const outcomes = await Promise.all(
       input.variants.map(async (variantId): Promise<VariantLookupOutcome> => {
         const normalized = normalizeVariantIdentifier(variantId);
@@ -334,7 +339,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
           );
         }
         try {
-          const record = await svc.getVariant(normalized.canonical, dsCtx, ctx);
+          const record = await svc.getVariant(normalized.canonical, dsCtx, ctx, { startedAt });
           if (record) return { ok: true, record };
           return failure(variantId, 'variant_not_found', `Not found in ${dsCtx.dataset}.`);
         } catch (err) {
@@ -410,7 +415,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       } else {
         lines.push(
           v.clinvar_unavailable
-            ? '**ClinVar:** unavailable (optional resolver failed)'
+            ? '**ClinVar:** unavailable (lookup failed or timed out)'
             : '**ClinVar:** no entry',
         );
       }

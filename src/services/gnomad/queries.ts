@@ -3,8 +3,10 @@
  * Each requests only the fields its tool returns, plus `chrom` on the gene and
  * transcript list/coverage documents: gnomAD resolves mitochondrial features but
  * answers their nuclear `variants`/`coverage` fields with nothing, so the
- * service reads `chrom` to refuse them rather than report absence. Field names
- * are grounded against the live schema (gnomad.broadinstitute.org/api).
+ * service reads `chrom` to refuse them rather than report absence. The gene and
+ * transcript coverage documents also carry `exons`, which bound the summarized
+ * coverage buckets. Field names are grounded against the live schema
+ * (gnomad.broadinstitute.org/api).
  * @module services/gnomad/queries
  */
 
@@ -47,6 +49,8 @@ in_silico_predictors { id value }`;
  * ClinVar significance. `clinvar_variant` is a sibling top-level field (NOT
  * nested in `variant`) and takes `reference_genome`, not `dataset`.
  * Per-population AF is absent upstream and computed client-side as ac/an.
+ * A reply carrying errors beside a populated `variant` is discarded and the
+ * lookup re-sent as VARIANT_ONLY_QUERY and CLINVAR_BY_VARIANT_ID_QUERY.
  */
 export const VARIANT_QUERY = `
 query GnomadVariant($variantId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
@@ -76,7 +80,21 @@ query GnomadVariantSearch($query: String!, $dataset: DatasetId!) {
   variant_search(query: $query, dataset: $dataset) { variant_id }
 }` as const;
 
-/** ClinVar join for a resolved variant_id (second hop for rsID lookups). */
+/**
+ * The variantId document's `variant` root alone — the population half of a
+ * split lookup, sent when the combined reply carries errors beside a populated
+ * `variant`. gnomAD's errors carry no `path`, so only a request of its own can
+ * attribute an error to the variant rather than to the ClinVar join.
+ */
+export const VARIANT_ONLY_QUERY = `
+query GnomadVariantOnly($variantId: String!, $dataset: DatasetId!) {
+  variant(variantId: $variantId, dataset: $dataset) { ${VARIANT_SELECTION} }
+}` as const;
+
+/**
+ * ClinVar join for a variant_id on its own — the rsID path's second hop, and
+ * the ClinVar half of a split coordinate lookup.
+ */
 export const CLINVAR_BY_VARIANT_ID_QUERY = `
 query GnomadClinvar($variantId: String!, $referenceGenome: ReferenceGenomeId!) {
   clinvar_variant(variant_id: $variantId, reference_genome: $referenceGenome) {
@@ -149,26 +167,33 @@ query GnomadRegionVariants($chrom: String!, $start: Int!, $stop: Int!, $dataset:
   region(chrom: $chrom, start: $start, stop: $stop, reference_genome: $referenceGenome) { ${VARIANT_LIST_SELECTION} }
 }` as const;
 
-/** Shared coverage selection — exome and genome bins. */
+/** Shared coverage selection — gnomAD's exome and genome histogram buckets. */
 const COVERAGE_SELECTION = `
 coverage(dataset: $dataset) {
   exome { pos mean median over_1 over_5 over_10 over_15 over_20 over_25 over_30 over_50 over_100 }
   genome { pos mean median over_1 over_5 over_10 over_15 over_20 over_25 over_30 over_50 over_100 }
 }`;
 
+/**
+ * Gene and transcript coverage also select `exons`: gnomAD queries coverage over
+ * the merged exons ±75 bp, and the service needs those intervals to size the
+ * buckets and drop the zero-filled intron buckets between them.
+ */
+const FEATURE_COVERAGE_SELECTION = `chrom exons { start stop } ${COVERAGE_SELECTION}`;
+
 export const GENE_COVERAGE_BY_SYMBOL_QUERY = `
 query GnomadGeneCoverageBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${FEATURE_COVERAGE_SELECTION} }
 }` as const;
 
 export const GENE_COVERAGE_BY_ID_QUERY = `
 query GnomadGeneCoverageById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${FEATURE_COVERAGE_SELECTION} }
 }` as const;
 
 export const TRANSCRIPT_COVERAGE_QUERY = `
 query GnomadTranscriptCoverage($transcriptId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { chrom ${COVERAGE_SELECTION} }
+  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { ${FEATURE_COVERAGE_SELECTION} }
 }` as const;
 
 export const REGION_COVERAGE_QUERY = `

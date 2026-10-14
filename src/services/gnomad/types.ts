@@ -80,7 +80,7 @@ export interface VariantRecord {
   af: number | null;
   an: number;
   clinvar: ClinVarAnnotation | null;
-  /** True when the optional ClinVar resolver failed; false means no entry exists. */
+  /** True when the ClinVar lookup failed; false when it succeeded, with or without an entry. */
   clinvar_unavailable: boolean;
   consequence: string | null;
   dataset: Dataset;
@@ -152,8 +152,15 @@ export interface GeneVariantRow {
   [key: string]: string | number | null;
 }
 
-/** Aggregate coverage summary across a gene / transcript / region for one callset. */
+/**
+ * Aggregate coverage summary across a gene / transcript / region for one
+ * callset, over the gnomAD coverage buckets that overlap the target intervals.
+ */
 export interface CoverageSummary {
+  /** Number of gnomAD coverage buckets summarized. */
+  bucket_count: number;
+  /** Width of each gnomAD coverage bucket, in bp. */
+  bucket_size: number;
   fraction_over_1: number | null;
   fraction_over_5: number | null;
   fraction_over_10: number | null;
@@ -165,6 +172,7 @@ export interface CoverageSummary {
   fraction_over_100: number | null;
   mean_depth: number | null;
   median_depth: number | null;
+  /** Target bases inside the summarized buckets. */
   positions: number;
   source: CallsetSource;
 }

@@ -17,63 +17,62 @@ import {
   resolveGenomeTarget,
 } from '../shared-schemas.js';
 
+const fractionOver = (depth: number) =>
+  z
+    .number()
+    .nullable()
+    .describe(
+      `Fraction of samples covered at ≥${depth}×, averaged over the summarized buckets (gnomAD rounds each bucket's fraction up to the next 0.01); null when no data.`,
+    );
+
 const CoverageSummarySchema = z
   .object({
     source: z
       .enum(['exome', 'genome'])
       .describe('Which gnomAD coverage track this summary covers.'),
-    positions: z.number().describe('Number of base positions summarized across the target.'),
+    positions: z
+      .number()
+      .describe(
+        'Target bases inside the summarized buckets: of start..stop for a region, of the exons ±75 bp for a gene or transcript. Falls short of the target when the track has no records at its edges (typically outside the exome capture); those bases are left out, not counted as zero depth.',
+      ),
+    bucket_count: z
+      .number()
+      .describe(
+        'Number of gnomAD coverage buckets summarized: every returned bucket overlapping the target bases. gnomAD returns every bucket between the first and last record of a track, so an empty bucket inside that span counts as zero depth; buckets past the outermost records are not returned and not counted.',
+      ),
+    bucket_size: z
+      .number()
+      .describe(
+        'Width of each gnomAD coverage bucket in bp: 1 for a region spanning under 850 bp, otherwise about 1/500 of the queried size. Depth and fraction values describe buckets, not single bases.',
+      ),
     mean_depth: z
       .number()
       .nullable()
-      .describe('Mean read depth averaged across positions; null when no data.'),
+      .describe(
+        'Mean read depth: the average of the summarized buckets’ mean depths; null when no data.',
+      ),
     median_depth: z
       .number()
       .nullable()
-      .describe('Median read depth across positions; null when no data.'),
-    fraction_over_1: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥1×; null when no data.'),
-    fraction_over_5: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥5×; null when no data.'),
-    fraction_over_10: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥10×; null when no data.'),
-    fraction_over_15: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥15×; null when no data.'),
-    fraction_over_20: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥20×; null when no data.'),
-    fraction_over_25: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥25×; null when no data.'),
-    fraction_over_30: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥30×; null when no data.'),
-    fraction_over_50: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥50×; null when no data.'),
-    fraction_over_100: z
-      .number()
-      .nullable()
-      .describe('Mean fraction of samples covered at ≥100×; null when no data.'),
+      .describe(
+        'Median, across the summarized buckets, of each bucket’s depth (the average of its per-base medians); null when no data.',
+      ),
+    fraction_over_1: fractionOver(1),
+    fraction_over_5: fractionOver(5),
+    fraction_over_10: fractionOver(10),
+    fraction_over_15: fractionOver(15),
+    fraction_over_20: fractionOver(20),
+    fraction_over_25: fractionOver(25),
+    fraction_over_30: fractionOver(30),
+    fraction_over_50: fractionOver(50),
+    fraction_over_100: fractionOver(100),
   })
   .describe('Aggregate coverage for one callset track over the target.');
 
 export const gnomadGetCoverage = tool('gnomad_get_coverage', {
   title: 'gnomad-genetics-mcp-server: get coverage',
   description:
-    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. gnomAD reports coverage in buckets: 1 bp for a region spanning under 850 bp, wider for larger targets (bucket_size), and a gene or transcript is summarized over its exons ±75 bp, not its introns. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -222,7 +221,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     }
     if (summaries.length === 0) {
       ctx.enrich.notice(
-        `No ${input.coverage_source ?? ''} coverage data for ${target.kind} "${target.value}" in ${dsCtx.dataset}. The position may lie outside the callset, or the coverage track is unavailable for this dataset.`,
+        `No ${input.coverage_source ? `${input.coverage_source} ` : ''}coverage data for ${target.kind} "${target.value}" in ${dsCtx.dataset}. The position may lie outside the callset, or the coverage track is unavailable for this dataset.`,
       );
     }
 
@@ -251,6 +250,9 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     ];
     for (const s of result.summaries) {
       lines.push('', `### ${s.source} (${s.positions} positions)`);
+      lines.push(
+        `**Buckets:** ${s.bucket_count} × ${s.bucket_size} bp${s.bucket_size > 1 ? ' — depths and fractions average the buckets, not single bases' : ''}`,
+      );
       lines.push(`**Mean depth:** ${num(s.mean_depth)} | **Median depth:** ${num(s.median_depth)}`);
       lines.push(
         `**Frac ≥:** 1×=${pct(s.fraction_over_1)} 5×=${pct(s.fraction_over_5)} 10×=${pct(s.fraction_over_10)} 15×=${pct(s.fraction_over_15)} 20×=${pct(s.fraction_over_20)} 25×=${pct(s.fraction_over_25)} 30×=${pct(s.fraction_over_30)} 50×=${pct(s.fraction_over_50)} 100×=${pct(s.fraction_over_100)}`,

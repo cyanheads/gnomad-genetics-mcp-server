@@ -169,7 +169,7 @@ describe.each([
 describe('gnomad_list_gene_variants — transient messages on an HTTP 200 envelope', () => {
   const overloaded = {
     status: 200,
-    body: { errors: [{ message: 'Service overloaded', path: ['gene'] }], data: { gene: null } },
+    body: { errors: [{ message: 'Service overloaded' }], data: { gene: null } },
   };
 
   it('retries "Service overloaded" and ends as upstream_unavailable with the retry hint', async () => {

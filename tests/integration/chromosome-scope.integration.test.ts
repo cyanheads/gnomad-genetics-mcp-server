@@ -31,7 +31,8 @@ function emptyPayload(request: GraphqlRequest, featureChrom: string): unknown {
   const inner = coverage ? { coverage: { exome: [], genome: [] } } : { variants: [] };
   if (request.query.includes('region(')) return { data: { region: inner } };
   const root = request.query.includes('transcript(') ? 'transcript' : 'gene';
-  return { data: { [root]: { chrom: featureChrom, ...inner } } };
+  const exons = coverage ? { exons: [] } : {};
+  return { data: { [root]: { chrom: featureChrom, ...exons, ...inner } } };
 }
 
 let requests: GraphqlRequest[];

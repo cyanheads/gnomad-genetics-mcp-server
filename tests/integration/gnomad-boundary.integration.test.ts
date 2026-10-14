@@ -568,7 +568,7 @@ describe('GnomadService constraint routing by dataset', () => {
 });
 
 describe('GnomadService gene resolution and constraint normalization', () => {
-  it('preserves pathless not-found partial data for operations without an exact-path policy', async () => {
+  it('reads a not-found error beside a null gene as absence', async () => {
     fakeGraphql(() => ({
       errors: [{ message: 'Gene not found' }],
       data: { gene: null },
@@ -728,7 +728,7 @@ describe('GnomadService list and coverage boundary', () => {
       return {
         data: {
           [key]: {
-            ...(key === 'region' ? {} : { chrom: '1' }),
+            ...(key === 'region' ? {} : { chrom: '1', exons: [{ start: 100, stop: 100 }] }),
             coverage: {
               exome: [
                 {
@@ -755,8 +755,12 @@ describe('GnomadService list and coverage boundary', () => {
     const svc = new GnomadService(getServerConfig());
     const dsCtx = svc.resolveDatasetContext('gnomad_r4');
 
-    await svc.getCoverage({ kind: 'gene', value: 'ENSG00000169174' }, dsCtx, createMockContext());
-    await svc.getCoverage(
+    const gene = await svc.getCoverage(
+      { kind: 'gene', value: 'ENSG00000169174' },
+      dsCtx,
+      createMockContext(),
+    );
+    const transcript = await svc.getCoverage(
       { kind: 'transcript', value: 'ENST00000302118' },
       dsCtx,
       createMockContext(),
@@ -771,6 +775,16 @@ describe('GnomadService list and coverage boundary', () => {
     expect(requests[0]?.variables.referenceGenome).toBe('GRCh38');
     expect(requests[1]?.variables.transcriptId).toBe('ENST00000302118');
     expect(requests[2]?.variables).toMatchObject({ chrom: '1', start: 100, stop: 100 });
-    expect(region[0]).toMatchObject({ positions: 1, mean_depth: 30 });
+    expect(requests[0]?.query).toContain('exons { start stop }');
+    expect(region[0]).toMatchObject({
+      positions: 1,
+      bucket_count: 1,
+      bucket_size: 1,
+      mean_depth: 30,
+    });
+    // The 1 bp bucket at 100 lies inside the exon's 25–175 interval.
+    for (const feature of [gene, transcript]) {
+      expect(feature[0]).toMatchObject({ positions: 1, bucket_count: 1, bucket_size: 1 });
+    }
   });
 });

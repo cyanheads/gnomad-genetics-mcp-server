@@ -1,9 +1,10 @@
 /**
  * @fileoverview Unit tests for GnomadService logic — dataset→build derivation,
  * coherence validation, the by-symbol/by-id gene routing, the region parser,
- * and how upstream failures are classified. The classification tests fake only
- * global fetch, so the real retry loop, fetchWithTimeout, and the sanitizer all
- * run; everything here is deterministic and offline-safe.
+ * how coverage buckets are selected and summarized, and how upstream failures
+ * are classified. The coverage and classification tests fake only global
+ * fetch, so the real retry loop, fetchWithTimeout, response validation, and the
+ * sanitizer all run; everything here is deterministic and offline-safe.
  * @module tests/services/gnomad-service.test
  */
 
@@ -11,7 +12,8 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
-import { GnomadService } from '@/services/gnomad/gnomad-service.js';
+import { CLINVAR_LOOKUP_BUDGET_MS, GnomadService } from '@/services/gnomad/gnomad-service.js';
+import { fakeCoverage, LIVE_COVERAGE } from '../helpers/fake-gnomad-coverage.js';
 
 const svc = new GnomadService(getServerConfig());
 
@@ -276,12 +278,12 @@ function covBin(pos: number, depth: number, fracHigh = 0): Record<string, number
   };
 }
 
-describe('GnomadService.getCoverage — region bin bounding', () => {
+describe('GnomadService.getCoverage — coverage bucket bounding', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('bounds region coverage bins to the requested span — single position → positions:1', async () => {
-    // gnomAD pads a single-position region(...) to a ~151bp window; the service
-    // must keep only the bin at the requested base, not the ±75bp neighborhood.
+    // gnomAD queries a single-position region ±75 bp (1 bp buckets); the service
+    // must keep only the bucket at the requested base, not the padded neighborhood.
     const bins = [covBin(55039973, 8), covBin(55039974, 42, 1), covBin(55039975, 9)];
     vi.spyOn(svc as any, 'graphql').mockResolvedValue({
       region: { coverage: { exome: bins, genome: null } },
@@ -322,10 +324,15 @@ describe('GnomadService.getCoverage — region bin bounding', () => {
     expect(summaries[0]?.mean_depth).toBe(25); // (20+30)/2, not (5+20+30+99)/4
   });
 
-  it('leaves gene coverage bins unbounded — the intended whole-feature set', async () => {
-    const bins = [covBin(1, 10), covBin(2, 20), covBin(3, 30)];
+  it('bounds gene coverage bins to the exons ±75 bp gnomAD queried', async () => {
+    // Exon 101–101 → interval 26–176. Bins 1 and 177 are intron gnomAD never queried.
+    const bins = [covBin(1, 10), covBin(26, 20), covBin(176, 30), covBin(177, 90)];
     vi.spyOn(svc as any, 'graphql').mockResolvedValue({
-      gene: { chrom: '1', coverage: { exome: bins, genome: null } },
+      gene: {
+        chrom: '1',
+        exons: [{ start: 101, stop: 101 }],
+        coverage: { exome: bins, genome: null },
+      },
     });
     const dsCtx = svc.resolveDatasetContext('gnomad_r4');
 
@@ -335,14 +342,18 @@ describe('GnomadService.getCoverage — region bin bounding', () => {
       createMockContext(),
     );
 
-    expect(summaries[0]?.positions).toBe(3); // all bins summarized; no bounding
-    expect(summaries[0]?.mean_depth).toBe(20); // (10+20+30)/3
+    expect(summaries[0]).toMatchObject({ positions: 2, bucket_count: 2, bucket_size: 1 });
+    expect(summaries[0]?.mean_depth).toBe(25); // (20+30)/2, not (10+20+30+90)/4
   });
 
-  it('leaves transcript coverage bins unbounded', async () => {
-    const bins = [covBin(10, 40), covBin(11, 41)];
+  it('bounds transcript coverage bins to the exons ±75 bp gnomAD queried', async () => {
+    const bins = [covBin(25, 5), covBin(26, 40), covBin(27, 41), covBin(400, 0)];
     vi.spyOn(svc as any, 'graphql').mockResolvedValue({
-      transcript: { chrom: '1', coverage: { exome: bins, genome: null } },
+      transcript: {
+        chrom: '1',
+        exons: [{ start: 101, stop: 101 }],
+        coverage: { exome: bins, genome: null },
+      },
     });
     const dsCtx = svc.resolveDatasetContext('gnomad_r4');
 
@@ -352,7 +363,458 @@ describe('GnomadService.getCoverage — region bin bounding', () => {
       createMockContext(),
     );
 
-    expect(summaries[0]?.positions).toBe(2);
+    expect(summaries[0]).toMatchObject({ positions: 2, bucket_count: 2, mean_depth: 40.5 });
+  });
+});
+
+/** A float summary value, matched to nine decimal places. */
+const close = (value: number) => expect.closeTo(value, 9);
+
+const coverageOf = (kind: 'gene' | 'transcript' | 'region', value: string) =>
+  svc.getCoverage({ kind, value }, svc.resolveDatasetContext('gnomad_r4'), createMockContext());
+
+describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch seam', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('summarizes only the requested base of a live single-position region', async () => {
+    fakeCoverage(LIVE_COVERAGE['region:1-55039974-55039974']);
+
+    const summaries = await coverageOf('region', '1-55039974-55039974');
+
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 1,
+        bucket_count: 1,
+        bucket_size: 1,
+        mean_depth: 56.13959972474064,
+        median_depth: 31,
+        fraction_over_1: 1,
+        fraction_over_5: 1,
+        fraction_over_10: 0.98,
+        fraction_over_15: 0.97,
+        fraction_over_20: 0.96,
+        fraction_over_25: 0.91,
+        fraction_over_30: 0.62,
+        fraction_over_50: 0.32,
+        fraction_over_100: 0.19,
+      },
+      {
+        source: 'genome',
+        positions: 1,
+        bucket_count: 1,
+        bucket_size: 1,
+        mean_depth: 35.59847702992943,
+        median_depth: 34,
+        fraction_over_1: 1,
+        fraction_over_5: 1,
+        fraction_over_10: 1,
+        fraction_over_15: 1,
+        fraction_over_20: 1,
+        fraction_over_25: 0.94,
+        fraction_over_30: 0.8,
+        fraction_over_50: 0.09,
+        fraction_over_100: 0.01,
+      },
+    ]);
+  });
+
+  it('omits a track gnomAD returns empty and summarizes the other', async () => {
+    fakeCoverage({
+      data: {
+        gene: {
+          chrom: '1',
+          exons: [{ start: 1076, stop: 1080 }],
+          coverage: { exome: [], genome: [covBin(1001, 30), covBin(1155, 40)] },
+        },
+      },
+    });
+
+    const summaries = await coverageOf('gene', 'PCSK9');
+
+    expect(summaries.map((s) => s.source)).toEqual(['genome']);
+    expect(summaries[0]).toMatchObject({ positions: 2, mean_depth: 35 });
+  });
+
+  it('summarizes the live PCSK9 response over its exons ±75 bp, not the zero-filled introns', async () => {
+    const requests = fakeCoverage(LIVE_COVERAGE['gene:PCSK9']);
+
+    const summaries = await coverageOf('gene', 'PCSK9');
+
+    // The exons ride in the same request as the coverage they bound.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.query).toMatch(/exons \{ start stop \}[\s\S]*coverage\(dataset/);
+    // 34 exon features merge to 14 padded intervals summing to 7,797 bp → 15 bp
+    // buckets. The genome track keeps the 535 buckets overlapping them out of 587.
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 894,
+        bucket_count: 61,
+        bucket_size: 15,
+        mean_depth: close(20.31600189688799),
+        median_depth: close(6),
+        fraction_over_1: close(0.5924590163934427),
+        fraction_over_5: close(0.5511475409836066),
+        fraction_over_10: close(0.4888524590163935),
+        fraction_over_15: close(0.4537704918032788),
+        fraction_over_20: close(0.43000000000000016),
+        fraction_over_25: close(0.38967213114754096),
+        fraction_over_30: close(0.24590163934426237),
+        fraction_over_50: close(0.08770491803278689),
+        fraction_over_100: close(0.043114754098360644),
+      },
+      {
+        source: 'genome',
+        positions: 7811,
+        bucket_count: 535,
+        bucket_size: 15,
+        mean_depth: close(32.49755523382596),
+        median_depth: 33,
+        fraction_over_1: close(0.9950280373831775),
+        fraction_over_5: close(0.9950280373831775),
+        fraction_over_10: close(0.9950093457943924),
+        fraction_over_15: close(0.9945046728971961),
+        fraction_over_20: close(0.9690093457943999),
+        fraction_over_25: close(0.8762990654205581),
+        fraction_over_30: close(0.7061308411214963),
+        fraction_over_50: close(0.031495327102803505),
+        fraction_over_100: close(0.00999999999999987),
+      },
+    ]);
+  });
+
+  it('summarizes a live transcript over its own exons ±75 bp, in 10 bp buckets', async () => {
+    const requests = fakeCoverage(LIVE_COVERAGE['transcript:ENST00000302118']);
+
+    const summaries = await coverageOf('transcript', 'ENST00000302118');
+
+    expect(requests[0]?.query).toContain('exons { start stop }');
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 630,
+        bucket_count: 63,
+        bucket_size: 10,
+        mean_depth: close(29.468469069263534),
+        median_depth: close(28.8),
+        fraction_over_1: close(0.8566666666666667),
+        fraction_over_5: close(0.7987301587301584),
+        fraction_over_10: close(0.709365079365079),
+        fraction_over_15: close(0.657936507936508),
+        fraction_over_20: close(0.6239682539682543),
+        fraction_over_25: close(0.566031746031746),
+        fraction_over_30: close(0.3565079365079364),
+        fraction_over_50: close(0.12682539682539684),
+        fraction_over_100: close(0.062380952380952384),
+      },
+      {
+        source: 'genome',
+        positions: 647,
+        bucket_count: 65,
+        bucket_size: 10,
+        mean_depth: close(34.30150891004619),
+        median_depth: close(33.9),
+        fraction_over_1: close(0.9996923076923075),
+        fraction_over_5: close(0.9996923076923075),
+        fraction_over_10: close(0.9996923076923075),
+        fraction_over_15: close(0.9996923076923075),
+        fraction_over_20: close(0.9926153846153841),
+        fraction_over_25: close(0.9309230769230759),
+        fraction_over_30: close(0.7781538461538451),
+        fraction_over_50: close(0.05523076923076923),
+        fraction_over_100: close(0.010000000000000005),
+      },
+    ]);
+  });
+
+  it('keeps the live 4,800 bp bucket at 998,400 that covers the start of 1-1000000-3400000', async () => {
+    fakeCoverage(LIVE_COVERAGE['region:1-1000000-3400000']);
+
+    const summaries = await coverageOf('region', '1-1000000-3400000');
+
+    // The trimmed response holds each track's first and last three buckets.
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 27200, // 3,200 + 2×4,800 at the head, 3×4,800 at the tail (last ends 3,398,399)
+        bucket_count: 6,
+        bucket_size: 4800,
+        mean_depth: close(7.7747301265779),
+        median_depth: close(9.391143911439114),
+        fraction_over_1: close(0.35666666666666663),
+        fraction_over_5: close(0.3116666666666667),
+        fraction_over_10: close(0.255),
+        fraction_over_15: close(0.22499999999999998),
+        fraction_over_20: close(0.20166666666666666),
+        fraction_over_25: close(0.17666666666666667),
+        fraction_over_30: close(0.12166666666666666),
+        fraction_over_50: close(0.013333333333333334),
+        fraction_over_100: close(0.008333333333333333),
+      },
+      {
+        source: 'genome',
+        positions: 24001, // 3,200 + 2×4,800 at the head; 2×4,800 + 1,601 at the tail
+        bucket_count: 6,
+        bucket_size: 4800,
+        mean_depth: close(32.16623947907194),
+        median_depth: close(32.673125),
+        fraction_over_1: close(0.9983333333333334),
+        fraction_over_5: close(0.9983333333333334),
+        fraction_over_10: close(0.9983333333333334),
+        fraction_over_15: close(0.9966666666666667),
+        fraction_over_20: close(0.9649999999999999),
+        fraction_over_25: close(0.8649999999999999),
+        fraction_over_30: close(0.69),
+        fraction_over_50: close(0.030000000000000002),
+        fraction_over_100: close(0.01),
+      },
+    ]);
+  });
+
+  it('counts every bucket and base of 1-1000000-3400000 across the full live key range', async () => {
+    // Bucket keys as gnomAD returned them: exome 998,400…3,393,600 (500 buckets,
+    // its last records end before the stop) and genome 998,400…3,398,400 (501).
+    const keys = (last: number) =>
+      Array.from({ length: (last - 998400) / 4800 + 1 }, (_, i) => 998400 + i * 4800);
+    fakeCoverage({
+      data: {
+        region: {
+          coverage: {
+            exome: keys(3393600).map((pos) => covBin(pos, 30)),
+            genome: keys(3398400).map((pos) => covBin(pos, 30)),
+          },
+        },
+      },
+    });
+
+    const summaries = await coverageOf('region', '1-1000000-3400000');
+
+    expect(
+      summaries.map(({ source, positions, bucket_count, bucket_size }) => ({
+        source,
+        positions,
+        bucket_count,
+        bucket_size,
+      })),
+    ).toEqual([
+      { source: 'exome', positions: 2_398_400, bucket_count: 500, bucket_size: 4800 },
+      { source: 'genome', positions: 2_400_001, bucket_count: 501, bucket_size: 4800 },
+    ]);
+  });
+
+  it('keeps the live 20 bp buckets straddling start and stop and drops those wholly in the pad', async () => {
+    fakeCoverage(LIVE_COVERAGE['region:1-55039447-55049447']);
+
+    const summaries = await coverageOf('region', '1-55039447-55049447');
+
+    // Genome: 55,039,360–55,039,420 and 55,049,460–55,049,520 lie wholly in the
+    // ±75 bp pad and drop; 55,039,440 (13 bases from start) and 55,049,440
+    // (8 bases to stop) straddle the edges and stay.
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 320,
+        bucket_count: 16,
+        bucket_size: 20,
+        mean_depth: close(21.74737370416841),
+        median_depth: close(31.842105263157894),
+        fraction_over_1: close(0.78375),
+        fraction_over_5: close(0.7050000000000001),
+        fraction_over_10: close(0.63625),
+        fraction_over_15: close(0.606875),
+        fraction_over_20: close(0.5887500000000001),
+        fraction_over_25: close(0.56125),
+        fraction_over_30: close(0.43187499999999995),
+        fraction_over_50: close(0.035),
+        fraction_over_100: close(0.020000000000000004),
+      },
+      {
+        source: 'genome',
+        positions: 141,
+        bucket_count: 8,
+        bucket_size: 20,
+        mean_depth: close(33.60507578240496),
+        median_depth: 34,
+        fraction_over_1: 1,
+        fraction_over_5: 1,
+        fraction_over_10: 1,
+        fraction_over_15: 1,
+        fraction_over_20: close(0.9900000000000001),
+        fraction_over_25: close(0.92),
+        fraction_over_30: close(0.7649999999999999),
+        fraction_over_50: close(0.039999999999999994),
+        fraction_over_100: close(0.01),
+      },
+    ]);
+  });
+
+  it('keeps a zero bucket inside the exon intervals and never one outside them', async () => {
+    // One exon at 1,076–1,080 → queried interval 1,001–1,155 → 1 bp buckets.
+    // Inside: 1,001 (40×), 1,078 (no records, zero-filled), 1,155 (20×).
+    // Outside: the zero-filled intron at 1,000, 1,156, and 1,500.
+    const bucket = (pos: number, depth: number, frac: number) => ({
+      pos,
+      mean: depth,
+      median: depth,
+      over_1: frac,
+      over_5: frac,
+      over_10: frac,
+      over_15: frac,
+      over_20: frac,
+      over_25: frac,
+      over_30: frac,
+      over_50: frac,
+      over_100: frac,
+    });
+    fakeCoverage({
+      data: {
+        gene: {
+          chrom: '1',
+          exons: [{ start: 1076, stop: 1080 }],
+          coverage: {
+            exome: [
+              bucket(1000, 0, 0),
+              bucket(1001, 40, 0.9),
+              bucket(1078, 0, 0),
+              bucket(1155, 20, 0.6),
+              bucket(1156, 0, 0),
+              bucket(1500, 0, 0),
+            ],
+            genome: null,
+          },
+        },
+      },
+    });
+
+    const summaries = await coverageOf('gene', 'PCSK9');
+
+    // Every field differs from the all-buckets answer (mean 10, median 0, fractions 0.25).
+    expect(summaries).toEqual([
+      {
+        source: 'exome',
+        positions: 3,
+        bucket_count: 3,
+        bucket_size: 1,
+        mean_depth: 20,
+        median_depth: 20,
+        fraction_over_1: close(0.5),
+        fraction_over_5: close(0.5),
+        fraction_over_10: close(0.5),
+        fraction_over_15: close(0.5),
+        fraction_over_20: close(0.5),
+        fraction_over_25: close(0.5),
+        fraction_over_30: close(0.5),
+        fraction_over_50: close(0.5),
+        fraction_over_100: close(0.5),
+      },
+    ]);
+  });
+
+  it.each([
+    // [start, stop, bucket size] — size = max(floor((stop − start + 150) / 500), 1)
+    [1001, 1850, 1], // span 849 → 999 → 1 bp
+    [1001, 1851, 2], // span 850 → 1,000 → 2 bp
+    [1001, 1852, 2], // span 851 → 1,001 → 2 bp
+    [1001, 2349, 2], // span 1,348 → 1,498 → 2 bp
+    [1001, 2350, 2], // span 1,349 → 1,499 → 2 bp
+    [1001, 2351, 3], // span 1,350 → 1,500 → 3 bp
+  ])(
+    'derives the bucket size of region 1-%i-%i as %i bp from gnomAD’s formula',
+    async (start, stop, size) => {
+      // Two sparse buckets only, so the returned bucket count says nothing about size.
+      const first = Math.floor(start / size) * size;
+      const last = Math.floor(stop / size) * size;
+      fakeCoverage({
+        data: {
+          region: { coverage: { exome: [covBin(first, 30), covBin(last, 30)], genome: null } },
+        },
+      });
+
+      const [summary] = await coverageOf('region', `1-${start}-${stop}`);
+
+      expect(summary?.bucket_size).toBe(size);
+      expect(summary?.bucket_count).toBe(2);
+      expect(summary?.positions).toBe(first + size - start + (stop - last + 1));
+    },
+  );
+
+  it('pads, sorts, and merges overlapping and adjacent exons as gnomAD does', async () => {
+    // Exons listed 3′→5′ as a minus-strand feature can arrive. Padded: 1,576–2,001,
+    // 1,001–1,575, 1,025–1,275. The third nests in the second; the first starts one
+    // base past the second's end, so all three merge to 1,001–2,001 (Σ stop − start
+    // = 1,000 → 2 bp buckets). Unmerged, the sizes sum to 999 → 1 bp buckets.
+    fakeCoverage({
+      data: {
+        gene: {
+          chrom: '1',
+          exons: [
+            { start: 1651, stop: 1926 },
+            { start: 1076, stop: 1500 },
+            { start: 1100, stop: 1200 },
+          ],
+          coverage: {
+            exome: [
+              covBin(998, 0), // 998–999: before the interval
+              covBin(1000, 30), // 1,000–1,001: one base inside
+              covBin(1574, 30), // 1,574–1,575 and 1,576–1,577 straddle the merge seam
+              covBin(1576, 30),
+              covBin(2000, 30), // 2,000–2,001: both bases inside
+              covBin(2002, 0), // 2,002–2,003: past the interval
+            ],
+            genome: null,
+          },
+        },
+      },
+    });
+
+    const [summary] = await coverageOf('gene', 'PCSK9');
+
+    expect(summary).toMatchObject({
+      bucket_size: 2,
+      bucket_count: 4,
+      positions: 7,
+      mean_depth: 30,
+    });
+  });
+
+  it('sizes feature buckets from the summed stop − start of the padded exons, not their base counts', async () => {
+    // Exon 1,076–1,925 pads to 1,001–2,000: stop − start = 999 → 1 bp buckets.
+    // Counting bases (1,000) instead would give 2 bp buckets.
+    fakeCoverage({
+      data: {
+        gene: {
+          chrom: '1',
+          exons: [{ start: 1076, stop: 1925 }],
+          coverage: { exome: [covBin(1001, 30), covBin(2000, 30)], genome: null },
+        },
+      },
+    });
+
+    const [summary] = await coverageOf('gene', 'PCSK9');
+
+    expect(summary).toMatchObject({ bucket_size: 1, bucket_count: 2, positions: 2 });
+  });
+
+  it('returns no summary for a track whose buckets all fall outside the exon intervals', async () => {
+    fakeCoverage({
+      data: {
+        transcript: {
+          chrom: '1',
+          exons: [{ start: 1076, stop: 1080 }],
+          coverage: {
+            exome: [covBin(5000, 0), covBin(5001, 0)],
+            genome: [covBin(1078, 25)],
+          },
+        },
+      },
+    });
+
+    const summaries = await coverageOf('transcript', 'ENST00000302118');
+
+    expect(summaries).toEqual([
+      expect.objectContaining({ source: 'genome', positions: 1, bucket_count: 1, mean_depth: 25 }),
+    ]);
   });
 });
 
@@ -513,7 +975,7 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
     async (message) => {
       const fetch = fakeReplies({
         status: 200,
-        body: JSON.stringify({ errors: [{ message, path: ['gene'] }], data: { gene: null } }),
+        body: JSON.stringify({ errors: [{ message }], data: { gene: null } }),
       });
       expectRetriedOut(await settle(listGene));
       expect(fetch).toHaveBeenCalledTimes(4);
@@ -535,7 +997,7 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
       {
         status: 200,
         body: JSON.stringify({
-          errors: [{ message: 'Service overloaded', path: ['variant'] }],
+          errors: [{ message: 'Service overloaded' }],
           data: { variant: null, clinvar_variant: null },
         }),
       },
@@ -552,7 +1014,7 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
     const fetch = fakeReplies({
       status: 200,
       body: JSON.stringify({
-        errors: [{ message: 'Multiple genes found for symbol ABC', path: ['gene'] }],
+        errors: [{ message: 'Multiple genes found for symbol ABC' }],
         data: { gene: null },
       }),
     });
@@ -562,4 +1024,279 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('GnomadService.getVariant — ClinVar attribution through the retry loop', () => {
+  const GNOMAD_ORIGIN = new URL(getServerConfig().gnomadApiBaseUrl).origin;
+  const ID = '1-55051215-G-GA';
+  const variant = {
+    variant_id: ID,
+    reference_genome: 'GRCh38',
+    rsids: ['rs527413419'],
+    flags: null,
+    exome: null,
+    genome: {
+      ac: 3,
+      an: 1_000,
+      af: 0.003,
+      homozygote_count: 0,
+      hemizygote_count: null,
+      populations: [],
+    },
+    transcript_consequences: null,
+    in_silico_predictors: null,
+  };
+  const ok = (data: unknown): Reply => ({ status: 200, body: JSON.stringify({ data }) });
+  const envelope = (message: string, data: unknown): Reply => ({
+    status: 200,
+    body: JSON.stringify({ errors: [{ message }], data }),
+  });
+  /** gnomAD's combined reply when an error sits beside a resolved variant. */
+  const erroredCombined = envelope('Invalid variant ID', { variant, clinvar_variant: null });
+  const overloaded = (data: unknown) => envelope('Service overloaded', data);
+
+  type Route = Reply | ((init: RequestInit | undefined) => Promise<Response>);
+
+  /**
+   * Fake gnomAD per GraphQL operation and record the operation each request
+   * named. A request to another origin, or naming an operation without a route,
+   * throws instead of reaching the network.
+   */
+  function fakeOperations(routes: Record<string, Route>) {
+    const operations: string[] = [];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url).origin !== GNOMAD_ORIGIN) throw new Error(`Unmocked fetch to ${url}`);
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      const operation = /query\s+(\w+)/.exec(query)?.[1] ?? 'anonymous';
+      operations.push(operation);
+      const route = routes[operation];
+      if (!route) throw new Error(`Unmocked gnomAD operation ${operation}`);
+      if (typeof route === 'function') return route(init);
+      return new Response(route.body, {
+        status: route.status,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    return { fetch, operations };
+  }
+
+  /** A request that stays pending until its signal aborts, as a stalled upstream does. */
+  const hang = (init: RequestInit | undefined) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    });
+
+  const lookup = (id: string, ctx = createMockContext()) =>
+    svc.getVariant(id, svc.resolveDatasetContext('gnomad_r4'), ctx);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('retries "Service overloaded" beside a null variant on the combined request only', async () => {
+    const { operations } = fakeOperations({
+      GnomadVariant: overloaded({ variant: null, clinvar_variant: null }),
+    });
+
+    expect(await settle(() => lookup(ID))).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable', retryAttempts: 4 },
+    });
+    expect(operations).toEqual(Array(4).fill('GnomadVariant'));
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('fails the item as upstream_unavailable when the split variant-only request stays overloaded', async () => {
+    const { operations } = fakeOperations({
+      GnomadVariant: erroredCombined,
+      GnomadVariantOnly: overloaded({ variant }),
+    });
+
+    expect(await settle(() => lookup(ID))).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable', retryAttempts: 4 },
+    });
+    expect(operations).toEqual(['GnomadVariant', ...Array(4).fill('GnomadVariantOnly')]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('recovers the split variant-only request once a transient error clears', async () => {
+    let attempt = 0;
+    const { operations } = fakeOperations({
+      GnomadVariant: erroredCombined,
+      GnomadVariantOnly: async () => {
+        attempt += 1;
+        const reply = attempt < 3 ? overloaded({ variant: null }) : ok({ variant });
+        return new Response(reply.body, { status: reply.status });
+      },
+      GnomadClinvar: ok({ clinvar_variant: null }),
+    });
+
+    expect(await settle(() => lookup(ID))).toMatchObject({
+      variant_id: ID,
+      ac: 3,
+      clinvar_unavailable: false,
+    });
+    expect(operations).toEqual([
+      'GnomadVariant',
+      'GnomadVariantOnly',
+      'GnomadVariantOnly',
+      'GnomadVariantOnly',
+      'GnomadClinvar',
+    ]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it.each<[string, Reply]>([
+    ['"Service overloaded" through every retry', overloaded({ clinvar_variant: null })],
+    ['an HTTP 503', { status: 503, body: 'Service Unavailable' }],
+    [
+      'an HTTP 400 rate limit',
+      { status: 400, body: graphqlErrors('Query rate limit exceeded. Please try again later.') },
+    ],
+  ])(
+    'degrades a coordinate ID to clinvar_unavailable when the ClinVar-only request answers %s',
+    async (_label, reply) => {
+      const { operations } = fakeOperations({
+        GnomadVariant: erroredCombined,
+        GnomadVariantOnly: ok({ variant }),
+        GnomadClinvar: reply,
+      });
+
+      expect(await settle(() => lookup(ID))).toMatchObject({
+        variant_id: ID,
+        ac: 3,
+        clinvar: null,
+        clinvar_unavailable: true,
+      });
+      expect(operations).toEqual([
+        'GnomadVariant',
+        'GnomadVariantOnly',
+        ...Array(4).fill('GnomadClinvar'),
+      ]);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it.each<[string, Reply]>([
+    ['"Service overloaded" through every retry', overloaded({ clinvar_variant: null })],
+    ['an HTTP 503', { status: 503, body: 'Service Unavailable' }],
+    [
+      'an HTTP 500 GraphQL error',
+      { status: 500, body: graphqlErrors('An unknown error occurred') },
+    ],
+  ])(
+    'degrades an rsID to clinvar_unavailable when its ClinVar request answers %s',
+    async (_label, reply) => {
+      const { operations } = fakeOperations({
+        GnomadVariantByRsid: ok({ variant }),
+        GnomadClinvar: reply,
+      });
+
+      expect(await settle(() => lookup('rs527413419'))).toMatchObject({
+        variant_id: ID,
+        clinvar: null,
+        clinvar_unavailable: true,
+      });
+      expect(operations).toEqual(['GnomadVariantByRsid', ...Array(4).fill('GnomadClinvar')]);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it.each([
+    ['a coordinate ID', ID, { GnomadVariant: erroredCombined, GnomadVariantOnly: ok({ variant }) }],
+    ['an rsID', 'rs527413419', { GnomadVariantByRsid: ok({ variant }) }],
+  ])(
+    'ends a stalled ClinVar request for %s at the lookup budget, not after every per-attempt timeout',
+    async (_label, id, routes) => {
+      const { operations } = fakeOperations({ ...routes, GnomadClinvar: hang });
+      let settled: unknown;
+      void lookup(id).then(
+        (value) => {
+          settled = value;
+        },
+        (error: unknown) => {
+          settled = error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(CLINVAR_LOOKUP_BUDGET_MS - 1);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(settled).toMatchObject({ variant_id: ID, clinvar: null, clinvar_unavailable: true });
+      // The 45 s budget outlasts one 30 s per-attempt timeout, so a stall gets one retry, not three.
+      expect(operations.filter((operation) => operation === 'GnomadClinvar')).toHaveLength(2);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('skips the ClinVar request when the lookup budget is already spent', async () => {
+    const { operations } = fakeOperations({ GnomadVariantByRsid: ok({ variant }) });
+
+    const record = await settle(() =>
+      svc.getVariant('rs527413419', svc.resolveDatasetContext('gnomad_r4'), createMockContext(), {
+        startedAt: Date.now() - CLINVAR_LOOKUP_BUDGET_MS,
+      }),
+    );
+
+    expect(record).toMatchObject({ variant_id: ID, clinvar_unavailable: true });
+    expect(operations).toEqual(['GnomadVariantByRsid']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('rejects a call cancelled before its ClinVar lookup, even with the budget spent', async () => {
+    const controller = new AbortController();
+    const { operations } = fakeOperations({
+      GnomadVariantByRsid: async () => {
+        controller.abort(new Error('client cancelled'));
+        return new Response(JSON.stringify({ data: { variant } }), { status: 200 });
+      },
+    });
+
+    const outcome = await settle(() =>
+      svc.getVariant(
+        'rs527413419',
+        svc.resolveDatasetContext('gnomad_r4'),
+        createMockContext({ signal: controller.signal }),
+        { startedAt: Date.now() - CLINVAR_LOOKUP_BUDGET_MS },
+      ),
+    );
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).not.toHaveProperty('variant_id');
+    expect(operations).toEqual(['GnomadVariantByRsid']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it.each([
+    ['a coordinate ID', ID, { GnomadVariant: erroredCombined, GnomadVariantOnly: ok({ variant }) }],
+    ['an rsID', 'rs527413419', { GnomadVariantByRsid: ok({ variant }) }],
+  ])(
+    'rejects %s cancelled during its ClinVar request instead of degrading it',
+    async (_label, id, routes) => {
+      const controller = new AbortController();
+      const { operations } = fakeOperations({
+        ...routes,
+        GnomadClinvar: (init) => {
+          queueMicrotask(() => controller.abort(new Error('client cancelled')));
+          return hang(init);
+        },
+      });
+
+      const outcome = await settle(() =>
+        lookup(id, createMockContext({ signal: controller.signal })),
+      );
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).not.toHaveProperty('variant_id');
+      expect(operations.at(-1)).toBe('GnomadClinvar');
+    },
+  );
 });

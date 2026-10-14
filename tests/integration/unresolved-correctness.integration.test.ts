@@ -5,6 +5,7 @@
  * @module tests/integration/unresolved-correctness.integration.test
  */
 
+import { readFileSync } from 'node:fs';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,17 +39,40 @@ function variant(variantId: string, referenceGenome = 'GRCh38') {
   };
 }
 
+const GNOMAD_ORIGIN = new URL(getServerConfig().gnomadApiBaseUrl).origin;
+
+/** The GraphQL operation name a request document declares (`query GnomadClinvar(…)` → `GnomadClinvar`). */
+function operationOf(request: GraphqlRequest): string {
+  return /query\s+(\w+)/.exec(request.query)?.[1] ?? 'anonymous';
+}
+
+/** Fake gnomAD's GraphQL API; any request to another origin throws rather than reaching the network. */
 function fakeGraphql(responder: (request: GraphqlRequest) => unknown): {
   requests: GraphqlRequest[];
   fetch: ReturnType<typeof vi.spyOn>;
 } {
   const requests: GraphqlRequest[] = [];
-  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (new URL(url).origin !== GNOMAD_ORIGIN) throw new Error(`Unmocked fetch to ${url}`);
     const request = JSON.parse(typeof init?.body === 'string' ? init.body : '') as GraphqlRequest;
     requests.push(request);
     return new Response(JSON.stringify(responder(request)));
   });
   return { requests, fetch };
+}
+
+/**
+ * Answer each gnomAD operation from its own route; an operation without a route
+ * throws, so a request the code under test should not send fails the test.
+ */
+function fakeOperations(routes: Record<string, (request: GraphqlRequest) => unknown>) {
+  const fake = fakeGraphql((request) => {
+    const route = routes[operationOf(request)];
+    if (!route) throw new Error(`Unmocked gnomAD operation ${operationOf(request)}`);
+    return route(request);
+  });
+  return { ...fake, operations: () => fake.requests.map(operationOf) };
 }
 
 async function rejectAfterRetries(operation: () => Promise<unknown>): Promise<unknown> {
@@ -332,13 +356,19 @@ describe('GraphQL error and partial-data contracts', () => {
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
   it('returns usable variant data when only the optional ClinVar join errors', async () => {
-    fakeGraphql(({ variables }) => ({
-      errors: [{ message: 'ClinVar resolver temporarily unavailable', path: ['clinvar_variant'] }],
-      data: {
-        variant: variant(String(variables.variantId)),
-        clinvar_variant: null,
-      },
-    }));
+    const { operations } = fakeOperations({
+      GnomadVariant: ({ variables }) => ({
+        errors: [{ message: 'ClinVar resolver temporarily unavailable' }],
+        data: { variant: variant(String(variables.variantId)), clinvar_variant: null },
+      }),
+      GnomadVariantOnly: ({ variables }) => ({
+        data: { variant: variant(String(variables.variantId)) },
+      }),
+      GnomadClinvar: () => ({
+        errors: [{ message: 'ClinVar resolver temporarily unavailable' }],
+        data: { clinvar_variant: null },
+      }),
+    });
     const svc = new GnomadService(getServerConfig());
 
     const result = await svc.getVariant(
@@ -352,42 +382,21 @@ describe('GraphQL error and partial-data contracts', () => {
       clinvar: null,
       clinvar_unavailable: true,
     });
+    expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
-  it.each([
-    ['required variant field', ['variant']],
-    ['nested optional field', ['clinvar_variant', 'review_status']],
-    ['missing path', undefined],
-  ])('rejects GraphQL errors outside the exact ClinVar path: %s', async (_label, path) => {
-    fakeGraphql(({ variables }) => ({
-      errors: [{ message: 'resolver failed', ...(path ? { path } : {}) }],
-      data: {
-        variant: variant(String(variables.variantId)),
-        clinvar_variant: null,
-      },
-    }));
-    const svc = new GnomadService(getServerConfig());
-
-    await expect(
-      svc.getVariant('1-100-A-T', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
-    ).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-      data: { reason: 'graphql_error' },
-    });
-  });
-
-  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/20
-  it.each([undefined, ['variant']])(
-    'keeps not-found errors outside the exact optional ClinVar path fatal: %j',
-    async (path) => {
-      fakeGraphql(({ variables }) => ({
-        errors: [{ message: 'ClinVar variant not found', ...(path ? { path } : {}) }],
-        data: {
-          variant: variant(String(variables.variantId)),
-          clinvar_variant: null,
-        },
-      }));
+  it.each(['resolver failed', 'ClinVar variant not found'])(
+    'keeps a variant-root failure fatal when the variant-only reply repeats "%s"',
+    async (message) => {
+      const failing = ({ variables }: GraphqlRequest) => ({
+        errors: [{ message }],
+        data: { variant: variant(String(variables.variantId)), clinvar_variant: null },
+      });
+      const { operations } = fakeOperations({
+        GnomadVariant: failing,
+        GnomadVariantOnly: failing,
+      });
       const svc = new GnomadService(getServerConfig());
 
       await expect(
@@ -396,8 +405,182 @@ describe('GraphQL error and partial-data contracts', () => {
         code: JsonRpcErrorCode.ValidationError,
         data: { reason: 'graphql_error' },
       });
+      expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly']);
     },
   );
+});
+
+describe('ClinVar attribution by request', () => {
+  /** gnomAD's live reply to the combined document when only its ClinVar resolver fails: no `path`. */
+  const live = JSON.parse(
+    readFileSync(
+      new URL('../fixtures/gnomad-variant-clinvar-error.live.json', import.meta.url),
+      'utf8',
+    ),
+  ) as {
+    errors: { message: string }[];
+    data: { variant: ReturnType<typeof variant>; clinvar_variant: null };
+  };
+  const LIVE_ID = '1-55051215-G-GA';
+  const clinvarEntry = {
+    clinical_significance: 'Pathogenic',
+    review_status: 'criteria provided, single submitter',
+    gold_stars: 1,
+    clinvar_variation_id: '440395',
+  };
+  const lookup = (id: string, ctx = createMockContext()) => {
+    const svc = new GnomadService(getServerConfig());
+    return svc.getVariant(id, svc.resolveDatasetContext('gnomad_r4'), ctx);
+  };
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('keeps a clean combined reply to one request', async () => {
+    const { operations } = fakeOperations({
+      GnomadVariant: () => ({
+        data: { variant: live.data.variant, clinvar_variant: clinvarEntry },
+      }),
+    });
+
+    const result = await lookup(LIVE_ID);
+
+    expect(result).toMatchObject({
+      variant_id: LIVE_ID,
+      rsids: ['rs527413419'],
+      clinvar: clinvarEntry,
+      clinvar_unavailable: false,
+    });
+    expect(operations()).toEqual(['GnomadVariant']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('keeps the record when the live pathless ClinVar error recurs on the ClinVar-only request', async () => {
+    expect(live.errors).toEqual([{ message: 'Invalid variant ID' }]);
+    const { requests, operations } = fakeOperations({
+      GnomadVariant: () => live,
+      GnomadVariantOnly: () => ({ data: { variant: live.data.variant } }),
+      GnomadClinvar: () => ({ errors: live.errors, data: { clinvar_variant: null } }),
+    });
+
+    const result = await lookup(LIVE_ID);
+
+    expect(result).toMatchObject({
+      variant_id: LIVE_ID,
+      rsids: ['rs527413419'],
+      clinvar: null,
+      clinvar_unavailable: true,
+    });
+    expect(result?.ac).toBeGreaterThan(0);
+    expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+    expect(requests.map((request) => request.variables)).toEqual([
+      { variantId: LIVE_ID, dataset: 'gnomad_r4', referenceGenome: 'GRCh38' },
+      { variantId: LIVE_ID, dataset: 'gnomad_r4' },
+      { variantId: LIVE_ID, referenceGenome: 'GRCh38' },
+    ]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('takes the record from the split replies when both come back clean', async () => {
+    const { operations } = fakeOperations({
+      GnomadVariant: () => ({
+        errors: live.errors,
+        data: { variant: { ...variant(LIVE_ID), flags: ['from_combined'] }, clinvar_variant: null },
+      }),
+      GnomadVariantOnly: () => ({
+        data: { variant: { ...variant(LIVE_ID), flags: ['from_split'] } },
+      }),
+      GnomadClinvar: () => ({ data: { clinvar_variant: clinvarEntry } }),
+    });
+
+    const result = await lookup(LIVE_ID);
+
+    expect(result).toMatchObject({
+      variant_id: LIVE_ID,
+      flags: ['from_split'],
+      clinvar: clinvarEntry,
+      clinvar_unavailable: false,
+    });
+    expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('splits without reading a combined reply whose variant came back nulled inside', async () => {
+    const nulledInside = variant(LIVE_ID);
+    const { operations } = fakeOperations({
+      GnomadVariant: () => ({
+        errors: [{ message: 'An unknown error occurred' }],
+        data: {
+          variant: { ...nulledInside, exome: { ...nulledInside.exome, populations: [null] } },
+          clinvar_variant: null,
+        },
+      }),
+      GnomadVariantOnly: () => ({ data: { variant: variant(LIVE_ID) } }),
+      GnomadClinvar: () => ({ data: { clinvar_variant: clinvarEntry } }),
+    });
+
+    const result = await lookup(LIVE_ID);
+
+    expect(result).toMatchObject({
+      variant_id: LIVE_ID,
+      clinvar: clinvarEntry,
+      clinvar_unavailable: false,
+    });
+    expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('splits instead of retrying the combined request when a transient error sits beside a populated variant', async () => {
+    vi.useFakeTimers();
+    const { operations } = fakeOperations({
+      GnomadVariant: () => ({
+        errors: [{ message: 'Service overloaded' }],
+        data: { variant: variant(LIVE_ID), clinvar_variant: null },
+      }),
+      GnomadVariantOnly: () => ({ data: { variant: variant(LIVE_ID) } }),
+      GnomadClinvar: () => ({ data: { clinvar_variant: null } }),
+    });
+
+    const result = await rejectAfterRetries(() => lookup(LIVE_ID));
+
+    expect(result).toMatchObject({
+      variant_id: LIVE_ID,
+      clinvar: null,
+      clinvar_unavailable: false,
+    });
+    expect(operations()).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('keeps an rsID record when the ClinVar-only request fails with a pathless error', async () => {
+    const { requests, operations } = fakeOperations({
+      GnomadVariantByRsid: () => ({ data: { variant: live.data.variant } }),
+      GnomadClinvar: () => ({
+        errors: [{ message: 'An unknown error occurred' }],
+        data: { clinvar_variant: null },
+      }),
+    });
+
+    const result = await lookup('rs527413419');
+
+    expect(result).toMatchObject({ variant_id: LIVE_ID, clinvar: null, clinvar_unavailable: true });
+    expect(operations()).toEqual(['GnomadVariantByRsid', 'GnomadClinvar']);
+    expect(requests[1]?.variables).toEqual({ variantId: LIVE_ID, referenceGenome: 'GRCh38' });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('keeps variant(rsid:) strict: its own error still fails the item without a ClinVar request', async () => {
+    const { operations } = fakeOperations({
+      GnomadVariantByRsid: () => ({
+        errors: [{ message: 'An unknown error occurred' }],
+        data: { variant: live.data.variant },
+      }),
+    });
+
+    await expect(lookup('rs527413419')).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'graphql_error' },
+    });
+    expect(operations()).toEqual(['GnomadVariantByRsid']);
+  });
 });
 
 describe('coordinate-ID absence', () => {
@@ -413,7 +596,6 @@ describe('coordinate-ID absence', () => {
   it.each([
     ['live shape, ClinVar null', [{ message: 'Variant not found' }], null],
     ['live shape, ClinVar populated', [{ message: 'Variant not found' }], clinvarRecord],
-    ['error at the variant path', [{ message: 'Variant not found', path: ['variant'] }], null],
     [
       'repeated pathless not-found errors',
       [{ message: 'Variant not found' }, { message: 'Variant not found' }],
@@ -437,13 +619,10 @@ describe('coordinate-ID absence', () => {
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
+  // A populated variant beside an error splits (#44): the variant-only reply
+  // repeats the error, so the item fails without a ClinVar request.
   it.each([
-    ['not-found beside a populated variant, no path', [{ message: 'Variant not found' }], true],
-    [
-      'not-found beside a populated variant, variant path',
-      [{ message: 'Variant not found', path: ['variant'] }],
-      true,
-    ],
+    ['not-found beside a populated variant', [{ message: 'Variant not found' }], true],
     ['Invalid variant ID', [{ message: 'Invalid variant ID' }], false],
     ['Multiple variants found', [{ message: 'Multiple variants found' }], false],
     [
@@ -451,18 +630,8 @@ describe('coordinate-ID absence', () => {
       [{ message: 'Variant not found' }, { message: 'Unexpected resolver failure' }],
       false,
     ],
-    [
-      'not-found mixed with a ClinVar-path error',
-      [
-        { message: 'Variant not found' },
-        { message: 'ClinVar resolver failed', path: ['clinvar_variant'] },
-      ],
-      false,
-    ],
-    ['nested path', [{ message: 'Variant not found', path: ['variant', 'exome'] }], false],
-    ['unrelated path', [{ message: 'Variant not found', path: ['gene'] }], false],
   ])('keeps %s a fatal graphql_error', async (_label, errors, populated) => {
-    const { fetch } = fakeGraphql(({ variables }) => ({
+    const { fetch, requests } = fakeGraphql(({ variables }) => ({
       errors,
       data: {
         variant: populated ? variant(String(variables.variantId)) : null,
@@ -477,7 +646,10 @@ describe('coordinate-ID absence', () => {
       code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'graphql_error', retryable: false },
     });
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(populated ? 2 : 1);
+    expect(requests.map(operationOf)).toEqual(
+      populated ? ['GnomadVariant', 'GnomadVariantOnly'] : ['GnomadVariant'],
+    );
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25

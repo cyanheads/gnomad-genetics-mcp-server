@@ -34,6 +34,7 @@ import {
   TRANSCRIPT_COVERAGE_QUERY,
   TRANSCRIPT_VARIANTS_QUERY,
   VARIANT_BY_RSID_QUERY,
+  VARIANT_ONLY_QUERY,
   VARIANT_QUERY,
   VARIANT_SEARCH_QUERY,
 } from './queries.js';
@@ -86,6 +87,14 @@ const INVALID_REGION_MESSAGE = /^(?:Invalid chromosome: |Region st(?:art|op) mus
 /** gnomAD's HTTP 500 messages for a region too wide, or holding too many variants, to serve. */
 const REGION_TOO_LARGE_MESSAGE =
   /^(?:This region has too many variants to display|Select a smaller region to view variants|Coverage is not available for a region this large)/;
+
+/**
+ * How long after a variant lookup starts its ClinVar-only request may still run,
+ * across every attempt and backoff. The join is best-effort, so past this it is
+ * reported unavailable rather than holding a resolved record until an MCP
+ * client's 60 s request timeout, which this leaves 15 s of margin under.
+ */
+export const CLINVAR_LOOKUP_BUDGET_MS = 45_000;
 
 /** v4/v3 are GRCh38; v2.1 and ExAC are GRCh37. */
 function refGenomeForDataset(dataset: Dataset): ReferenceGenome {
@@ -257,22 +266,17 @@ const VariantResponse = z.object({
   clinvar_variant: RawClinVar,
 });
 
-const VariantByRsidResponse = z.object({ variant: RawVariant });
+/** A reply to a document whose only root is `variant` (by variantId or by rsid). */
+const VariantRootResponse = z.object({ variant: RawVariant });
 const ClinVarOnlyResponse = z.object({ clinvar_variant: RawClinVar });
 const VariantSearchResponse = z.object({
   variant_search: z.array(z.object({ variant_id: z.string() })),
 });
 
+/** gnomAD's errors carry `message` alone — never a `path` — so nothing here keys on one. */
 const GraphqlEnvelope = z.object({
   data: z.unknown().optional(),
-  errors: z
-    .array(
-      z.object({
-        message: z.string(),
-        path: z.array(z.union([z.string(), z.number()])).optional(),
-      }),
-    )
-    .optional(),
+  errors: z.array(z.object({ message: z.string() })).optional(),
 });
 
 const ConstraintMetrics = z.object({
@@ -381,8 +385,10 @@ const RawCoverage = z
   })
   .nullable();
 
+const RawExon = z.object({ start: z.number(), stop: z.number() });
+
 const RawFeatureCoverage = z
-  .object({ chrom: z.string(), coverage: RawCoverage })
+  .object({ chrom: z.string(), exons: z.array(RawExon), coverage: RawCoverage })
   .nullable()
   .optional();
 
@@ -394,6 +400,64 @@ const CoverageResponse = z.object({
 
 type RawListVariantT = z.infer<typeof RawListVariant>;
 type RawCoverageBinT = z.infer<typeof RawCoverageBin>;
+
+/** A closed 1-based genomic interval. */
+interface Interval {
+  start: number;
+  stop: number;
+}
+
+/**
+ * The target intervals a coverage summary covers and the width of gnomAD's
+ * histogram buckets for that target, mirroring `coverage-queries.ts` in
+ * gnomad-browser's graphql-api. Bucket keys are multiples of `bucketSize`, so
+ * bucket `pos` spans `pos..pos + bucketSize − 1`.
+ */
+interface CoverageWindow {
+  bucketSize: number;
+  intervals: Interval[];
+}
+
+/** gnomAD's bucket width for a queried size: max(floor(size / 500), 1) bp. */
+const coverageBucketSize = (size: number): number => Math.max(Math.floor(size / 500), 1);
+
+/**
+ * A region's window. gnomAD sizes its buckets from the span plus its ±75 bp
+ * query pad (stop − start + 150), so spans under 850 bp keep 1 bp buckets; the
+ * summary covers the requested start..stop, not the pad.
+ */
+function regionCoverageWindow({ start, stop }: Interval): CoverageWindow {
+  return { intervals: [{ start, stop }], bucketSize: coverageBucketSize(stop - start + 150) };
+}
+
+/**
+ * A gene's or transcript's window: every exon padded by 75 bp, sorted, and
+ * merged where intervals overlap or abut, sized by the sum of stop − start —
+ * the intervals gnomAD queries. Coverage between them (introns) is never
+ * queried; gnomAD's histogram zero-fills it.
+ */
+function featureCoverageWindow(exons: readonly Interval[]): CoverageWindow {
+  const padded = exons
+    .map((exon) => ({ start: exon.start - 75, stop: exon.stop + 75 }))
+    .sort((a, b) => a.start - b.start);
+  const merged: Interval[] = [];
+  for (const interval of padded) {
+    const last = merged.at(-1);
+    if (last && interval.start <= last.stop + 1) last.stop = Math.max(last.stop, interval.stop);
+    else merged.push(interval);
+  }
+  const size = merged.reduce((sum, { start, stop }) => sum + stop - start, 0);
+  return { intervals: merged, bucketSize: coverageBucketSize(size) };
+}
+
+/** Bases of `pos..pos + bucketSize − 1` that fall inside the window's intervals. */
+function basesInWindow(pos: number, { bucketSize, intervals }: CoverageWindow): number {
+  const end = pos + bucketSize - 1;
+  return intervals.reduce(
+    (sum, { start, stop }) => sum + Math.max(0, Math.min(end, stop) - Math.max(pos, start) + 1),
+    0,
+  );
+}
 
 /** Classify a VEP consequence term into the four-bucket consequence class. */
 const LOF_TERMS = new Set([
@@ -418,6 +482,46 @@ function classifyConsequence(term: string | null): ConsequenceClass {
 /** True when a GraphQL `data` payload holds an explicit null at the named root field. */
 function isNullRoot(data: unknown, root: string): boolean {
   return typeof data === 'object' && data !== null && Reflect.get(data, root) === null;
+}
+
+/** True when a GraphQL `data` payload holds a value at the named root field. */
+function isPopulatedRoot(data: unknown, root: string): boolean {
+  return typeof data === 'object' && data !== null && Reflect.get(data, root) != null;
+}
+
+interface GraphqlOptions {
+  /**
+   * A nullable root field whose null, beside only not-found errors, is absence
+   * rather than a failure. Without it, not-found errors beside any `data` are.
+   */
+  absentRoot?: string;
+  /** One wall-clock budget across every attempt and backoff, in milliseconds. */
+  deadlineMs?: number;
+  /**
+   * Marks an operation whose target gnomAD can refuse as a bad or oversized
+   * region (the variant-list and coverage queries), so those HTTP 500 messages
+   * reach the caller as its own error.
+   */
+  relayRegionRejections?: boolean;
+}
+
+interface ExchangeOptions extends GraphqlOptions {
+  /**
+   * A root field whose value, when errors arrive beside it, returns the reply
+   * as `partial`, unjudged and unread: the errors cannot be attributed to a
+   * root without a request of its own, and a field nulled inside the reply
+   * could fail validation, so the caller re-sends each root alone.
+   */
+  partialRoot?: string;
+}
+
+/** A judged GraphQL reply, or `partial` when errors arrived beside a populated `partialRoot`. */
+type Exchange<T> = { partial: false; data: T } | { partial: true };
+
+/** A ClinVar join's outcome: the entry (null when none), or `unavailable` when the lookup failed. */
+interface ClinvarLookup {
+  clinvar: z.infer<typeof RawClinVar>;
+  unavailable: boolean;
 }
 
 /** AF from counts: ac/an, or null when an is 0/absent. */
@@ -498,35 +602,39 @@ export class GnomadService {
     if (next) next();
   }
 
-  /**
-   * Execute a GraphQL document with retry + concurrency cap + typed validation.
-   * `absentRoot` names a nullable root field whose null, beside only not-found
-   * errors that are pathless or at that root, is absence rather than a failure —
-   * for an operation whose `allowedErrorPath` turns off the generic not-found
-   * fallback. `relayRegionRejections` marks an operation whose target gnomAD
-   * can refuse as a bad or oversized region (the variant-list and coverage
-   * queries), so those HTTP 500 messages reach the caller as its own error.
-   */
-  private graphql<T>(
+  /** Execute a GraphQL document and return its judged `data` — see {@link exchange}. */
+  private async graphql<T>(
     query: string,
     variables: Record<string, unknown>,
     schema: z.ZodType<T>,
     operation: string,
     ctx: Context,
-    options?: {
-      allowedErrorPath?: readonly (string | number)[];
-      acceptPartialData?: (data: T) => boolean;
-      onAllowedPartial?: () => void;
-      absentRoot?: string;
-      relayRegionRejections?: boolean;
-    },
+    options?: GraphqlOptions,
   ): Promise<T> {
+    const reply = await this.exchange(query, variables, schema, operation, ctx, options);
+    // GraphqlOptions carries no `partialRoot`, so every reply here is judged.
+    if (reply.partial) throw new Error(`${operation}: partial reply without a partialRoot`);
+    return reply.data;
+  }
+
+  /**
+   * Execute a GraphQL document with retry + concurrency cap + typed validation.
+   * Every attempt's fetch is bounded by what is left of `deadlineMs`, when set.
+   */
+  private exchange<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    schema: z.ZodType<T>,
+    operation: string,
+    ctx: Context,
+    options?: ExchangeOptions,
+  ): Promise<Exchange<T>> {
     const reqCtx = requestContextService.createRequestContext({
       operation,
       parentContext: ctx,
     });
     return withRetry(
-      async () => {
+      async ({ signal, remainingMs }) => {
         await this.acquireSlot();
         try {
           // fetchWithTimeout throws a status-mapped McpError on non-2xx whose data
@@ -534,22 +642,27 @@ export class GnomadService {
           // A region rejection relays gnomAD's message alone; everything else is
           // sanitized so none of that reaches the client. The typed
           // validation/not-found paths below raise their own clean errors.
-          const response = await fetchWithTimeout(this.baseUrl, this.timeoutMs, reqCtx, {
+          const timeoutMs = Math.min(this.timeoutMs, remainingMs);
+          const response = await fetchWithTimeout(this.baseUrl, timeoutMs, reqCtx, {
             method: 'POST',
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ query, variables }),
-            signal: ctx.signal,
+            signal,
           }).catch((err: unknown) => {
             const rejection = options?.relayRegionRejections ? regionRejection(err) : undefined;
             if (rejection) throw rejection;
             return sanitizeUpstreamError(err, 'gnomAD');
           });
           const body = await readUpstreamJson(response, 'gnomAD', GraphqlEnvelope);
-          let hasAllowedPartialErrors = false;
           if (body.errors?.length) {
+            if (options?.partialRoot != null && isPopulatedRoot(body.data, options.partialRoot)) {
+              return { partial: true };
+            }
             const message = body.errors.map((e) => e.message).join('; ');
-            // On a nullable root (gene, transcript, variant) gnomAD reports load
-            // shedding and rate limiting as GraphQL errors on an HTTP 200; retry those.
+            // gnomAD reports load shedding (Request timed out, Service overloaded)
+            // as GraphQL errors on an HTTP 200; retry those. Its rate limit arrives
+            // as an HTTP 400, which the fetch path already retries; the pattern
+            // also covers rate-limit wording on a 200.
             if (body.errors.some((e) => TRANSIENT_GRAPHQL_MESSAGE.test(e.message))) {
               upstreamUnavailable(new Error(`gnomAD GraphQL error: ${message}`), 'gnomAD');
             }
@@ -558,35 +671,16 @@ export class GnomadService {
             // found"] + data:{gene:null}). That is a not-found signal, not a fault —
             // fall through to parse so the entity surfaces as null and the caller's
             // typed not-found contract (gene_not_found / variant_not_found) fires.
-            // Any other error (Invalid variant ID, Multiple variants found, …) is a
-            // real failure and still throws.
+            // With `absentRoot`, only that root's null counts: the combined variant
+            // document answers "Variant not found" beside `variant: null` and
+            // whatever `clinvar_variant` holds, since ClinVar may know a variant
+            // gnomAD lacks. Any other error (Invalid variant ID, Multiple variants
+            // found, …) is a real failure and still throws.
             const allNotFound = body.errors.every((e) => NOT_FOUND_MESSAGE.test(e.message));
-            const allAllowed =
-              options?.allowedErrorPath != null &&
-              body.errors.every((error) => {
-                const path = error.path;
-                const allowed = options.allowedErrorPath;
-                if (!path || !allowed || path.length !== allowed.length) return false;
-                return path.every((segment, index) => segment === allowed[index]);
-              });
-            const allowedPartial = allAllowed && body.data != null;
-            const legacyNotFound =
-              options?.allowedErrorPath == null && allNotFound && body.data != null;
-            // gnomAD strips `path` from every error, so its "Variant not found"
-            // arrives pathless beside `variant: null` — and beside whatever
-            // `clinvar_variant` holds, since ClinVar may know a variant gnomAD lacks.
             const absentRoot = options?.absentRoot;
             const absent =
-              absentRoot != null &&
-              allNotFound &&
-              body.errors.every(
-                (error) =>
-                  error.path == null || (error.path.length === 1 && error.path[0] === absentRoot),
-              ) &&
-              isNullRoot(body.data, absentRoot);
-            if (allowedPartial) {
-              hasAllowedPartialErrors = true;
-            } else if (!legacyNotFound && !absent) {
+              absentRoot != null ? isNullRoot(body.data, absentRoot) : body.data != null;
+            if (!allNotFound || !absent) {
               throw validationError(`gnomAD GraphQL error: ${message}`, {
                 reason: 'graphql_error',
                 retryable: false,
@@ -594,19 +688,8 @@ export class GnomadService {
             }
           }
           try {
-            const data = schema.parse(body.data);
-            if (hasAllowedPartialErrors) {
-              if (!options?.acceptPartialData?.(data)) {
-                throw validationError('gnomAD GraphQL error affected required response data.', {
-                  reason: 'graphql_error',
-                  retryable: false,
-                });
-              }
-              options.onAllowedPartial?.();
-            }
-            return data;
+            return { partial: false, data: schema.parse(body.data) };
           } catch (err) {
-            if (err instanceof McpError) throw err;
             invalidUpstreamResponse(err, 'gnomAD');
           }
         } finally {
@@ -619,6 +702,7 @@ export class GnomadService {
         baseDelayMs: 1500,
         maxRetries: 3,
         signal: ctx.signal,
+        ...(options?.deadlineMs !== undefined && { deadlineMs: options.deadlineMs }),
       },
     );
   }
@@ -632,22 +716,31 @@ export class GnomadService {
    * GraphQL error (a per-item failure for the batch handler). A mitochondrial
    * coordinate ID is refused before any fetch: gnomAD's nuclear `variant` field
    * answers it with "Variant not found" even when gnomAD holds the variant.
+   *
+   * A coordinate ID costs one combined request. gnomAD's errors carry no `path`,
+   * so errors beside a populated `variant` cannot say which root failed: that
+   * reply is discarded and the lookup re-sent as a variant-only request, then a
+   * ClinVar-only request, each judged alone. The ClinVar join is best-effort —
+   * see {@link lookupClinvar}; `startedAt` (epoch ms, default now) anchors its
+   * budget, so a batch passes one value to give every item the same deadline.
    */
   async getVariant(
     idOrRsid: string,
     dsCtx: DatasetContext,
     ctx: Context,
+    { startedAt = Date.now() }: { startedAt?: number } = {},
   ): Promise<VariantRecord | null> {
     if (MITOCHONDRIAL_VARIANT_ID.test(idOrRsid)) {
       throw mitochondrialUnsupported(`Variant "${idOrRsid}"`);
     }
+    const clinvarDeadline = startedAt + CLINVAR_LOOKUP_BUDGET_MS;
     if (RSID.test(idOrRsid)) {
-      let resolved: z.infer<typeof VariantByRsidResponse>;
+      let resolved: z.infer<typeof VariantRootResponse>;
       try {
         resolved = await this.graphql(
           VARIANT_BY_RSID_QUERY,
           { rsid: idOrRsid, dataset: dsCtx.dataset },
-          VariantByRsidResponse,
+          VariantRootResponse,
           'gnomad.getVariantByRsid',
           ctx,
         );
@@ -680,48 +773,86 @@ export class GnomadService {
       }
       if (!resolved.variant) return null;
       this.assertVariantBuild(resolved.variant, dsCtx);
-      let clinvarUnavailable = false;
-      const clinvar = await this.graphql(
-        CLINVAR_BY_VARIANT_ID_QUERY,
-        { variantId: resolved.variant.variant_id, referenceGenome: dsCtx.reference_genome },
-        ClinVarOnlyResponse,
-        'gnomad.getClinvar',
-        ctx,
-        {
-          allowedErrorPath: ['clinvar_variant'],
-          acceptPartialData: (data) => data.clinvar_variant === null,
-          onAllowedPartial: () => {
-            clinvarUnavailable = true;
-          },
-        },
-      );
-      return this.normalizeVariant(
-        resolved.variant,
-        clinvar.clinvar_variant,
+      const clinvar = await this.lookupClinvar(
+        resolved.variant.variant_id,
         dsCtx,
-        clinvarUnavailable,
+        ctx,
+        clinvarDeadline,
       );
+      return this.normalizeVariant(resolved.variant, clinvar, dsCtx);
     }
-    let clinvarUnavailable = false;
-    const data = await this.graphql(
+    const combined = await this.exchange(
       VARIANT_QUERY,
       { variantId: idOrRsid, dataset: dsCtx.dataset, referenceGenome: dsCtx.reference_genome },
       VariantResponse,
       'gnomad.getVariant',
       ctx,
-      {
-        allowedErrorPath: ['clinvar_variant'],
-        acceptPartialData: (response) =>
-          response.variant !== null && response.clinvar_variant === null,
-        onAllowedPartial: () => {
-          clinvarUnavailable = true;
-        },
-        absentRoot: 'variant',
-      },
+      { absentRoot: 'variant', partialRoot: 'variant' },
     );
-    if (!data.variant) return null;
-    this.assertVariantBuild(data.variant, dsCtx);
-    return this.normalizeVariant(data.variant, data.clinvar_variant, dsCtx, clinvarUnavailable);
+    if (!combined.partial) {
+      const { variant, clinvar_variant } = combined.data;
+      if (!variant) return null;
+      this.assertVariantBuild(variant, dsCtx);
+      return this.normalizeVariant(
+        variant,
+        { clinvar: clinvar_variant, unavailable: false },
+        dsCtx,
+      );
+    }
+    const { variant } = await this.graphql(
+      VARIANT_ONLY_QUERY,
+      { variantId: idOrRsid, dataset: dsCtx.dataset },
+      VariantRootResponse,
+      'gnomad.getVariantOnly',
+      ctx,
+      { absentRoot: 'variant' },
+    );
+    if (!variant) return null;
+    this.assertVariantBuild(variant, dsCtx);
+    const clinvar = await this.lookupClinvar(idOrRsid, dsCtx, ctx, clinvarDeadline);
+    return this.normalizeVariant(variant, clinvar, dsCtx);
+  }
+
+  /**
+   * The ClinVar join as a request of its own, so any failure it reports is
+   * ClinVar's. Best-effort: a GraphQL error, an HTTP failure, a transient error
+   * outlasting the retries, or `deadline` (epoch ms) passing — across every
+   * attempt and backoff — returns `unavailable` beside the population record
+   * instead of failing it. A cancelled caller still rejects.
+   */
+  private async lookupClinvar(
+    variantId: string,
+    dsCtx: DatasetContext,
+    ctx: Context,
+    deadline: number,
+  ): Promise<ClinvarLookup> {
+    ctx.signal.throwIfAborted();
+    const deadlineMs = deadline - Date.now();
+    if (deadlineMs <= 0) {
+      ctx.log.warning('Skipped the ClinVar lookup: its time budget was already spent.', {
+        variantId,
+      });
+      return { clinvar: null, unavailable: true };
+    }
+    try {
+      const data = await this.graphql(
+        CLINVAR_BY_VARIANT_ID_QUERY,
+        { variantId, referenceGenome: dsCtx.reference_genome },
+        ClinVarOnlyResponse,
+        'gnomad.getClinvar',
+        ctx,
+        { deadlineMs },
+      );
+      return { clinvar: data.clinvar_variant, unavailable: false };
+    } catch (err) {
+      if (ctx.signal.aborted || !(err instanceof McpError)) throw err;
+      ctx.log.warning('ClinVar lookup failed; returning the population record without it.', {
+        variantId,
+        reason: err.data?.reason,
+        error: err.message,
+      });
+      return { clinvar: null, unavailable: true };
+    }
   }
 
   private assertVariantBuild(
@@ -738,9 +869,8 @@ export class GnomadService {
 
   private normalizeVariant(
     v: NonNullable<z.infer<typeof RawVariant>>,
-    clinvar: z.infer<typeof RawClinVar>,
+    { clinvar, unavailable }: ClinvarLookup,
     dsCtx: DatasetContext,
-    clinvarUnavailable = false,
   ): VariantRecord {
     const source: VariantRecord['source'] = [];
     const populations: PopulationFreq[] = [];
@@ -811,7 +941,7 @@ export class GnomadService {
               clinvar_variation_id: clinvar.clinvar_variation_id,
             }
           : null,
-      clinvar_unavailable: clinvarUnavailable,
+      clinvar_unavailable: unavailable,
     };
   }
 
@@ -930,31 +1060,44 @@ export class GnomadService {
     const data = await this.graphql(query, variables, CoverageResponse, 'gnomad.getCoverage', ctx, {
       relayRegionRejections: true,
     });
-    assertNuclearFeature(target, data.gene ?? data.transcript);
-    const cov = (data.gene ?? data.transcript ?? data.region)?.coverage;
+    const feature = data.gene ?? data.transcript;
+    assertNuclearFeature(target, feature);
+    // gnomAD answers with histogram buckets, not bases, and zero-fills every
+    // bucket between its first and last record. A region is queried ±75 bp
+    // around start..stop; a gene or transcript over its merged exons ±75 bp, so
+    // its histogram spans the introns between them. Summarize exactly the
+    // buckets overlapping the target intervals — a zero-filled bucket inside
+    // them is genuinely uncovered, one outside them was never queried.
+    const window = feature
+      ? featureCoverageWindow(feature.exons)
+      : regionBounds && regionCoverageWindow(regionBounds);
+    const cov = (feature ?? data.region)?.coverage;
+    if (!cov || !window) return [];
     const summaries: CoverageSummary[] = [];
     for (const [src, rawBins] of [
-      ['exome', cov?.exome],
-      ['genome', cov?.genome],
+      ['exome', cov.exome],
+      ['genome', cov.genome],
     ] as const) {
-      if (!rawBins || rawBins.length === 0) continue;
-      // gnomAD pads a region(...) query to a fixed ~151 bp window centered on the
-      // request, so region coverage bins include ±~75 bp of neighboring bases.
-      // Bound them to the requested start..stop so the summary describes exactly
-      // the requested span (a single-position region → one bin). Gene and
-      // transcript bins are the intended whole-feature set and pass through as-is.
-      const bins = regionBounds
-        ? rawBins.filter(
-            (b) => b.pos != null && b.pos >= regionBounds.start && b.pos <= regionBounds.stop,
-          )
-        : rawBins;
+      const bins: RawCoverageBinT[] = [];
+      let positions = 0;
+      for (const bin of rawBins ?? []) {
+        const bases = bin.pos == null ? 0 : basesInWindow(bin.pos, window);
+        if (bases === 0) continue;
+        bins.push(bin);
+        positions += bases;
+      }
       if (bins.length === 0) continue;
-      summaries.push(this.summarizeCoverage(src, bins));
+      summaries.push(this.summarizeCoverage(src, bins, positions, window.bucketSize));
     }
     return summaries;
   }
 
-  private summarizeCoverage(source: 'exome' | 'genome', bins: RawCoverageBinT[]): CoverageSummary {
+  private summarizeCoverage(
+    source: 'exome' | 'genome',
+    bins: RawCoverageBinT[],
+    positions: number,
+    bucketSize: number,
+  ): CoverageSummary {
     const mean = (key: keyof RawCoverageBinT): number | null => {
       const vals = bins.map((b) => b[key]).filter((v): v is number => v != null);
       if (vals.length === 0) return null;
@@ -970,7 +1113,9 @@ export class GnomadService {
     })();
     return {
       source,
-      positions: bins.length,
+      positions,
+      bucket_count: bins.length,
+      bucket_size: bucketSize,
       mean_depth: mean('mean'),
       median_depth: median,
       fraction_over_1: mean('over_1'),
@@ -987,8 +1132,8 @@ export class GnomadService {
 
   /**
    * Build the right query + variables for a gene/transcript/region target. For
-   * region targets, also returns the parsed `regionBounds` so callers can bound
-   * the padded window gnomAD returns (see getCoverage); absent for gene/transcript.
+   * region targets, also returns the parsed `regionBounds`, the interval
+   * getCoverage summarizes; gene and transcript intervals come from their exons.
    */
   private buildTargetQuery(
     target: GenomeTarget,

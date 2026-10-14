@@ -404,7 +404,9 @@ describe('gnomad_get_variant handler', () => {
 
     expect(result.found).toHaveLength(1);
     expect(result.failed).toHaveLength(0);
-    expect(getVariant).toHaveBeenCalledWith('rs11591147', expect.anything(), expect.anything());
+    expect(getVariant).toHaveBeenCalledWith('rs11591147', expect.anything(), expect.anything(), {
+      startedAt: expect.any(Number),
+    });
   });
 });
 
@@ -607,6 +609,105 @@ describe('gnomad_get_variant failed[] reasons and recovery hints', () => {
       const thrownBy = 'thrownBy' in entry ? entry.thrownBy : undefined;
       expect(thrownBy).toBe(ownRejection ? undefined : 'service');
     }
+  });
+});
+
+describe('gnomad_get_variant ClinVar side lookups in a batch', () => {
+  const GNOMAD_ORIGIN = new URL(getServerConfig().gnomadApiBaseUrl).origin;
+  const clinvarEntry = {
+    clinical_significance: 'Likely benign',
+    review_status: 'criteria provided, single submitter',
+    gold_stars: 1,
+    clinvar_variation_id: '1234',
+  };
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
+  it('degrades only the items whose ClinVar lookup stalls, and settles at the lookup budget', async () => {
+    vi.useFakeTimers();
+    const operations: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url).origin !== GNOMAD_ORIGIN) throw new Error(`Unmocked fetch to ${url}`);
+      const { query, variables } = JSON.parse(String(init?.body)) as GraphqlRequest;
+      const operation = /query\s+(\w+)/.exec(query)?.[1] ?? 'anonymous';
+      operations.push(operation);
+      const id = String(variables.variantId);
+      switch (operation) {
+        case 'GnomadVariant':
+          if (id === '1-400-A-T') {
+            return Response.json({
+              errors: [{ message: 'Variant not found' }],
+              data: { variant: null, clinvar_variant: null },
+            });
+          }
+          if (id === '1-200-A-T') {
+            return Response.json({
+              errors: [{ message: 'Invalid variant ID' }],
+              data: { variant: minimalVariant(id), clinvar_variant: null },
+            });
+          }
+          return Response.json({
+            data: {
+              variant: minimalVariant(id),
+              clinvar_variant: id === '1-100-A-T' ? clinvarEntry : null,
+            },
+          });
+        case 'GnomadVariantOnly':
+          return Response.json({ data: { variant: minimalVariant(id) } });
+        case 'GnomadVariantByRsid':
+          return Response.json({ data: { variant: minimalVariant('3-300-A-T') } });
+        case 'GnomadClinvar':
+          return hang(init);
+        default:
+          throw new Error(`Unmocked gnomAD operation ${operation}`);
+      }
+    });
+    initGnomadService({} as never, {} as never);
+
+    let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    void runToolContract(gnomadGetVariant, {
+      variants: ['1-100-A-T', '1-200-A-T', 'rs300', '1-400-A-T', '1-500-A-T'],
+      dataset: 'gnomad_r4',
+    }).then((settled) => {
+      result = settled;
+    });
+    await vi.advanceTimersByTimeAsync(serviceModule.CLINVAR_LOOKUP_BUDGET_MS - 1);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(result?.isError).toBeFalsy();
+    const out = result?.structuredContent as {
+      found: { variant_id: string; clinvar: unknown; clinvar_unavailable: boolean }[];
+      failed: { variant: string; reason: string }[];
+      notice?: string;
+    };
+    expect(out.found.map((v) => [v.variant_id, v.clinvar, v.clinvar_unavailable])).toEqual([
+      ['1-100-A-T', clinvarEntry, false],
+      ['1-200-A-T', null, true],
+      ['3-300-A-T', null, true],
+      ['1-500-A-T', null, false],
+    ]);
+    expect(out.failed.map((item) => [item.variant, item.reason])).toEqual([
+      ['1-400-A-T', 'variant_not_found'],
+    ]);
+    expect(out.notice).toBe(
+      'ClinVar annotation was unavailable for: 1-200-A-T, 3-300-A-T. Population data is complete.',
+    );
+    const text = textOf(result?.content ?? []);
+    const section = (id: string) => text.slice(text.indexOf(`## ${id}`)).split('\n## ')[0] ?? '';
+    expect(section('1-100-A-T')).toContain('**ClinVar:** Likely benign | stars 1');
+    expect(section('1-200-A-T')).toContain('**ClinVar:** unavailable');
+    expect(section('3-300-A-T')).toContain('**ClinVar:** unavailable');
+    expect(section('1-500-A-T')).toContain('**ClinVar:** no entry');
+    expect(text).toContain('ClinVar annotation was unavailable for: 1-200-A-T, 3-300-A-T.');
+    expect([...operations].sort()).toEqual(
+      [
+        ...Array(4).fill('GnomadVariant'),
+        'GnomadVariantOnly',
+        'GnomadVariantByRsid',
+        ...Array(4).fill('GnomadClinvar'),
+      ].sort(),
+    );
   });
 });
 
