@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-10-24 · ⚠️ Breaking
+
+Bound upstream calls and disclose coverage gaps.
+
 ## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-10-14
 
 A failed ClinVar join no longer drops the variant: gnomad_get_variant returns it with clinvar_unavailable: true. gnomad_get_coverage summaries cover only the buckets that overlap the target, so gene depths stop averaging in introns, and gain bucket_count and bucket_size.

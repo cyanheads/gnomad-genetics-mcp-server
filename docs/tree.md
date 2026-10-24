@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-10-14 13:53:13
+Generated on: 2026-10-24 19:05:13
 
 ```text
 gnomad-genetics-mcp-server/
@@ -139,6 +139,7 @@ gnomad-genetics-mcp-server/
 │   └── tree.ts
 ├── src/
 │   ├── config/
+│   │   ├── environment.ts
 │   │   └── server-config.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
@@ -169,10 +170,17 @@ gnomad-genetics-mcp-server/
 │   │   │   ├── queries.ts
 │   │   │   └── types.ts
 │   │   ├── canvas-accessor.ts
+│   │   ├── upstream-deadline.ts
 │   │   └── upstream-error.ts
 │   └── index.ts
 ├── tests/
 │   ├── fixtures/
+│   │   ├── coverage-tracks/
+│   │   │   ├── exac-55503800-55504600.response.json
+│   │   │   ├── gnomad_r2_1-55503800-55504600.response.json
+│   │   │   ├── gnomad_r3-55043800-55044600.response.json
+│   │   │   ├── gnomad_r4-55043800-55044600.response.json
+│   │   │   └── gnomad_r4-55043850-55044550.response.json
 │   │   ├── clinvar-esummary-heavy.live.json
 │   │   ├── clinvar-esummary.live.json
 │   │   ├── gnomad-coverage.live.json
@@ -188,10 +196,12 @@ gnomad-genetics-mcp-server/
 │   │   ├── canvas-staging.integration.test.ts
 │   │   ├── chromosome-scope.integration.test.ts
 │   │   ├── clinvar-boundary.integration.test.ts
+│   │   ├── coverage-availability.integration.test.ts
 │   │   ├── dataframe-tools.integration.test.ts
 │   │   ├── error-contracts.integration.test.ts
 │   │   ├── gnomad-boundary.integration.test.ts
 │   │   ├── known-issues.integration.test.ts
+│   │   ├── startup-config.integration.test.ts
 │   │   ├── unresolved-correctness.integration.test.ts
 │   │   └── upstream-errors.integration.test.ts
 │   ├── prompts/
@@ -202,11 +212,13 @@ gnomad-genetics-mcp-server/
 │   ├── services/
 │   │   ├── clinvar-service.test.ts
 │   │   ├── gnomad-service.test.ts
+│   │   ├── upstream-deadline.test.ts
 │   │   ├── upstream-error.test.ts
 │   │   └── upstream-leak.e2e.test.ts
 │   ├── smoke/
 │   │   └── tool-surface.smoke.test.ts
 │   ├── tools/
+│   │   ├── definition-config.test.ts
 │   │   ├── gnomad-dataframe-describe.test.ts
 │   │   ├── gnomad-dataframe-drop.test.ts
 │   │   ├── gnomad-dataframe-query.test.ts
@@ -215,7 +227,8 @@ gnomad-genetics-mcp-server/
 │   │   ├── gnomad-get-variant.batch-config.test.ts
 │   │   ├── gnomad-get-variant.test.ts
 │   │   ├── gnomad-list-gene-variants.test.ts
-│   │   └── gnomad-search-clinvar.test.ts
+│   │   ├── gnomad-search-clinvar.test.ts
+│   │   └── markdown-output.test.ts
 │   └── index.test.ts
 ├── .dockerignore
 ├── .env.example
