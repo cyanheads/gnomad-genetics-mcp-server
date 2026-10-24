@@ -30,6 +30,8 @@ function summary(source: 'exome' | 'genome'): CoverageSummary {
   return {
     source,
     positions: 100,
+    target_positions: 100,
+    missing_positions: 0,
     bucket_count: 100,
     bucket_size: 1,
     mean_depth: 45.2,
@@ -185,15 +187,17 @@ describe('gnomad_get_coverage handler', () => {
       .join('');
     expect(text).toBe(
       [
-        '## Coverage — gene PCSK9',
+        '**Coverage — gene:** PCSK9',
         '**Dataset:** gnomad_r4 (GRCh38)',
         '',
         '### exome (100 positions)',
+        '**Target bases:** 100 | **Missing bases:** 0 (callability unknown)',
         '**Buckets:** 100 × 1 bp',
         '**Mean depth:** 45.2 | **Median depth:** 44.0',
         '**Frac ≥:** 1×=100.0% 5×=99.0% 10×=98.0% 15×=97.0% 20×=95.0% 25×=90.0% 30×=85.0% 50×=50.0% 100×=10.0%',
         '',
         '### genome (100 positions)',
+        '**Target bases:** 100 | **Missing bases:** 0 (callability unknown)',
         '**Buckets:** 7 × 15 bp — depths and fractions average the buckets, not single bases',
         '**Mean depth:** 45.2 | **Median depth:** 44.0',
         '**Frac ≥:** 1×=100.0% 5×=99.0% 10×=98.0% 15×=97.0% 20×=95.0% 25×=90.0% 30×=85.0% 50×=50.0% 100×=10.0%',
@@ -234,10 +238,11 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
     ]);
     expect(textOf(result)).toBe(
       [
-        '## Coverage — gene PCSK9',
+        '**Coverage — gene:** PCSK9',
         '**Dataset:** gnomad_r4 (GRCh38)',
         '',
         '### genome (7811 positions)',
+        '**Target bases:** 7811 | **Missing bases:** 0 (callability unknown)',
         '**Buckets:** 535 × 15 bp — depths and fractions average the buckets, not single bases',
         '**Mean depth:** 32.5 | **Median depth:** 33.0',
         '**Frac ≥:** 1×=99.5% 5×=99.5% 10×=99.5% 15×=99.5% 20×=96.9% 25×=87.6% 30×=70.6% 50×=3.1% 100×=1.0%',
@@ -258,6 +263,8 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
         {
           source: 'exome',
           positions: 1,
+          target_positions: 1,
+          missing_positions: 0,
           bucket_count: 1,
           bucket_size: 1,
           mean_depth: 56.13959972474064,
@@ -275,6 +282,8 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
         {
           source: 'genome',
           positions: 1,
+          target_positions: 1,
+          missing_positions: 0,
           bucket_count: 1,
           bucket_size: 1,
           mean_depth: 35.59847702992943,
@@ -295,15 +304,17 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
     });
     expect(textOf(result)).toBe(
       [
-        '## Coverage — region 1-55039974-55039974',
+        '**Coverage — region:** 1-55039974-55039974',
         '**Dataset:** gnomad_r4 (GRCh38)',
         '',
         '### exome (1 positions)',
+        '**Target bases:** 1 | **Missing bases:** 0 (callability unknown)',
         '**Buckets:** 1 × 1 bp',
         '**Mean depth:** 56.1 | **Median depth:** 31.0',
         '**Frac ≥:** 1×=100.0% 5×=100.0% 10×=98.0% 15×=97.0% 20×=96.0% 25×=91.0% 30×=62.0% 50×=32.0% 100×=19.0%',
         '',
         '### genome (1 positions)',
+        '**Target bases:** 1 | **Missing bases:** 0 (callability unknown)',
         '**Buckets:** 1 × 1 bp',
         '**Mean depth:** 35.6 | **Median depth:** 34.0',
         '**Frac ≥:** 1×=100.0% 5×=100.0% 10×=100.0% 15×=100.0% 20×=100.0% 25×=94.0% 30×=80.0% 50×=9.0% 100×=1.0%',
@@ -347,7 +358,7 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
     expect(result.structuredContent).toMatchObject({
       summaries: [],
       notice: expect.stringMatching(
-        /^No coverage data for transcript "ENST00000302118" in gnomad_r4\./,
+        /^No exome coverage data for transcript "ENST00000302118" in gnomad_r4\./,
       ),
     });
     expect(textOf(result)).toContain('_No coverage data available._');

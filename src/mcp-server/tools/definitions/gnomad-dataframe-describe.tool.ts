@@ -8,6 +8,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
 export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
@@ -77,7 +78,11 @@ export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
     const lines: string[] = [];
     for (const t of result.tables) {
       lines.push(`## ${t.name} (${t.row_count} rows)`);
-      lines.push(t.columns.map((c) => `${c.name}:${c.type}`).join(', '));
+      lines.push(
+        t.columns
+          .map((c) => `${escapeMarkdownInline(c.name)}:${escapeMarkdownInline(c.type)}`)
+          .join(', '),
+      );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

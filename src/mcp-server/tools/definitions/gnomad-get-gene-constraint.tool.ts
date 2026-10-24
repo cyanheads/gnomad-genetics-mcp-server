@@ -9,6 +9,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import { datasetField, geneField, referenceGenomeField } from '../shared-schemas.js';
 
@@ -153,7 +154,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach gnomAD timed out.',
+      when: 'gnomAD attempts timed out or the shared 45 s call budget expired.',
       recovery: 'gnomAD did not answer in time; wait a few seconds, then retry the same gene.',
       thrownBy: 'service',
     },
@@ -198,7 +199,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     const num = (v: number | null, digits = 4) => (v != null ? v.toFixed(digits) : 'Not available');
     const note = RELEASE_NOTES[result.dataset];
     const lines = [
-      `## ${result.symbol} (${result.gene_id})`,
+      `**Gene:** ${escapeMarkdownInline(result.symbol)} (${escapeMarkdownInline(result.gene_id)})`,
       `**Dataset:** ${result.dataset} (${result.reference_genome})`,
       `**Constraint release:** ${result.constraint_release}${note ? ` (${note})` : ''}`,
       `**pLI:** ${num(result.pli)} | **LOEUF (oe_lof_upper):** ${num(result.oe_lof_upper)} [${num(result.oe_lof_lower)}–${num(result.oe_lof_upper)}] | **oe_lof (point estimate):** ${num(result.oe_lof)}`,
@@ -207,7 +208,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
       `**LoF obs/exp:** ${num(result.obs_lof, 1)} / ${num(result.exp_lof, 1)}`,
       `**Missense obs/exp:** ${num(result.obs_mis, 1)} / ${num(result.exp_mis, 1)}`,
       `**Synonymous obs/exp:** ${num(result.obs_syn, 1)} / ${num(result.exp_syn, 1)}`,
-      `**Constraint flags:** ${result.constraint_flags.length ? result.constraint_flags.join(', ') : 'none'}`,
+      `**Constraint flags:** ${result.constraint_flags.length ? result.constraint_flags.map(escapeMarkdownInline).join(', ') : 'none'}`,
     ];
     return [{ type: 'text', text: lines.join('\n') }];
   },

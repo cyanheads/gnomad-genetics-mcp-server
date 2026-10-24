@@ -11,6 +11,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { GeneVariantRow } from '@/services/gnomad/types.js';
 import { rowSchema, stagedLine, stageRows } from '../canvas-staging.js';
@@ -67,7 +68,7 @@ const GeneVariantRowSchema = z
 export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   title: 'gnomad-genetics-mcp-server: list gene variants',
   description:
-    'List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE != duckdb) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE=none) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -143,6 +144,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
         'Guidance when no variants matched, when the canvas is disabled and the preview is capped, and — when a table was staged — its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.',
       ),
   },
+  enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
   errors: [
     {
       reason: 'invalid_target',
@@ -202,7 +204,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach gnomAD timed out.',
+      when: 'gnomAD attempts timed out or the shared 45 s call budget expired.',
       recovery:
         'gnomAD did not answer in time; wait a few seconds and retry, or list a smaller region instead of a large gene.',
       thrownBy: 'service',
@@ -281,7 +283,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     for (const r of result.preview) {
       const af = r.af != null ? `${r.af} (${r.af.toExponential(3)})` : 'n/a';
       lines.push(
-        `- **${r.variant_id}** | ${r.consequence_class}${r.consequence ? ` (${r.consequence})` : ''} | AF ${af} | AC ${r.ac}/${r.an} | hom ${r.homozygote_count} | ${r.source || 'none'}${r.flags ? ` | flags ${r.flags}` : ''}`,
+        `- **${escapeMarkdownInline(r.variant_id)}** | ${r.consequence_class}${r.consequence ? ` (${escapeMarkdownInline(r.consequence)})` : ''} | AF ${af} | AC ${r.ac}/${r.an} | hom ${r.homozygote_count} | ${escapeMarkdownInline(r.source || 'none')}${r.flags ? ` | flags ${escapeMarkdownInline(r.flags)}` : ''}`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];

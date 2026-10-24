@@ -8,7 +8,10 @@
  * @module index
  */
 
+import './config/environment.js';
 import { createApp } from '@cyanheads/mcp-ts-core';
+import { normalizeEnv, resetConfig } from '@cyanheads/mcp-ts-core/config';
+import { getServerConfig } from './config/server-config.js';
 import { variantTriagePrompt } from './mcp-server/prompts/definitions/variant-triage.prompt.js';
 import { geneConstraintResource } from './mcp-server/resources/definitions/gene-constraint.resource.js';
 import { variantResource } from './mcp-server/resources/definitions/variant.resource.js';
@@ -23,6 +26,10 @@ import { gnomadSearchClinvar } from './mcp-server/tools/definitions/gnomad-searc
 import { setCanvas } from './services/canvas-accessor.js';
 import { initClinVarService } from './services/clinvar/clinvar-service.js';
 import { initGnomadService } from './services/gnomad/gnomad-service.js';
+
+// DataCanvas defaults on; set CANVAS_PROVIDER_TYPE=none to disable it.
+if (!normalizeEnv(process.env).CANVAS_PROVIDER_TYPE) process.env.CANVAS_PROVIDER_TYPE = 'duckdb';
+resetConfig();
 
 await createApp({
   name: 'gnomad-genetics-mcp-server',
@@ -40,10 +47,11 @@ await createApp({
   resources: [variantResource, geneConstraintResource],
   prompts: [variantTriagePrompt],
   instructions:
-    'Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; both are echoed in output. Per-ancestry allele frequencies are never collapsed to a single global AF. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this). gnomad_list_gene_variants and gnomad_search_clinvar stage results too large to inline on a DataCanvas (set CANVAS_PROVIDER_TYPE=duckdb) — inspect the staged table with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; both are echoed in output. Per-ancestry allele frequencies are never collapsed to a single global AF. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this). gnomad_list_gene_variants and gnomad_search_clinvar stage results too large to inline on a DataCanvas — inspect the staged table with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   // No per-session state and no ctx.requestInput gate, so the HTTP session store earns nothing.
   sessionMode: 'stateless',
   setup(core) {
+    getServerConfig();
     setCanvas(core.canvas);
     initGnomadService(core.config, core.storage);
     initClinVarService(core.config, core.storage);

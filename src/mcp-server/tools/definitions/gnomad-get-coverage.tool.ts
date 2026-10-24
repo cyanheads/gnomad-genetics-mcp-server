@@ -8,6 +8,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   datasetField,
@@ -34,6 +35,16 @@ const CoverageSummarySchema = z
       .number()
       .describe(
         'Target bases inside the summarized buckets: of start..stop for a region, of the exons ±75 bp for a gene or transcript. Falls short of the target when the track has no records at its edges (typically outside the exome capture); those bases are left out, not counted as zero depth.',
+      ),
+    target_positions: z
+      .number()
+      .describe(
+        'Total target bases: start..stop inclusive for a region, merged exons ±75 bp for a gene or transcript.',
+      ),
+    missing_positions: z
+      .number()
+      .describe(
+        'Target bases without returned coverage buckets (target_positions minus positions). Callability is unknown for these bases; they are not measured zero depth.',
       ),
     bucket_count: z
       .number()
@@ -123,8 +134,11 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     notice: z
       .string()
       .optional()
-      .describe('Guidance when no coverage data is available for the target.'),
+      .describe(
+        'Disclosure of missing target bases, missing supported tracks, or an explicitly requested unsupported track. Missing data leaves callability unknown.',
+      ),
   },
+  enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
   errors: [
     {
       reason: 'invalid_target',
@@ -184,7 +198,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach gnomAD timed out.',
+      when: 'gnomAD attempts timed out or the shared 45 s call budget expired.',
       recovery:
         'gnomAD did not answer in time; wait a few seconds and retry, or summarize a smaller region instead of a large gene.',
       thrownBy: 'service',
@@ -219,11 +233,33 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     if (input.coverage_source) {
       summaries = summaries.filter((s) => s.source === input.coverage_source);
     }
-    if (summaries.length === 0) {
-      ctx.enrich.notice(
-        `No ${input.coverage_source ? `${input.coverage_source} ` : ''}coverage data for ${target.kind} "${target.value}" in ${dsCtx.dataset}. The position may lie outside the callset, or the coverage track is unavailable for this dataset.`,
-      );
+    const supported = {
+      gnomad_r4: ['exome', 'genome'],
+      gnomad_r3: ['genome'],
+      gnomad_r2_1: ['exome', 'genome'],
+      exac: ['exome'],
+    } as const;
+    const requested = input.coverage_source ? [input.coverage_source] : supported[dsCtx.dataset];
+    const notices: string[] = [];
+    for (const source of requested) {
+      if (!(supported[dsCtx.dataset] as readonly string[]).includes(source)) {
+        notices.push(
+          `The ${source} coverage track is not supported in ${dsCtx.dataset}. Callability is unknown from this track.`,
+        );
+        continue;
+      }
+      const summary = summaries.find((item) => item.source === source);
+      if (!summary) {
+        notices.push(
+          `No ${source} coverage data for ${target.kind} "${target.value}" in ${dsCtx.dataset}. This supported track returned no target records; callability is unknown, not measured zero depth.`,
+        );
+      } else if (summary.missing_positions > 0) {
+        notices.push(
+          `${source}: ${summary.missing_positions} of ${summary.target_positions} target bases have no returned coverage buckets. Their callability is unknown; statistics describe only the ${summary.positions} observed bases.`,
+        );
+      }
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     ctx.log.info('gnomad_get_coverage resolved', {
       target: target.value,
@@ -245,11 +281,14 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     const pct = (v: number | null) => (v != null ? `${(v * 100).toFixed(1)}%` : 'Not available');
     const num = (v: number | null) => (v != null ? v.toFixed(1) : 'Not available');
     const lines = [
-      `## Coverage — ${result.target_kind} ${result.target}`,
+      `**Coverage — ${result.target_kind}:** ${escapeMarkdownInline(result.target)}`,
       `**Dataset:** ${result.dataset} (${result.reference_genome})`,
     ];
     for (const s of result.summaries) {
       lines.push('', `### ${s.source} (${s.positions} positions)`);
+      lines.push(
+        `**Target bases:** ${s.target_positions} | **Missing bases:** ${s.missing_positions} (callability unknown)`,
+      );
       lines.push(
         `**Buckets:** ${s.bucket_count} × ${s.bucket_size} bp${s.bucket_size > 1 ? ' — depths and fractions average the buckets, not single bases' : ''}`,
       );

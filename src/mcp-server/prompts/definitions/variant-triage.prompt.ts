@@ -72,7 +72,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
       const intro =
         '3. **Callability check (do not skip).** If step 1 returned the variant as absent or ultra-rare, confirm the *exact position* is well-covered before trusting the absence — gene-level coverage averages across the gene and can hide a poorly-covered base.';
       const tail =
-        'An absent variant at a well-covered position is informative; one at a poorly-covered position is uninterpretable — the absence may just be uncallable sequence. This step is the one analysts most often skip.';
+        'An absent variant at a well-covered position is informative; one at a poorly-covered position is uninterpretable — the absence may just be uncallable sequence. Missing coverage buckets or an unavailable track leave callability unknown, not zero depth; inspect missing_positions and notices before drawing a conclusion. This step is the one analysts most often skip.';
       if (normalizedVariant.kind === 'variant') {
         const [chrom, pos] = variant.split('-');
         return `${intro} Call \`gnomad_get_coverage(region: "${chrom}-${pos}-${pos}"${datasetClause})\` for the single-position region at ${chrom}-${pos}. ${tail}`;

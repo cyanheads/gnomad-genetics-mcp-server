@@ -664,7 +664,8 @@ function contractSuite<I>(surface: Surface<I>, scenarios: Scenario<I>[]): void {
         if (surface.carriesCode?.(scenario.input) ?? true) {
           expect(observed.code).toBe(entry.code);
         }
-        if (observed.text !== undefined) expect(observed.text).toContain(entry.recovery);
+        if (observed.text !== undefined)
+          expect(observed.text).toContain(entry.recovery.replaceAll('~', '\\~'));
       },
     );
   });
@@ -707,7 +708,7 @@ describe('upstream request counts behind the contract', () => {
   it.each([
     ['HTTP 503', always({ status: 503, text: 'Service Unavailable' }), 4],
     ['a body stream reset', always('reset-body'), 4],
-    ['a stalled body', always('stalled-body'), 4],
+    ['a stalled body', always('stalled-body'), 2],
     ['HTTP 403', always({ status: 403, text: 'Forbidden' }), 1],
     ['out-of-domain constraint metrics', always(OUT_OF_DOMAIN_CONSTRAINT), 1],
   ] as const)('%s → %i gnomAD request(s)', async (_label, route, count) => {

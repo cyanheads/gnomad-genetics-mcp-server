@@ -11,6 +11,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
   CLINVAR_OFFSET_MAX,
   CLINVAR_WINDOW_MAX,
@@ -195,6 +196,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
         'Guidance on completeness (the offset that continues the list, or an offset past the end), no-match results, a capped preview when the canvas is disabled, the staged table with its next steps (gnomad_dataframe_describe, then gnomad_dataframe_query), and which identifier to pass to gnomad_get_variant.',
       ),
   },
+  enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
   errors: [
     {
       reason: 'upstream_unavailable',
@@ -208,7 +210,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach NCBI E-utilities timed out.',
+      when: 'NCBI attempts timed out or the shared 45 s search-and-summary budget expired.',
       recovery:
         'NCBI did not answer in time; wait a few seconds and retry, or pass a smaller limit so the window needs fewer summary requests.',
       retryable: true,
@@ -324,12 +326,12 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     ];
     for (const r of result.preview) {
       lines.push(
-        `### ${r.title || r.accession}`,
-        `**VariationID:** ${r.clinvar_variation_id} | **Accession:** ${r.accession} | **Type:** ${r.obj_type}`,
-        `**GRCh38 variant ID:** ${r.grch38_variant_id ?? 'Not available'} | **rsIDs:** ${r.rsids || 'none'} | **Canonical SPDI:** ${r.canonical_spdi ?? 'Not available'}`,
-        `**Significance:** ${r.clinical_significance ?? 'Not available'} (${r.gold_stars}★) | **Review:** ${r.review_status ?? 'Not available'} | **Last evaluated:** ${r.last_evaluated ?? 'Not available'}`,
-        `**Consequences:** ${r.molecular_consequences || 'Not available'} | **Protein change:** ${r.protein_change || 'Not available'} | **Submissions:** ${r.submission_count}`,
-        `**Conditions:** ${r.conditions || 'Not available'}`,
+        `**Variant:** ${escapeMarkdownInline(r.title || r.accession)}`,
+        `**VariationID:** ${escapeMarkdownInline(r.clinvar_variation_id)} | **Accession:** ${escapeMarkdownInline(r.accession)} | **Type:** ${escapeMarkdownInline(r.obj_type)}`,
+        `**GRCh38 variant ID:** ${escapeMarkdownInline(r.grch38_variant_id ?? 'Not available')} | **rsIDs:** ${escapeMarkdownInline(r.rsids || 'none')} | **Canonical SPDI:** ${escapeMarkdownInline(r.canonical_spdi ?? 'Not available')}`,
+        `**Significance:** ${escapeMarkdownInline(r.clinical_significance ?? 'Not available')} (${r.gold_stars}★) | **Review:** ${escapeMarkdownInline(r.review_status ?? 'Not available')} | **Last evaluated:** ${escapeMarkdownInline(r.last_evaluated ?? 'Not available')}`,
+        `**Consequences:** ${escapeMarkdownInline(r.molecular_consequences || 'Not available')} | **Protein change:** ${escapeMarkdownInline(r.protein_change || 'Not available')} | **Submissions:** ${r.submission_count}`,
+        `**Conditions:** ${escapeMarkdownInline(r.conditions || 'Not available')}`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];

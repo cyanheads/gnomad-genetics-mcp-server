@@ -87,7 +87,7 @@ export const variantResource = resource('gnomad://variant/{dataset}/{variantId}'
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach gnomAD timed out.',
+      when: 'gnomAD attempts timed out or the shared 45 s read budget expired.',
       recovery: 'gnomAD did not answer in time; wait a few seconds, then read the variant again.',
       thrownBy: 'service',
     },

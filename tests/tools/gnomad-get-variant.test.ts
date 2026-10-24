@@ -489,7 +489,7 @@ const FAILURE_CASES: FailureCase[] = [
   {
     reason: 'upstream_timeout',
     id: '1-100-A-T',
-    fetches: 4,
+    fetches: 2,
     respond: (_request, init) => hang(init),
   },
   {
@@ -694,7 +694,8 @@ describe('gnomad_get_variant ClinVar side lookups in a batch', () => {
       'ClinVar annotation was unavailable for: 1-200-A-T, 3-300-A-T. Population data is complete.',
     );
     const text = textOf(result?.content ?? []);
-    const section = (id: string) => text.slice(text.indexOf(`## ${id}`)).split('\n## ')[0] ?? '';
+    const section = (id: string) =>
+      text.slice(text.indexOf(`**Variant:** ${id}`)).split('\n**Variant:** ')[0] ?? '';
     expect(section('1-100-A-T')).toContain('**ClinVar:** Likely benign | stars 1');
     expect(section('1-200-A-T')).toContain('**ClinVar:** unavailable');
     expect(section('3-300-A-T')).toContain('**ClinVar:** unavailable');

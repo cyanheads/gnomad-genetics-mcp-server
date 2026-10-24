@@ -1256,7 +1256,7 @@ describe('gnomad_search_clinvar notice and staging matrix (#21, #33, #35)', () =
     for (const part of parts) expect(text).toContain(part as string);
     // Both surfaces carry the same preview rows.
     const preview = sc.preview as ClinVarRow[];
-    expect(text.match(/^### /gm)?.length ?? 0).toBe(preview.length);
+    expect(text.match(/^\*\*Variant:\*\* /gm)?.length ?? 0).toBe(preview.length);
     for (const r of preview) expect(text).toContain(`**VariationID:** ${r.clinvar_variation_id} `);
   });
 });

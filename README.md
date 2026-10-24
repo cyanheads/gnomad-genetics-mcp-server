@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/gnomad-genetics-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/gnomad-genetics-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/gnomad-genetics-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -53,6 +53,8 @@ Population genetics over gnomAD (Broad Institute), with ClinVar clinical signifi
 
 All resource data is also reachable via tools. The list tools (`gnomad_list_gene_variants`, `gnomad_get_coverage`, `gnomad_search_clinvar`) return analytical row sets rather than stable single-URI documents, so they are not exposed as resources — call the tools instead.
 
+Upstream-backed tools and resource reads share one fixed 45 s deadline across queue waits, retries, response bodies, and chained requests. A variant batch shares that deadline across every item: completed results remain available and unfinished primary items report `upstream_timeout`. Caller cancellation rejects the call.
+
 ### Prompts
 
 | Prompt | Description |
@@ -65,8 +67,8 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Up to 25 IDs per call (raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId on chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
 - A bad or absent ID lands in `failed[]` as `{ variant, error, reason, recovery }` without failing the rest; mitochondrial IDs (`M`, `MT`, `chrM`) fail as `mitochondrial_unsupported`, and an ambiguous rsID adds `candidates`
-- Returns the full per-ancestry frequency vector, the callset(s) carrying the variant, quality flags, consequence, predictor scores, and ClinVar significance. If ClinVar is unavailable (or the lookup passes 45 s), the record returns with `clinvar: null` and `clinvar_unavailable: true`
-- An empty `found[]` means the variant is not in the chosen dataset; check `gnomad_get_coverage` before concluding true absence
+- Returns the full per-ancestry frequency vector, the callset(s) carrying the variant, quality flags, consequence, predictor scores, and ClinVar significance. A validated population record survives ClinVar-only failure or expiry with `clinvar: null` and `clinvar_unavailable: true`
+- Inspect each `failed[].reason`: only `variant_not_found` reports absence from the chosen dataset; timeouts and other failures leave presence unknown. Check `gnomad_get_coverage` before interpreting an absent variant
 
 ---
 
@@ -92,15 +94,16 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 - Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive, chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix); a blank `gene` or `transcript_id` counts as omitted
 - A region must span less than 2,500,000 bp and hold at most ~30,000 variants, otherwise it fails as `invalid_region` or `region_too_large`; mitochondrial targets fail as `mitochondrial_unsupported`
 - Optional filters: one `consequence_class` (`lof` / `missense` / `synonymous` / `other`) and/or a maximum allele frequency
-- A result too large to inline is staged on the `gene_variants` canvas table, returned as `canvas_id` and `table_name` beside a preview; inspect it with `gnomad_dataframe_describe` and query it with `gnomad_dataframe_query`. Passing a `canvas_id` always writes `gene_variants` there, replacing the previous table. With the canvas disabled (`CANVAS_PROVIDER_TYPE` != `duckdb`), only the capped preview is returned
+- A result too large to inline is staged on the `gene_variants` canvas table, returned as `canvas_id` and `table_name` beside a preview; inspect it with `gnomad_dataframe_describe` and query it with `gnomad_dataframe_query`. Passing a `canvas_id` always writes `gene_variants` there, replacing the previous table. With the canvas disabled (`CANVAS_PROVIDER_TYPE=none`), only the capped preview is returned
 
 ---
 
 ### `gnomad_get_coverage` <sub>tool</sub>
 
 - Supply exactly one of `gene`, `transcript_id`, or `region` (same `chrom-start-stop` form and 2,500,000 bp limit as `gnomad_list_gene_variants`); a blank `gene` or `transcript_id` counts as omitted. Bad regions fail as `invalid_region` or `region_too_large`, and mitochondrial targets as `mitochondrial_unsupported`
-- Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track, with `bucket_size`, `bucket_count`, and `positions` for each
+- Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track, with `bucket_size`, `bucket_count`, observed `positions`, total `target_positions`, and unobserved `missing_positions` for each. Missing bases leave callability unknown; statistics describe only returned buckets, with no invented zero depths
 - `coverage_source` narrows to one track (`exome` / `genome`); omit to return every available track
+- Notices disclose partial targets and missing supported tracks. An explicitly requested unsupported track is identified separately (v3 has genome only; ExAC has exome only)
 
 ---
 
@@ -117,7 +120,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Runs single-statement, read-only SQL `SELECT`s against a table staged by `gnomad_list_gene_variants` or `gnomad_search_clinvar` (`gene_variants` or `clinvar_variants`); writes, DDL, and file/HTTP table functions are rejected
 - Pages with `offset` (default 0) and `limit` (default 100, max 500); returns `rows`, `columns`, `total`, `truncated`, and `next_offset` (follow it until `null`). Use an `ORDER BY` on a unique key for stable paging, and filter or aggregate in SQL to get past the `CANVAS_DEFAULT_ROW_LIMIT` cap (10,000 by default)
-- A row over the 10,000-character page budget fails with `row_too_large`; without `CANVAS_PROVIDER_TYPE=duckdb` it fails with `canvas_disabled`
+- A row over the 10,000-character page budget fails with `row_too_large`; with `CANVAS_PROVIDER_TYPE=none` it fails with `canvas_disabled`
 
 ---
 
@@ -125,7 +128,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Lists every table staged on a canvas with its row count and column schema (name and DuckDB type)
 - Call it before writing SQL for `gnomad_dataframe_query`
-- Requires `CANVAS_PROVIDER_TYPE=duckdb` — otherwise fails with a `canvas_disabled` error
+- Fails with a `canvas_disabled` error when the canvas is turned off (`CANVAS_PROVIDER_TYPE=none`)
 
 ---
 
@@ -133,7 +136,7 @@ All resource data is also reachable via tools. The list tools (`gnomad_list_gene
 
 - Drops a named table from a canvas to reclaim memory (`destructiveHint: true`)
 - Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true`; absent from `tools/list` when off
-- An unknown or expired `canvas_id` fails as `canvas_not_found`; without `CANVAS_PROVIDER_TYPE=duckdb` it fails with `canvas_disabled`
+- An unknown or expired `canvas_id` fails as `canvas_not_found`; with `CANVAS_PROVIDER_TYPE=none` it fails with `canvas_disabled`
 
 ---
 
@@ -178,18 +181,40 @@ Agent-friendly output:
 
 ### Public Hosted Instance
 
-A public instance is available at `https://gnomad-genetics.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+A public instance is available at `https://gnomad-genetics.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own config shape.
+
+For Claude Code:
+
+```sh
+claude mcp add --transport http gnomad-genetics-mcp-server https://gnomad-genetics.caseyjhand.com/mcp
+```
+
+For Cline (`cline_mcp_settings.json`):
 
 ```json
 {
   "mcpServers": {
     "gnomad-genetics-mcp-server": {
-      "type": "streamable-http",
+      "type": "streamableHttp",
       "url": "https://gnomad-genetics.caseyjhand.com/mcp"
     }
   }
 }
 ```
+
+For Cursor (`mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "gnomad-genetics-mcp-server": {
+      "url": "https://gnomad-genetics.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+Claude Desktop adds remote servers under Settings → Connectors.
 
 ### Self-Hosted / Local
 
@@ -254,7 +279,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
-To enable the SQL analytics path, also set `CANVAS_PROVIDER_TYPE=duckdb` — `@duckdb/node-api` ships as a dependency, so nothing extra to install.
+The SQL analytics path runs on DuckDB by default — `@duckdb/node-api` ships as a dependency, so nothing extra to install. Set `CANVAS_PROVIDER_TYPE=none` to turn it off. The Claude Desktop bundle (`.mcpb`) ships without DuckDB's native bindings and runs with the canvas off.
 
 ### Prerequisites
 
@@ -292,16 +317,18 @@ cp .env.example .env
 
 All variables are optional; the server runs keyless with the defaults below.
 
+Node and Bun load the working directory's `.env` before building tool definitions. Exported values take precedence; blank values use the schema defaults. The advertised variant cap, its input validation, and the drop-tool registration gate use those same settings. Invalid server configuration fails startup with a banner naming the variable; `DEBUG=true` includes the stack.
+
 | Variable | Description | Default |
 |:---------|:------------|:--------|
 | `GNOMAD_API_BASE_URL` | gnomAD GraphQL endpoint. Override for a private mirror or testing. | `https://gnomad.broadinstitute.org/api` |
 | `GNOMAD_DEFAULT_DATASET` | Dataset used when a tool call omits `dataset` (`gnomad_r4` / `gnomad_r3` / `gnomad_r2_1` / `exac`). | `gnomad_r4` |
-| `GNOMAD_REQUEST_TIMEOUT_MS` | Per-request timeout against the GraphQL endpoint, in milliseconds. | `30000` |
+| `GNOMAD_REQUEST_TIMEOUT_MS` | Per-attempt gnomAD/NCBI timeout in milliseconds, bounded by the shared 45 s call deadline. | `30000` |
 | `GNOMAD_MAX_CONCURRENCY` | Cap on concurrent upstream requests — politeness against a community-funded API. | `2` |
 | `GNOMAD_MAX_VARIANT_BATCH` | Maximum variant IDs accepted per `gnomad_get_variant` call. | `25` |
 | `CLINVAR_BASE_URL` | NCBI E-utilities base URL for `gnomad_search_clinvar`. | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` |
 | `NCBI_API_KEY` | Optional NCBI key. Raises the E-utilities rate limit from 3 to 10 req/s. | — |
-| `CANVAS_PROVIDER_TYPE` | Set to `duckdb` to enable the spill/SQL path behind the list tools. When `none`, they return a capped inline preview. | `none` |
+| `CANVAS_PROVIDER_TYPE` | DataCanvas backend for the spill/SQL path behind the list tools. `none` disables it, and the list tools then return a capped inline preview. | `duckdb` |
 | `GNOMAD_DATAFRAME_DROP_ENABLED` | Gate for the opt-in `gnomad_dataframe_drop` tool. Off by default. | `false` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |

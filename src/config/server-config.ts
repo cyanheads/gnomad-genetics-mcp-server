@@ -6,7 +6,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
+import { normalizeEnv, parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 /** Dataset identifiers accepted on every tool — a subset of the gnomAD DatasetId enum. */
 export const GNOMAD_DATASETS = ['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac'] as const;
@@ -57,6 +57,24 @@ const ServerConfigSchema = z.object({
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 
 let _config: ServerConfig | undefined;
+
+/** Definition-only cap read; full configuration remains uncached and strictly validated in setup. */
+export function getVariantBatchCap(): number {
+  const schema = ServerConfigSchema.shape.maxVariantBatch;
+  const result = schema.safeParse(
+    normalizeEnv({ value: process.env.GNOMAD_MAX_VARIANT_BATCH }).value,
+  );
+  return result.success ? result.data : schema.parse(undefined);
+}
+
+/** Definition-only registration gate; invalid settings still fail full startup validation. */
+export function isDataframeDropEnabled(): boolean {
+  const schema = ServerConfigSchema.shape.dataframeDropEnabled;
+  const result = schema.safeParse(
+    normalizeEnv({ value: process.env.GNOMAD_DATAFRAME_DROP_ENABLED }).value,
+  );
+  return result.success ? result.data : schema.parse(undefined);
+}
 
 /** Lazy-parse and cache the server configuration. Safe under Workers env injection. */
 export function getServerConfig(): ServerConfig {

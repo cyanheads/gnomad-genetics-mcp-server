@@ -8,9 +8,11 @@
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import { remainingBudget, UPSTREAM_CALL_BUDGET_MS } from '@/services/upstream-deadline.js';
 import {
   invalidUpstreamResponse,
   readUpstreamJson,
@@ -217,7 +219,8 @@ export class ClinVarService {
   private readonly timeoutMs: number;
   private readonly requestIntervalMs: number;
   private nextRequestAt = 0;
-  private rateTail: Promise<void> = Promise.resolve();
+  private readonly rateQueue: Array<() => void> = [];
+  private rateTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(serverConfig: ServerConfig) {
     this.baseUrl = serverConfig.clinvarBaseUrl;
@@ -227,47 +230,40 @@ export class ClinVarService {
   }
 
   /** Serialize request starts at NCBI's process-shared keyed/keyless rate. */
-  private async waitForRateLimit(signal: AbortSignal): Promise<void> {
-    const previous = this.rateTail;
-    const turn = previous.then(async () => {
-      if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
-      const delay = Math.max(0, this.nextRequestAt - Date.now());
-      if (delay > 0) {
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => {
-            clearTimeout(timer);
-            reject(signal.reason ?? new Error('Request aborted'));
-          };
-          const timer = setTimeout(() => {
-            signal.removeEventListener('abort', onAbort);
-            resolve();
-          }, delay);
-          signal.addEventListener('abort', onAbort, { once: true });
-        });
-      }
-      if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
-      this.nextRequestAt = Date.now() + this.requestIntervalMs;
-    });
-    this.rateTail = turn.catch(() => {});
-
-    if (signal.aborted) throw signal.reason ?? new Error('Request aborted');
-    await new Promise<void>((resolve, reject) => {
+  private waitForRateLimit(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    return new Promise<void>((resolve, reject) => {
       const onAbort = () => {
-        signal.removeEventListener('abort', onAbort);
-        reject(signal.reason ?? new Error('Request aborted'));
+        this.rateQueue.splice(this.rateQueue.indexOf(grant), 1);
+        if (this.rateQueue.length === 0) {
+          clearTimeout(this.rateTimer);
+          this.rateTimer = undefined;
+        }
+        reject(signal.reason);
       };
+      const grant = () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      this.rateQueue.push(grant);
       signal.addEventListener('abort', onAbort, { once: true });
-      void turn.then(
-        () => {
-          signal.removeEventListener('abort', onAbort);
-          resolve();
-        },
-        (err: unknown) => {
-          signal.removeEventListener('abort', onAbort);
-          reject(err);
-        },
-      );
+      this.drainRateQueue();
     });
+  }
+
+  private drainRateQueue(): void {
+    if (this.rateTimer !== undefined || this.rateQueue.length === 0) return;
+    const delay = Math.max(0, this.nextRequestAt - Date.now());
+    if (delay > 0) {
+      this.rateTimer = setTimeout(() => {
+        this.rateTimer = undefined;
+        this.drainRateQueue();
+      }, delay);
+      return;
+    }
+    this.nextRequestAt = Date.now() + this.requestIntervalMs;
+    this.rateQueue.shift()?.();
+    this.drainRateQueue();
   }
 
   private withKey(url: URL): URL {
@@ -285,6 +281,8 @@ export class ClinVarService {
     filters: ClinVarFilters,
     ctx: Context,
   ): Promise<ClinVarSearchResult> {
+    const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
+    ctx.signal.throwIfAborted();
     const offset = filters.offset ?? 0;
     const limit = filters.limit ?? CLINVAR_WINDOW_MAX;
     const significance = normalizeSignificance(filters.clinicalSignificance);
@@ -298,13 +296,12 @@ export class ClinVarService {
       return { rows: [], totalFound: 0, truncated: false, nextOffset: null, unavailableIds: [] };
     }
     const term = buildEsearchTerm(symbol, significance, filters.minReviewStars);
-    const { ids, count } = await this.esearch(term, offset, limit, ctx);
+    const { ids, count } = await this.esearch(term, offset, limit, ctx, deadline);
 
     const rows: ClinVarRow[] = [];
     const unavailableIds: string[] = [];
     for (let i = 0; i < ids.length; i += SUMMARY_BATCH) {
-      if (ctx.signal.aborted) break;
-      const batch = await this.esummary(ids.slice(i, i + SUMMARY_BATCH), ctx);
+      const batch = await this.esummary(ids.slice(i, i + SUMMARY_BATCH), ctx, deadline);
       rows.push(...batch.rows);
       unavailableIds.push(...batch.unavailable);
     }
@@ -335,6 +332,7 @@ export class ClinVarService {
     offset: number,
     limit: number,
     ctx: Context,
+    deadline: number,
   ): Promise<{ ids: string[]; count: number }> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esearch',
@@ -348,18 +346,34 @@ export class ClinVarService {
     url.searchParams.set('retmax', String(limit));
 
     return withRetry(
-      async () => {
-        await this.waitForRateLimit(ctx.signal);
+      async ({ signal }) => {
+        await this.waitForRateLimit(signal);
         // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
         // can't leak its URL/status/body/requestId to the client.
-        const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
-          signal: ctx.signal,
-        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
+        const response = await fetchWithTimeout(
+          url,
+          Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'NCBI ClinVar')),
+          reqCtx,
+          {
+            signal,
+          },
+        ).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
         const { esearchresult } = await readUpstreamJson(response, 'NCBI ClinVar', EsearchResponse);
         return { ids: esearchresult.idlist, count: esearchresult.count };
       },
-      { operation: 'clinvar.esearch', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
-    );
+      {
+        operation: 'clinvar.esearch',
+        context: reqCtx,
+        baseDelayMs: 1000,
+        signal: ctx.signal,
+        deadlineMs: remainingBudget(deadline, ctx.signal, 'NCBI ClinVar'),
+      },
+    ).catch((err: unknown) => {
+      ctx.signal.throwIfAborted();
+      if (err instanceof McpError && err.data?.reason === 'retry_deadline_exceeded')
+        sanitizeUpstreamError(err, 'NCBI ClinVar');
+      throw err;
+    });
   }
 
   /**
@@ -370,6 +384,7 @@ export class ClinVarService {
   private esummary(
     ids: string[],
     ctx: Context,
+    deadline: number,
   ): Promise<{ rows: ClinVarRow[]; unavailable: string[] }> {
     const reqCtx = requestContextService.createRequestContext({
       operation: 'clinvar.esummary',
@@ -381,13 +396,18 @@ export class ClinVarService {
     url.searchParams.set('retmode', 'json');
 
     return withRetry(
-      async () => {
-        await this.waitForRateLimit(ctx.signal);
+      async ({ signal }) => {
+        await this.waitForRateLimit(signal);
         // Sanitize the framework HTTP error so an NCBI non-2xx/network failure
         // can't leak its URL/status/body/requestId to the client.
-        const response = await fetchWithTimeout(url, this.timeoutMs, reqCtx, {
-          signal: ctx.signal,
-        }).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
+        const response = await fetchWithTimeout(
+          url,
+          Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'NCBI ClinVar')),
+          reqCtx,
+          {
+            signal,
+          },
+        ).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
         const { result } = await readUpstreamJson(response, 'NCBI ClinVar', EsummaryResponse);
         const rows: ClinVarRow[] = [];
         const unavailable: string[] = [];
@@ -405,8 +425,19 @@ export class ClinVarService {
         }
         return { rows, unavailable };
       },
-      { operation: 'clinvar.esummary', context: reqCtx, baseDelayMs: 1000, signal: ctx.signal },
-    );
+      {
+        operation: 'clinvar.esummary',
+        context: reqCtx,
+        baseDelayMs: 1000,
+        signal: ctx.signal,
+        deadlineMs: remainingBudget(deadline, ctx.signal, 'NCBI ClinVar'),
+      },
+    ).catch((err: unknown) => {
+      ctx.signal.throwIfAborted();
+      if (err instanceof McpError && err.data?.reason === 'retry_deadline_exceeded')
+        sanitizeUpstreamError(err, 'NCBI ClinVar');
+      throw err;
+    });
   }
 
   private normalize(r: z.infer<typeof EsummaryRecord>): ClinVarRow {

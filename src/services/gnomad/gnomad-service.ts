@@ -14,6 +14,7 @@ import { McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import { remainingBudget, UPSTREAM_CALL_BUDGET_MS } from '@/services/upstream-deadline.js';
 import {
   invalidUpstreamResponse,
   readUpstreamJson,
@@ -89,12 +90,9 @@ const REGION_TOO_LARGE_MESSAGE =
   /^(?:This region has too many variants to display|Select a smaller region to view variants|Coverage is not available for a region this large)/;
 
 /**
- * How long after a variant lookup starts its ClinVar-only request may still run,
- * across every attempt and backoff. The join is best-effort, so past this it is
- * reported unavailable rather than holding a resolved record until an MCP
- * client's 60 s request timeout, which this leaves 15 s of margin under.
+ * Variant lookups share the call budget with their best-effort ClinVar join.
  */
-export const CLINVAR_LOOKUP_BUDGET_MS = 45_000;
+export const CLINVAR_LOOKUP_BUDGET_MS = UPSTREAM_CALL_BUDGET_MS;
 
 /** v4/v3 are GRCh38; v2.1 and ExAC are GRCh37. */
 function refGenomeForDataset(dataset: Dataset): ReferenceGenome {
@@ -380,8 +378,8 @@ const RawCoverageBin = z.object({
 
 const RawCoverage = z
   .object({
-    exome: z.array(RawCoverageBin).nullable(),
-    genome: z.array(RawCoverageBin).nullable(),
+    exome: z.array(RawCoverageBin).nullable().optional(),
+    genome: z.array(RawCoverageBin).nullable().optional(),
   })
   .nullable();
 
@@ -495,8 +493,8 @@ interface GraphqlOptions {
    * rather than a failure. Without it, not-found errors beside any `data` are.
    */
   absentRoot?: string;
-  /** One wall-clock budget across every attempt and backoff, in milliseconds. */
-  deadlineMs?: number;
+  /** Absolute epoch deadline shared across chained requests. */
+  deadline: number;
   /**
    * Marks an operation whose target gnomAD can refuse as a bad or oversized
    * region (the variant-list and coverage queries), so those HTTP 500 messages
@@ -587,19 +585,30 @@ export class GnomadService {
   }
 
   /** Simple semaphore gate — caps concurrent upstream calls for politeness. */
-  private async acquireSlot(): Promise<void> {
+  private async acquireSlot(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
     if (this.active < this.maxConcurrency) {
       this.active += 1;
       return;
     }
-    await new Promise<void>((resolve) => this.queue.push(resolve));
-    this.active += 1;
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        this.queue.splice(this.queue.indexOf(grant), 1);
+        reject(signal.reason);
+      };
+      this.queue.push(grant);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   private releaseSlot(): void {
-    this.active -= 1;
     const next = this.queue.shift();
     if (next) next();
+    else this.active -= 1;
   }
 
   /** Execute a GraphQL document and return its judged `data` — see {@link exchange}. */
@@ -609,7 +618,7 @@ export class GnomadService {
     schema: z.ZodType<T>,
     operation: string,
     ctx: Context,
-    options?: GraphqlOptions,
+    options: GraphqlOptions,
   ): Promise<T> {
     const reply = await this.exchange(query, variables, schema, operation, ctx, options);
     // GraphqlOptions carries no `partialRoot`, so every reply here is judged.
@@ -619,7 +628,7 @@ export class GnomadService {
 
   /**
    * Execute a GraphQL document with retry + concurrency cap + typed validation.
-   * Every attempt's fetch is bounded by what is left of `deadlineMs`, when set.
+   * Every attempt's fetch and queue wait share the call's absolute deadline.
    */
   private exchange<T>(
     query: string,
@@ -627,22 +636,24 @@ export class GnomadService {
     schema: z.ZodType<T>,
     operation: string,
     ctx: Context,
-    options?: ExchangeOptions,
+    options: ExchangeOptions,
   ): Promise<Exchange<T>> {
     const reqCtx = requestContextService.createRequestContext({
       operation,
       parentContext: ctx,
     });
-    return withRetry(
-      async ({ signal, remainingMs }) => {
-        await this.acquireSlot();
+    const deadline = options.deadline;
+    const deadlineMs = remainingBudget(deadline, ctx.signal, 'gnomAD');
+    return withRetry<Exchange<T>>(
+      async ({ signal }) => {
+        await this.acquireSlot(signal);
         try {
           // fetchWithTimeout throws a status-mapped McpError on non-2xx whose data
           // carries upstream internals (statusCode/responseBody/requestId/URL).
           // A region rejection relays gnomAD's message alone; everything else is
           // sanitized so none of that reaches the client. The typed
           // validation/not-found paths below raise their own clean errors.
-          const timeoutMs = Math.min(this.timeoutMs, remainingMs);
+          const timeoutMs = Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'gnomAD'));
           const response = await fetchWithTimeout(this.baseUrl, timeoutMs, reqCtx, {
             method: 'POST',
             headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -702,9 +713,15 @@ export class GnomadService {
         baseDelayMs: 1500,
         maxRetries: 3,
         signal: ctx.signal,
-        ...(options?.deadlineMs !== undefined && { deadlineMs: options.deadlineMs }),
+        deadlineMs,
       },
-    );
+    ).catch((err: unknown) => {
+      ctx.signal.throwIfAborted();
+      if (err instanceof McpError && err.data?.reason === 'retry_deadline_exceeded') {
+        sanitizeUpstreamError(err, 'gnomAD');
+      }
+      throw err;
+    });
   }
 
   /**
@@ -722,7 +739,7 @@ export class GnomadService {
    * reply is discarded and the lookup re-sent as a variant-only request, then a
    * ClinVar-only request, each judged alone. The ClinVar join is best-effort —
    * see {@link lookupClinvar}; `startedAt` (epoch ms, default now) anchors its
-   * budget, so a batch passes one value to give every item the same deadline.
+   * call budget, so a batch passes one value to give every item the same deadline.
    */
   async getVariant(
     idOrRsid: string,
@@ -733,7 +750,7 @@ export class GnomadService {
     if (MITOCHONDRIAL_VARIANT_ID.test(idOrRsid)) {
       throw mitochondrialUnsupported(`Variant "${idOrRsid}"`);
     }
-    const clinvarDeadline = startedAt + CLINVAR_LOOKUP_BUDGET_MS;
+    const clinvarDeadline = startedAt + UPSTREAM_CALL_BUDGET_MS;
     if (RSID.test(idOrRsid)) {
       let resolved: z.infer<typeof VariantRootResponse>;
       try {
@@ -743,6 +760,7 @@ export class GnomadService {
           VariantRootResponse,
           'gnomad.getVariantByRsid',
           ctx,
+          { deadline: clinvarDeadline },
         );
       } catch (err) {
         if (!(err instanceof McpError) || !/multiple variants found/i.test(err.message)) throw err;
@@ -754,10 +772,16 @@ export class GnomadService {
             VariantSearchResponse,
             'gnomad.searchVariant',
             ctx,
+            { deadline: clinvarDeadline },
           );
           candidates = search.variant_search.map((candidate) => candidate.variant_id);
         } catch (resolverError) {
-          if (ctx.signal.aborted) throw resolverError;
+          ctx.signal.throwIfAborted();
+          if (
+            resolverError instanceof McpError &&
+            resolverError.data?.reason === 'upstream_timeout'
+          )
+            throw resolverError;
           // Preserve the original actionable failure if candidate resolution is unavailable.
         }
         throw validationError(
@@ -787,7 +811,7 @@ export class GnomadService {
       VariantResponse,
       'gnomad.getVariant',
       ctx,
-      { absentRoot: 'variant', partialRoot: 'variant' },
+      { absentRoot: 'variant', partialRoot: 'variant', deadline: clinvarDeadline },
     );
     if (!combined.partial) {
       const { variant, clinvar_variant } = combined.data;
@@ -805,7 +829,7 @@ export class GnomadService {
       VariantRootResponse,
       'gnomad.getVariantOnly',
       ctx,
-      { absentRoot: 'variant' },
+      { absentRoot: 'variant', deadline: clinvarDeadline },
     );
     if (!variant) return null;
     this.assertVariantBuild(variant, dsCtx);
@@ -841,7 +865,7 @@ export class GnomadService {
         ClinVarOnlyResponse,
         'gnomad.getClinvar',
         ctx,
-        { deadlineMs },
+        { deadline },
       );
       return { clinvar: data.clinvar_variant, unavailable: false };
     } catch (err) {
@@ -955,6 +979,7 @@ export class GnomadService {
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<GeneConstraint | null> {
+    const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
     const byId = ENSEMBL_GENE_ID.test(gene);
     const data = await this.graphql(
       byId ? GENE_CONSTRAINT_BY_ID_QUERY : GENE_CONSTRAINT_BY_SYMBOL_QUERY,
@@ -962,6 +987,7 @@ export class GnomadService {
       ConstraintResponse,
       'gnomad.getGeneConstraint',
       ctx,
+      { deadline },
     );
     if (!data.gene) return null;
     const c: Partial<z.infer<typeof ConstraintMetrics>> | null =
@@ -1003,6 +1029,7 @@ export class GnomadService {
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<GeneVariantRow[]> {
+    const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
     const { query, variables } = this.buildTargetQuery(target, dsCtx, 'variants');
     const data = await this.graphql(
       query,
@@ -1010,7 +1037,7 @@ export class GnomadService {
       VariantListResponse,
       'gnomad.listGeneVariants',
       ctx,
-      { relayRegionRejections: true },
+      { relayRegionRejections: true, deadline },
     );
     assertNuclearFeature(target, data.gene ?? data.transcript);
     const raw = (data.gene ?? data.transcript ?? data.region)?.variants ?? [];
@@ -1056,9 +1083,11 @@ export class GnomadService {
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<CoverageSummary[]> {
+    const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
     const { query, variables, regionBounds } = this.buildTargetQuery(target, dsCtx, 'coverage');
     const data = await this.graphql(query, variables, CoverageResponse, 'gnomad.getCoverage', ctx, {
       relayRegionRejections: true,
+      deadline,
     });
     const feature = data.gene ?? data.transcript;
     assertNuclearFeature(target, feature);
@@ -1073,6 +1102,10 @@ export class GnomadService {
       : regionBounds && regionCoverageWindow(regionBounds);
     const cov = (feature ?? data.region)?.coverage;
     if (!cov || !window) return [];
+    const targetPositions = window.intervals.reduce(
+      (sum, interval) => sum + interval.stop - interval.start + 1,
+      0,
+    );
     const summaries: CoverageSummary[] = [];
     for (const [src, rawBins] of [
       ['exome', cov.exome],
@@ -1087,7 +1120,9 @@ export class GnomadService {
         positions += bases;
       }
       if (bins.length === 0) continue;
-      summaries.push(this.summarizeCoverage(src, bins, positions, window.bucketSize));
+      summaries.push(
+        this.summarizeCoverage(src, bins, positions, window.bucketSize, targetPositions),
+      );
     }
     return summaries;
   }
@@ -1097,6 +1132,7 @@ export class GnomadService {
     bins: RawCoverageBinT[],
     positions: number,
     bucketSize: number,
+    targetPositions: number,
   ): CoverageSummary {
     const mean = (key: keyof RawCoverageBinT): number | null => {
       const vals = bins.map((b) => b[key]).filter((v): v is number => v != null);
@@ -1114,6 +1150,8 @@ export class GnomadService {
     return {
       source,
       positions,
+      target_positions: targetPositions,
+      missing_positions: targetPositions - positions,
       bucket_count: bins.length,
       bucket_size: bucketSize,
       mean_depth: mean('mean'),

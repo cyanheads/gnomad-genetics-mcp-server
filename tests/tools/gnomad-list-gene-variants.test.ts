@@ -610,7 +610,7 @@ describe('gnomad_list_gene_variants format()', () => {
     expect(text).toContain('**Dataset:** gnomad_r4 (GRCh38) | **Spilled:** no');
     expect(text).toContain('Showing 2 preview row(s):');
     expect(text).toContain(
-      '- **1-55000002-A-T** | missense (missense_variant) | AF 0.000002 (2.000e-6) | AC 2/1000000 | hom 0 | exome|genome',
+      '- **1-55000002-A-T** | missense (missense_variant) | AF 0.000002 (2.000e-6) | AC 2/1000000 | hom 0 | exome\\|genome',
     );
     expect(text).toContain('| flags lcr');
   });

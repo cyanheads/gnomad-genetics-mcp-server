@@ -181,7 +181,7 @@ describe.each(REGION_TOOLS)('%s — region forms outside what gnomAD serves', (_
         data: { reason: 'region_too_large', retryable: false },
       });
       expect(error.data.recovery?.hint).toBe(declared('region_too_large'));
-      expect(textOf(result)).toContain(declared('region_too_large'));
+      expect(textOf(result)).toContain(declared('region_too_large').replaceAll('~', '\\~'));
       expect(requests).toHaveLength(0);
     },
   );

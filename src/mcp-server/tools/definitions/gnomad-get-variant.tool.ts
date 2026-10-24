@@ -12,7 +12,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { getVariantBatchCap } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   batchVariantIdField,
@@ -28,7 +29,7 @@ import {
  * advertised input schema (the `maxItems` in tools/list) and parse-time
  * validation — keeping the env var, the description, and the actual limit in sync.
  */
-const MAX_VARIANT_BATCH = getServerConfig().maxVariantBatch;
+const MAX_VARIANT_BATCH = getVariantBatchCap();
 
 const PopulationFreq = z
   .object({
@@ -207,6 +208,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       .optional()
       .describe('Non-fatal notice when optional ClinVar annotation was unavailable.'),
   },
+  enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
   errors: [
     {
       reason: 'incoherent_build',
@@ -273,7 +275,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'Every attempt to reach gnomAD for one ID timed out; reported per item in failed[].',
+      when: 'gnomAD attempts timed out or the shared 45 s batch budget expired for one ID; reported per item in failed[].',
       recovery:
         'Wait a few seconds, then retry only the failed IDs, in smaller batches when several timed out.',
       thrownBy: 'service',
@@ -325,7 +327,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     // becomes that ID's outcome, preserving per-item partial success — one bad
     // ID never fails the batch. A cancelled call, or a failure no declared
     // reason covers, is not about one ID and fails the whole call. One start
-    // time for the batch gives every item's ClinVar side lookup the same
+    // time for the batch gives every upstream request the same
     // deadline, however long the item queued behind the concurrency cap.
     const startedAt = Date.now();
     const outcomes = await Promise.all(
@@ -384,33 +386,36 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     const af = (v: number | null) => (v != null ? `${v} (${v.toExponential(3)})` : 'Not available');
     const lines: string[] = [`**Dataset:** ${result.dataset} (${result.reference_genome})`];
     for (const v of result.found) {
-      lines.push('', `## ${v.variant_id}${v.rsids.length ? ` (${v.rsids.join(', ')})` : ''}`);
+      lines.push(
+        '',
+        `**Variant:** ${escapeMarkdownInline(v.variant_id)}${v.rsids.length ? ` (${v.rsids.map(escapeMarkdownInline).join(', ')})` : ''}`,
+      );
       lines.push(`**Dataset:** ${v.dataset} | **Build:** ${v.reference_genome}`);
       lines.push(
-        `**Gene:** ${v.gene_symbol ?? 'Not available'} | **Consequence:** ${v.consequence ?? 'Not available'}`,
+        `**Gene:** ${escapeMarkdownInline(v.gene_symbol ?? 'Not available')} | **Consequence:** ${escapeMarkdownInline(v.consequence ?? 'Not available')}`,
       );
       lines.push(
         `**Overall:** AC ${v.ac} / AN ${v.an} | AF ${af(v.af)} | hom ${v.homozygote_count}${v.hemizygote_count != null ? ` | hemi ${v.hemizygote_count}` : ''}`,
       );
       lines.push(
-        `**Callsets:** ${v.source.join(', ') || 'none'} | **Flags:** ${v.flags.length ? v.flags.join(', ') : 'none'} | **Transcript:** ${v.transcript_id ?? 'Not available'}`,
+        `**Callsets:** ${v.source.join(', ') || 'none'} | **Flags:** ${v.flags.length ? v.flags.map(escapeMarkdownInline).join(', ') : 'none'} | **Transcript:** ${escapeMarkdownInline(v.transcript_id ?? 'Not available')}`,
       );
       if (v.populations.length) {
         lines.push('**Per-ancestry:**');
         for (const p of v.populations) {
           lines.push(
-            `- ${p.id} (${p.source}): AC ${p.ac} / AN ${p.an} | AF ${af(p.af)} | hom ${p.homozygote_count}${p.hemizygote_count != null ? ` | hemi ${p.hemizygote_count}` : ''}`,
+            `- ${escapeMarkdownInline(p.id)} (${p.source}): AC ${p.ac} / AN ${p.an} | AF ${af(p.af)} | hom ${p.homozygote_count}${p.hemizygote_count != null ? ` | hemi ${p.hemizygote_count}` : ''}`,
           );
         }
       }
       if (v.in_silico.length) {
         lines.push(
-          `**In-silico:** ${v.in_silico.map((s) => `${s.id}=${s.value != null ? s.value : 'n/a'}${s.annotation != null ? ` (${s.annotation})` : ''}`).join(', ')}`,
+          `**In-silico:** ${v.in_silico.map((s) => `${escapeMarkdownInline(s.id)}=${s.value != null ? s.value : 'n/a'}${s.annotation != null ? ` (${escapeMarkdownInline(s.annotation)})` : ''}`).join(', ')}`,
         );
       }
       if (v.clinvar) {
         lines.push(
-          `**ClinVar:** ${v.clinvar.clinical_significance ?? 'Not available'} | stars ${v.clinvar.gold_stars ?? 'Not available'} | review ${v.clinvar.review_status ?? 'Not available'} | VariationID ${v.clinvar.clinvar_variation_id ?? 'Not available'}`,
+          `**ClinVar:** ${escapeMarkdownInline(v.clinvar.clinical_significance ?? 'Not available')} | stars ${v.clinvar.gold_stars ?? 'Not available'} | review ${escapeMarkdownInline(v.clinvar.review_status ?? 'Not available')} | VariationID ${escapeMarkdownInline(v.clinvar.clinvar_variation_id ?? 'Not available')}`,
         );
       } else {
         lines.push(
@@ -424,8 +429,8 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       lines.push('', '### Failed');
       for (const f of result.failed) {
         lines.push(
-          `- **${f.variant}:** ${f.error}${f.candidates?.length ? ` Candidates: ${f.candidates.join(', ')}` : ''} (reason ${f.reason})`,
-          `  - Recovery: ${f.recovery}`,
+          `- **${escapeMarkdownInline(f.variant)}:** ${escapeMarkdownInline(f.error)}${f.candidates?.length ? ` Candidates: ${f.candidates.map(escapeMarkdownInline).join(', ')}` : ''} (reason ${f.reason})`,
+          `  - Recovery: ${escapeMarkdownInline(f.recovery)}`,
         );
       }
     }

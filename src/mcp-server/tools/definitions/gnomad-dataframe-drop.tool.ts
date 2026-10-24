@@ -11,7 +11,7 @@
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
+import { isDataframeDropEnabled } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
 const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
@@ -92,7 +92,7 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
  * otherwise a disabled placeholder absent from tools/list (present-but-uncallable
  * on the manifest/landing page).
  */
-export const gnomadDataframeDrop = getServerConfig().dataframeDropEnabled
+export const gnomadDataframeDrop = isDataframeDropEnabled()
   ? gnomadDataframeDropDef
   : disabledTool(gnomadDataframeDropDef, {
       reason:

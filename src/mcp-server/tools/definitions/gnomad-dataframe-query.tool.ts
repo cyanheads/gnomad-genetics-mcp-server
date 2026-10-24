@@ -12,6 +12,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getCanvas } from '@/services/canvas-accessor.js';
 import { previewLength } from '../canvas-staging.js';
 
@@ -155,7 +156,7 @@ export const gnomadDataframeQuery = tool('gnomad_dataframe_query', {
 
   format: (result) => {
     const lines = [
-      `**columns:** ${result.columns.join(', ')}`,
+      `**columns:** ${result.columns.map(escapeMarkdownInline).join(', ')}`,
       `**offset:** ${result.offset} · **returned:** ${result.returned} · **total:** ${result.total ?? 'null'} · **truncated:** ${result.truncated} · **next_offset:** ${result.next_offset ?? 'null'}`,
     ];
     if (result.total === null) {
@@ -163,7 +164,7 @@ export const gnomadDataframeQuery = tool('gnomad_dataframe_query', {
         'The result exceeds the server row cap: total is unknown and rows past the cap are unreachable by paging — filter or aggregate in SQL to reach them.',
       );
     }
-    for (const row of result.rows) lines.push(`- ${JSON.stringify(row)}`);
+    for (const row of result.rows) lines.push(`- ${escapeMarkdownInline(JSON.stringify(row))}`);
     if (result.next_offset !== null) lines.push(`Continue with offset ${result.next_offset}.`);
     return [{ type: 'text', text: lines.join('\n') }];
   },

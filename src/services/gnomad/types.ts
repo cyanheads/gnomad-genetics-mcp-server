@@ -172,9 +172,13 @@ export interface CoverageSummary {
   fraction_over_100: number | null;
   mean_depth: number | null;
   median_depth: number | null;
+  /** Target bases without a returned coverage bucket; callability is unknown. */
+  missing_positions: number;
   /** Target bases inside the summarized buckets. */
   positions: number;
   source: CallsetSource;
+  /** Total bases in the target's merged intervals, including unobserved bases. */
+  target_positions: number;
 }
 
 /** A target stretch of the genome — exactly one of these is supplied to list/coverage tools. */

@@ -423,6 +423,8 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
     const rowLines = textOf(result.content)
       .split('\n')
       .filter((line) => line.startsWith('- {'));
-    expect(rowLines).toEqual(page.rows.map((row) => `- ${JSON.stringify(row)}`));
+    expect(rowLines.map((line) => line.replaceAll('\\|', '|'))).toEqual(
+      page.rows.map((row) => `- ${JSON.stringify(row)}`),
+    );
   });
 });

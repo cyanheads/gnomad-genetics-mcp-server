@@ -109,7 +109,7 @@ describe('gnomad_list_gene_variants — a region gnomAD refuses for its variant 
     });
     const text = textOf(result);
     expect(text).toContain(TOO_MANY_VARIANTS);
-    expect(text).toContain(declared(tool, 'region_too_large'));
+    expect(text).toContain(declared(tool, 'region_too_large').replaceAll('~', '\\~'));
     expect(text).toContain('reason region_too_large · not retryable');
     expect(requests).toHaveLength(1);
     expect(requests[0]?.variables).toMatchObject({ chrom: '1', start: 1000000, stop: 3400000 });
@@ -146,7 +146,7 @@ describe.each([
         data: { reason, retryable: false, recovery: { hint: declared(tool, reason) } },
       });
       expect(textOf(result)).toContain(message);
-      expect(textOf(result)).toContain(declared(tool, reason));
+      expect(textOf(result)).toContain(declared(tool, reason).replaceAll('~', '\\~'));
       expect(requests).toHaveLength(1);
     });
 

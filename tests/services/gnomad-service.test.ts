@@ -385,6 +385,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 1,
+        target_positions: 1,
+        missing_positions: 0,
         bucket_count: 1,
         bucket_size: 1,
         mean_depth: 56.13959972474064,
@@ -402,6 +404,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'genome',
         positions: 1,
+        target_positions: 1,
+        missing_positions: 0,
         bucket_count: 1,
         bucket_size: 1,
         mean_depth: 35.59847702992943,
@@ -450,6 +454,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 894,
+        target_positions: 7811,
+        missing_positions: 6917,
         bucket_count: 61,
         bucket_size: 15,
         mean_depth: close(20.31600189688799),
@@ -467,6 +473,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'genome',
         positions: 7811,
+        target_positions: 7811,
+        missing_positions: 0,
         bucket_count: 535,
         bucket_size: 15,
         mean_depth: close(32.49755523382596),
@@ -494,6 +502,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 630,
+        target_positions: 5437,
+        missing_positions: 4807,
         bucket_count: 63,
         bucket_size: 10,
         mean_depth: close(29.468469069263534),
@@ -511,6 +521,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'genome',
         positions: 647,
+        target_positions: 5437,
+        missing_positions: 4790,
         bucket_count: 65,
         bucket_size: 10,
         mean_depth: close(34.30150891004619),
@@ -538,6 +550,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 27200, // 3,200 + 2×4,800 at the head, 3×4,800 at the tail (last ends 3,398,399)
+        target_positions: 2400001,
+        missing_positions: 2372801,
         bucket_count: 6,
         bucket_size: 4800,
         mean_depth: close(7.7747301265779),
@@ -555,6 +569,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'genome',
         positions: 24001, // 3,200 + 2×4,800 at the head; 2×4,800 + 1,601 at the tail
+        target_positions: 2400001,
+        missing_positions: 2376000,
         bucket_count: 6,
         bucket_size: 4800,
         mean_depth: close(32.16623947907194),
@@ -615,6 +631,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 320,
+        target_positions: 10001,
+        missing_positions: 9681,
         bucket_count: 16,
         bucket_size: 20,
         mean_depth: close(21.74737370416841),
@@ -632,6 +650,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'genome',
         positions: 141,
+        target_positions: 10001,
+        missing_positions: 9860,
         bucket_count: 8,
         bucket_size: 20,
         mean_depth: close(33.60507578240496),
@@ -694,6 +714,8 @@ describe('GnomadService.getCoverage — gnomAD coverage buckets at the fetch sea
       {
         source: 'exome',
         positions: 3,
+        target_positions: 155,
+        missing_positions: 152,
         bucket_count: 3,
         bucket_size: 1,
         mean_depth: 20,
@@ -1238,11 +1260,16 @@ describe('GnomadService.getVariant — ClinVar attribution through the retry loo
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
   it('skips the ClinVar request when the lookup budget is already spent', async () => {
-    const { operations } = fakeOperations({ GnomadVariantByRsid: ok({ variant }) });
+    const { operations } = fakeOperations({
+      GnomadVariantByRsid: async () => {
+        vi.setSystemTime(Date.now() + CLINVAR_LOOKUP_BUDGET_MS);
+        return new Response(JSON.stringify({ data: { variant } }));
+      },
+    });
 
     const record = await settle(() =>
       svc.getVariant('rs527413419', svc.resolveDatasetContext('gnomad_r4'), createMockContext(), {
-        startedAt: Date.now() - CLINVAR_LOOKUP_BUDGET_MS,
+        startedAt: Date.now(),
       }),
     );
 
@@ -1251,7 +1278,7 @@ describe('GnomadService.getVariant — ClinVar attribution through the retry loo
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
-  it('rejects a call cancelled before its ClinVar lookup, even with the budget spent', async () => {
+  it('rejects a call cancelled before its ClinVar lookup', async () => {
     const controller = new AbortController();
     const { operations } = fakeOperations({
       GnomadVariantByRsid: async () => {
@@ -1265,7 +1292,7 @@ describe('GnomadService.getVariant — ClinVar attribution through the retry loo
         'rs527413419',
         svc.resolveDatasetContext('gnomad_r4'),
         createMockContext({ signal: controller.signal }),
-        { startedAt: Date.now() - CLINVAR_LOOKUP_BUDGET_MS },
+        { startedAt: Date.now() },
       ),
     );
 
