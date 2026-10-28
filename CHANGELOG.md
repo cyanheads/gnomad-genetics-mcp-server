@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-28
+
+Publish a ClinVar-to-gnomAD workflow guide over MCP and preserve SDK skill modules in desktop bundles.
+
 ## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-10-24 · ⚠️ Breaking
 
 Bound upstream calls and disclose coverage gaps.

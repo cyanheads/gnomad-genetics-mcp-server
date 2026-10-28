@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 07:10:03
+Generated on: 2026-10-28 07:29:22
 
 ```text
 gnomad-genetics-mcp-server/
@@ -28,6 +28,7 @@ gnomad-genetics-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -214,6 +215,8 @@ gnomad-genetics-mcp-server/
 │   ├── resources/
 │   │   ├── gene-constraint.resource.test.ts
 │   │   └── variant.resource.test.ts
+│   ├── scripts/
+│   │   └── bundle-agent-docs.test.ts
 │   ├── services/
 │   │   ├── clinvar-service.test.ts
 │   │   ├── gnomad-service.test.ts
