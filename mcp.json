@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "gnomad-genetics-mcp-server": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@cyanheads/gnomad-genetics-mcp-server"],
+      "env": { "MCP_TRANSPORT_TYPE": "stdio" }
+    }
+  }
+}

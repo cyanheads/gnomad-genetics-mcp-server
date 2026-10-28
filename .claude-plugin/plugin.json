@@ -28,12 +28,30 @@
     "gene-constraint",
     "clinvar"
   ],
+  "userConfig": {
+    "GNOMAD_API_BASE_URL": { "type": "string", "title": "gnomAD API URL", "description": "Optional gnomAD GraphQL endpoint override.", "default": "" },
+    "GNOMAD_DEFAULT_DATASET": { "type": "string", "title": "Default dataset", "description": "Optional default dataset: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac.", "default": "" },
+    "GNOMAD_REQUEST_TIMEOUT_MS": { "type": "string", "title": "Request timeout", "description": "Optional per-attempt upstream timeout in milliseconds.", "default": "" },
+    "GNOMAD_MAX_CONCURRENCY": { "type": "string", "title": "Upstream concurrency", "description": "Optional maximum concurrent upstream requests.", "default": "" },
+    "GNOMAD_MAX_VARIANT_BATCH": { "type": "string", "title": "Variant batch limit", "description": "Optional maximum variant IDs per call.", "default": "" },
+    "CLINVAR_BASE_URL": { "type": "string", "title": "ClinVar API URL", "description": "Optional NCBI E-utilities endpoint override.", "default": "" },
+    "NCBI_API_KEY": { "type": "string", "title": "NCBI API key", "description": "Optional NCBI key to raise the E-utilities rate limit.", "sensitive": true, "default": "" },
+    "GNOMAD_DATAFRAME_DROP_ENABLED": { "type": "string", "title": "Enable dataframe drop", "description": "Optional boolean enabling the dataframe drop tool.", "default": "" }
+  },
   "mcpServers": {
     "gnomad-genetics-mcp-server": {
       "command": "npx",
       "args": ["-y", "@cyanheads/gnomad-genetics-mcp-server"],
       "env": {
-        "MCP_TRANSPORT_TYPE": "stdio"
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "GNOMAD_API_BASE_URL": "${user_config.GNOMAD_API_BASE_URL}",
+        "GNOMAD_DEFAULT_DATASET": "${user_config.GNOMAD_DEFAULT_DATASET}",
+        "GNOMAD_REQUEST_TIMEOUT_MS": "${user_config.GNOMAD_REQUEST_TIMEOUT_MS}",
+        "GNOMAD_MAX_CONCURRENCY": "${user_config.GNOMAD_MAX_CONCURRENCY}",
+        "GNOMAD_MAX_VARIANT_BATCH": "${user_config.GNOMAD_MAX_VARIANT_BATCH}",
+        "CLINVAR_BASE_URL": "${user_config.CLINVAR_BASE_URL}",
+        "NCBI_API_KEY": "${user_config.NCBI_API_KEY}",
+        "GNOMAD_DATAFRAME_DROP_ENABLED": "${user_config.GNOMAD_DATAFRAME_DROP_ENABLED}"
       }
     }
   }

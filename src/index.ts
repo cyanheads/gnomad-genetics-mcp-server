@@ -34,6 +34,7 @@ resetConfig();
 await createApp({
   name: 'gnomad-genetics-mcp-server',
   title: 'gnomad-genetics-mcp-server',
+  skills: 'skills',
   tools: [
     gnomadGetVariant,
     gnomadGetGeneConstraint,
