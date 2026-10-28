@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-10-24 19:05:13
+Generated on: 2026-10-28 07:10:03
 
 ```text
 gnomad-genetics-mcp-server/
@@ -40,6 +40,8 @@ gnomad-genetics-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -137,6 +139,9 @@ gnomad-genetics-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── gnomad-genetics-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   ├── environment.ts
@@ -246,7 +251,9 @@ gnomad-genetics-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json
