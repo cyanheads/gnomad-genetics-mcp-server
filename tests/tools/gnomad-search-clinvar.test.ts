@@ -10,15 +10,22 @@
  * runToolContract, covering result windows and their notices, the
  * upstream_unavailable contract, gnomAD-compatible identifiers, blank and
  * quoted significance filters, the quoted gene term, the notice/staging matrix
- * across every reachable response shape, and the ~24 KB response budget on the
- * heaviest real records.
+ * across every reachable response shape, the ~24 KB response budget on the
+ * heaviest real records, and ClinVar's no-date placeholder and blank germline
+ * values on both surfaces and as SQL NULL on a real DuckDB canvas.
  * @module tests/tools/gnomad-search-clinvar.test
  */
 
 import { readFileSync } from 'node:fs';
+import {
+  CanvasRegistry,
+  DataCanvas,
+  DEFAULT_CANVAS_REGISTRY_OPTIONS,
+  DuckdbProvider,
+} from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 import * as clinvarModule from '@/services/clinvar/clinvar-service.js';
@@ -482,6 +489,19 @@ const LIVE = JSON.parse(
 /** The 24 longest real ESummary records (BRCA1, captured 2026-09-23), `allele_freq_set` trimmed. */
 const HEAVY = JSON.parse(
   readFileSync(new URL('../fixtures/clinvar-esummary-heavy.live.json', import.meta.url), 'utf8'),
+) as EsummaryFixture;
+
+/**
+ * Real BRCA1 records whose germline block carries ClinVar's `1/01/01 00:00`
+ * no-date placeholder (captured 2026-10-31), `allele_freq_set` trimmed:
+ * 4852577 and 4849514 with a blank description and review status, 1687128
+ * Pathogenic, 54221 "not provided".
+ */
+const PLACEHOLDER = JSON.parse(
+  readFileSync(
+    new URL('../fixtures/clinvar-esummary-placeholder.live.json', import.meta.url),
+    'utf8',
+  ),
 ) as EsummaryFixture;
 
 function fetchUrl(input: string | URL | Request): URL {
@@ -1300,4 +1320,187 @@ describe('gnomad_search_clinvar response budget (#37)', () => {
       if (mode === 'enabled') expect(tables.clinvar_variants).toHaveLength(sc.total);
     },
   );
+});
+
+/* ------------------------------------------------------------------------- */
+/* ClinVar's no-date placeholder and blank germline values (#61).             */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Every row a real record, none re-keyed: the placeholder fixture's four,
+ * HEAVY's 4845640 (Likely pathogenic, placeholder date), LIVE's 2878 (a real
+ * `2026/02/03 00:00` date), then HEAVY's other 23, which all carry a real
+ * date and classification.
+ */
+const MIXED: EsummaryFixture = {
+  result: {
+    ...HEAVY.result,
+    ...PLACEHOLDER.result,
+    '2878': LIVE.result['2878'],
+    uids: [
+      ...PLACEHOLDER.result.uids,
+      '4845640',
+      '2878',
+      ...HEAVY.result.uids.filter((id) => id !== '4845640'),
+    ],
+  },
+};
+/** The six records under test, a window that fits inline. */
+const FIT_IDS = MIXED.result.uids.slice(0, 6);
+
+/** The content[] block format() renders for one preview row, newline-terminated. */
+function rowBlock(text: string, uid: string): string {
+  const block = text
+    .split('\n**Variant:** ')
+    .find((b) => b.includes(`\n**VariationID:** ${uid} |`));
+  if (!block) throw new Error(`no rendered row for VariationID ${uid}`);
+  return `${block}\n`;
+}
+
+describe('gnomad_search_clinvar no-date placeholder and blank germline values (#61)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('carries null in structuredContent and renders Not available in content[]', async () => {
+    fakeNcbi({ count: '6', idlist: FIT_IDS }, [], MIXED);
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(result.isError).toBeFalsy();
+    const { preview } = result.structuredContent as { preview: ClinVarRow[] };
+    expect(
+      preview.map((r) => [
+        r.clinvar_variation_id,
+        r.clinical_significance,
+        r.review_status,
+        r.gold_stars,
+        r.last_evaluated,
+      ]),
+    ).toEqual([
+      ['4852577', null, null, 0, null],
+      ['4849514', null, null, 0, null],
+      ['1687128', 'Pathogenic', 'no assertion criteria provided', 0, null],
+      ['54221', 'not provided', 'no classification provided', 0, null],
+      ['4845640', 'Likely pathogenic', 'criteria provided, single submitter', 1, null],
+      [
+        '2878',
+        'Benign/Likely benign',
+        'criteria provided, multiple submitters, no conflicts',
+        2,
+        '2026/02/03 00:00',
+      ],
+    ]);
+
+    const text = textOf(result);
+    const blank =
+      '**Significance:** Not available (0★) | **Review:** Not available | **Last evaluated:** Not available';
+    expect(rowBlock(text, '4852577')).toContain(`\n${blank}\n`);
+    expect(rowBlock(text, '4849514')).toContain(`\n${blank}\n`);
+    expect(rowBlock(text, '1687128')).toContain(
+      '\n**Significance:** Pathogenic (0★) | **Review:** no assertion criteria provided | **Last evaluated:** Not available\n',
+    );
+    expect(rowBlock(text, '54221')).toContain(
+      '\n**Significance:** not provided (0★) | **Review:** no classification provided | **Last evaluated:** Not available\n',
+    );
+    expect(rowBlock(text, '4845640')).toContain(
+      '\n**Significance:** Likely pathogenic (1★) | **Review:** criteria provided, single submitter | **Last evaluated:** Not available\n',
+    );
+    expect(rowBlock(text, '2878')).toContain(
+      '\n**Significance:** Benign/Likely benign (2★) | **Review:** criteria provided, multiple submitters, no conflicts | **Last evaluated:** 2026/02/03 00:00\n',
+    );
+    expect(text).not.toContain('1/01/01');
+  });
+});
+
+describe('gnomad_search_clinvar staged nulls on a real DuckDB canvas (#61)', () => {
+  let canvas: DataCanvas;
+  const tenant = () => createMockContext({ tenantId: 'default' });
+
+  beforeAll(async () => {
+    const provider = new DuckdbProvider({
+      defaultRowLimit: 1_000,
+      exportRootPath: '/tmp/gnomad-canvas-tests',
+      memoryLimitMb: 128,
+      schemaSniffRows: 100,
+    });
+    canvas = new DataCanvas(
+      provider,
+      new CanvasRegistry(provider, { ...DEFAULT_CANVAS_REGISTRY_OPTIONS, sweeperIntervalMs: 0 }),
+    );
+    // Open one canvas so this hook, not a test's timeout, pays the native DuckDB load.
+    await canvas.acquire(undefined, tenant());
+  }, 60_000);
+  afterAll(async () => {
+    await canvas.shutdown(tenant());
+  });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { path: 'spill', ids: MIXED.result.uids, reuse: false },
+    { path: 'fit with canvas_id', ids: FIT_IDS, reuse: true },
+  ])('holds SQL NULL, never the placeholder or a blank string ($path)', async ({ ids, reuse }) => {
+    const canvasId = reuse ? (await canvas.acquire(undefined, tenant())).canvasId : undefined;
+    fakeNcbi({ count: String(ids.length), idlist: ids }, [], MIXED);
+
+    // Real timers: staging runs on native DuckDB, and the one NCBI pacing gap is ~0.3 s.
+    const result = await runToolContract(
+      gnomadSearchClinvar,
+      { gene: 'BRCA1', ...(canvasId && { canvas_id: canvasId }) },
+      { context: { tenantId: 'default' } },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc).toMatchObject({
+      table_name: 'clinvar_variants',
+      spilled: !reuse,
+      total: ids.length,
+    });
+    const staged = await canvas.acquire(sc.canvas_id as string, tenant());
+    const counts = await staged.query(
+      "SELECT count(*) AS n, count(*) FILTER (WHERE last_evaluated IS NULL) AS no_date, count(*) FILTER (WHERE clinical_significance IS NULL) AS no_significance, count(*) FILTER (WHERE review_status IS NULL) AS no_review, count(*) FILTER (WHERE last_evaluated = '1/01/01 00:00' OR clinical_significance = '' OR review_status = '') AS placeholders FROM clinvar_variants",
+    );
+    // No date: the four placeholder-fixture records and 4845640. No germline
+    // classification: 4852577 and 4849514.
+    expect(
+      Object.fromEntries(Object.entries(counts.rows[0] ?? {}).map(([k, v]) => [k, Number(v)])),
+    ).toEqual({ n: ids.length, no_date: 5, no_significance: 2, no_review: 2, placeholders: 0 });
+    const picked = await staged.query(
+      "SELECT clinvar_variation_id, clinical_significance, review_status, last_evaluated FROM clinvar_variants WHERE clinvar_variation_id IN ('4852577', '54221', '2878') ORDER BY clinvar_variation_id",
+    );
+    expect(picked.rows).toEqual([
+      {
+        clinvar_variation_id: '2878',
+        clinical_significance: 'Benign/Likely benign',
+        review_status: 'criteria provided, multiple submitters, no conflicts',
+        last_evaluated: '2026/02/03 00:00',
+      },
+      {
+        clinvar_variation_id: '4852577',
+        clinical_significance: null,
+        review_status: null,
+        last_evaluated: null,
+      },
+      {
+        clinvar_variation_id: '54221',
+        clinical_significance: 'not provided',
+        review_status: 'no classification provided',
+        last_evaluated: null,
+      },
+    ]);
+  });
 });

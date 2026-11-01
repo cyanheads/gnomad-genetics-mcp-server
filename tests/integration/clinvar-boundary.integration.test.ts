@@ -1,9 +1,10 @@
 /**
  * @fileoverview Offline integration tests for the NCBI E-utilities boundary.
  * Exercises ESearch term and window construction, sparse/partial esummary
- * normalization, gnomAD-compatible identifier mapping over real ESummary
- * payloads, review stars, batching, rate limiting, and timeout sanitization
- * through the real ClinVarService. Only global fetch is faked.
+ * normalization, ClinVar's no-date placeholder and blank germline values,
+ * gnomAD-compatible identifier mapping over real ESummary payloads, review
+ * stars, batching, rate limiting, and timeout sanitization through the real
+ * ClinVarService. Only global fetch is faked.
  * @module tests/integration/clinvar-boundary.integration.test
  */
 
@@ -14,10 +15,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { ClinVarService } from '@/services/clinvar/clinvar-service.js';
 
+type EsummaryFixture = { result: Record<string, unknown> & { uids: string[] } };
+
+function fixture(name: string): EsummaryFixture {
+  return JSON.parse(
+    readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8'),
+  ) as EsummaryFixture;
+}
+
 /** Real ESummary payloads (captured 2026-09-23), `allele_freq_set` trimmed. */
-const LIVE = JSON.parse(
-  readFileSync(new URL('../fixtures/clinvar-esummary.live.json', import.meta.url), 'utf8'),
-) as { result: Record<string, unknown> & { uids: string[] } };
+const LIVE = fixture('clinvar-esummary.live.json');
+/** The 24 longest real BRCA1 records (captured 2026-09-23); 4845640 carries the no-date placeholder. */
+const HEAVY = fixture('clinvar-esummary-heavy.live.json');
+/**
+ * Real BRCA1 records whose germline block carries ClinVar's `1/01/01 00:00`
+ * no-date placeholder (captured 2026-10-31), `allele_freq_set` trimmed:
+ * 4852577 and 4849514 with a blank description and review status, 1687128
+ * Pathogenic, 54221 "not provided".
+ */
+const PLACEHOLDER = fixture('clinvar-esummary-placeholder.live.json');
 
 function requestUrl(input: string | URL | Request): URL {
   if (input instanceof URL) return input;
@@ -593,6 +609,71 @@ describe('ClinVarService gnomAD-compatible identifiers (#29)', () => {
     fakeNcbi(esearchBody(['1']), { '1': { ...summaryRecord('1'), variation_set: [{}] } });
     const { rows } = await search('ANY', {});
     expect(rows[0]).toMatchObject({ canonical_spdi: null, rsids: '', grch38_variant_id: null });
+  });
+});
+
+describe('ClinVarService no-date placeholder and blank germline values (#61)', () => {
+  const records: Record<string, unknown> = {
+    ...LIVE.result,
+    ...HEAVY.result,
+    ...PLACEHOLDER.result,
+  };
+
+  it.each([
+    // A real classification with no evaluation date keeps its classification.
+    ['4845640', 'Likely pathogenic', 'criteria provided, single submitter', 1, null],
+    ['1687128', 'Pathogenic', 'no assertion criteria provided', 0, null],
+    // A blank germline block (these two carry only a somatic classification).
+    ['4852577', null, null, 0, null],
+    ['4849514', null, null, 0, null],
+    // "not provided" is a real ClinVar classification, not a placeholder.
+    ['54221', 'not provided', 'no classification provided', 0, null],
+    // A real evaluation date passes through unchanged.
+    [
+      '2878',
+      'Benign/Likely benign',
+      'criteria provided, multiple submitters, no conflicts',
+      2,
+      '2026/02/03 00:00',
+    ],
+  ])(
+    'VariationID %s → significance %j, review %j, %d★, last_evaluated %j',
+    async (uid, significance, review, stars, lastEvaluated) => {
+      fakeNcbi(esearchBody([uid]), records);
+
+      const { rows } = await search('BRCA1', {});
+
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect({
+        clinvar_variation_id: row?.clinvar_variation_id,
+        clinical_significance: row?.clinical_significance,
+        review_status: row?.review_status,
+        gold_stars: row?.gold_stars,
+        last_evaluated: row?.last_evaluated,
+      }).toEqual({
+        clinvar_variation_id: uid,
+        clinical_significance: significance,
+        review_status: review,
+        gold_stars: stars,
+        last_evaluated: lastEvaluated,
+      });
+    },
+  );
+
+  // A blank germline record (4852577, 0★), a 0★ Pathogenic, and a 1★ Likely pathogenic.
+  it.each([
+    [{}, ['4852577', '1687128', '4845640']],
+    [{ minReviewStars: 0 }, ['4852577', '1687128', '4845640']],
+    [{ minReviewStars: 1 }, ['4845640']],
+    [{ clinicalSignificance: 'pathogenic' }, ['1687128', '4845640']],
+    [{ clinicalSignificance: 'pathogenic', minReviewStars: 0 }, ['1687128', '4845640']],
+  ])('filters %j keep %j', async (filters, kept) => {
+    fakeNcbi(esearchBody(['4852577', '1687128', '4845640']), records);
+
+    const { rows } = await search('BRCA1', filters);
+
+    expect(rows.map((r) => r.clinvar_variation_id)).toEqual(kept);
   });
 });
 

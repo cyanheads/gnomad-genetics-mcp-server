@@ -140,6 +140,9 @@ function grch38VariantId(spdi: string | null): string | null {
   return `${chrom}-${Number(position) + 1}-${deleted}-${inserted}`;
 }
 
+/** ClinVar's `last_evaluated` for a classification that has no evaluation date. */
+const NO_EVALUATION_DATE = '1/01/01 00:00';
+
 /** Default and maximum ESearch window, in candidate VariationIDs. */
 export const CLINVAR_WINDOW_MAX = 500;
 /** Largest ESearch `retstart` NCBI accepts (signed 32-bit); past it ESearch answers 200 with an empty body. */
@@ -457,15 +460,21 @@ export class ClinVarService {
         rsids.add(`rs${xref.db_id}`);
       }
     }
+    /**
+     * A record with no germline classification carries "" for its description
+     * and review status, and every classification without an evaluation date
+     * carries the NO_EVALUATION_DATE literal; all three read as unknown.
+     */
     return {
       clinvar_variation_id: r.uid,
       accession: r.accession ?? '',
       title: r.title ?? '',
       obj_type: r.obj_type ?? '',
-      clinical_significance: cls?.description ?? null,
-      review_status: cls?.review_status ?? null,
+      clinical_significance: cls?.description || null,
+      review_status: cls?.review_status || null,
       gold_stars: starsForReviewStatus(cls?.review_status),
-      last_evaluated: cls?.last_evaluated ?? null,
+      last_evaluated:
+        cls?.last_evaluated === NO_EVALUATION_DATE ? null : (cls?.last_evaluated ?? null),
       molecular_consequences: (r.molecular_consequence_list ?? []).join('; '),
       protein_change: r.protein_change ?? '',
       conditions,
