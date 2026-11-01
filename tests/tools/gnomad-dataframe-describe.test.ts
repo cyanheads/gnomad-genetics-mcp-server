@@ -27,7 +27,7 @@ function stubCanvas(
 
 describe('gnomad_dataframe_describe handler', () => {
   it('maps canvas tables, row counts, and column schemas', async () => {
-    stubCanvas([
+    const { instance } = stubCanvas([
       {
         name: 'gene_variants',
         rowCount: 1000,
@@ -49,6 +49,8 @@ describe('gnomad_dataframe_describe handler', () => {
       { name: 'af', type: 'DOUBLE' },
     ]);
     expect(result).toEqual(expect.schemaMatching(gnomadDataframeDescribe.output));
+    // Tables only, never the view a dataframe query holds while it runs.
+    expect(instance.describe).toHaveBeenCalledWith({ kind: 'table' });
   });
 
   it('returns an empty tables array for a canvas with nothing staged', async () => {

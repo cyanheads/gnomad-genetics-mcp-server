@@ -3,8 +3,11 @@
  * per-variant join gnomAD provides: pathogenic / likely-pathogenic variant
  * lists, review status (star rating), submission counts, and gnomAD-compatible
  * identifiers via NCBI E-utilities, in offset/limit windows over the ClinVar
- * match list. A window larger than the inline preview spills to a DataCanvas
- * table (clinvar_variants) for gnomad_dataframe_describe and gnomad_dataframe_query.
+ * match list, echoing the gene and filters searched. With the canvas on, a
+ * window larger than the inline preview spills to a DataCanvas table
+ * (clinvar_variants) for gnomad_dataframe_describe and gnomad_dataframe_query;
+ * with it off, every row of the window is inline and the descriptions name no
+ * dataframe tool, since none is registered.
  * @module mcp-server/tools/definitions/gnomad-search-clinvar.tool
  */
 
@@ -12,25 +15,64 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { isCanvasEnabled } from '@/config/server-config.js';
 import {
   CLINVAR_OFFSET_MAX,
-  CLINVAR_WINDOW_MAX,
+  CLINVAR_WINDOW_CAP,
+  CLINVAR_WINDOW_DEFAULT,
   getClinVarService,
   normalizeSignificance,
 } from '@/services/clinvar/clinvar-service.js';
 import type { ClinVarRow, ClinVarSearchResult } from '@/services/clinvar/types.js';
+import { ENSEMBL_GENE_ID } from '@/services/gnomad/identifier-normalization.js';
 import { rowSchema, stagedLine, stageRows } from '../canvas-staging.js';
+import { type CountLimit, clampLimit, limitSchema } from '../count-limit.js';
 import { geneField } from '../shared-schemas.js';
 
 const TABLE_NAME = 'clinvar_variants';
 /**
- * Inline preview budget in JSON characters of the preview rows, canvas on or
- * off. Each row lands on both surfaces (structuredContent and the multi-line
- * format() block), measured at ~1.98 serialized bytes per JSON character on
- * real PCSK9 rows, and the composed notice runs ~600 characters on each
- * surface, so 11,000 keeps a response near 22 KB.
+ * Inline preview budget in JSON characters of the preview rows while the
+ * canvas is on; with it off, every row of the window is inline. Each row lands
+ * on both surfaces (structuredContent and the multi-line format() block),
+ * measured at ~1.98 serialized bytes per JSON character on real PCSK9 rows,
+ * and the composed notice runs ~600 characters on each surface, so 11,000
+ * keeps a response near 22 KB.
  */
 const PREVIEW_CHARS = 11_000;
+
+const LIMIT: CountLimit = {
+  tool: 'gnomad_search_clinvar',
+  default: CLINVAR_WINDOW_DEFAULT,
+  cap: CLINVAR_WINDOW_CAP,
+};
+
+/**
+ * Read once, when the definition evaluates: the dataframe tools are registered
+ * only while the canvas is on, so the descriptions name them only then.
+ */
+const CANVAS_ON = isCanvasEnabled();
+
+const STAGING_DESCRIPTION = CANVAS_ON
+  ? 'A window too large to inline is staged on a DataCanvas table named clinvar_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank or count across the window. A window that fits inline stages no table unless canvas_id is supplied.'
+  : 'Every row of the window is returned inline.';
+const CANVAS_OFF_FIELD = 'Always empty: DataCanvas is off on this server.';
+
+/** The row filters a window applied, as the output echoes them. */
+const FiltersSchema = z
+  .object({
+    clinical_significance: z
+      .string()
+      .nullable()
+      .describe(
+        'The clinical_significance filter as applied — quotes dropped, underscores read as spaces, trimmed, lowercased; null when omitted or blank.',
+      ),
+    min_review_stars: z
+      .number()
+      .nullable()
+      .describe('The min_review_stars floor; null when omitted.'),
+  })
+  .describe('Row filters applied to this window; offset and limit are not filters.');
+type Filters = z.infer<typeof FiltersSchema>;
 
 /** clinvar_variants column types, declared from ClinVarRow in its field order. */
 const TABLE_SCHEMA = rowSchema<ClinVarRow>({
@@ -50,13 +92,6 @@ const TABLE_SCHEMA = rowSchema<ClinVarRow>({
   rsids: { type: 'VARCHAR', nullable: false },
   grch38_variant_id: { type: 'VARCHAR', nullable: true },
 });
-
-/**
- * Ensembl gene ID shape (ENSG…). ClinVar's `[gene]` index resolves HGNC symbols
- * only, so an ENSG ID — valid on every other gnomAD tool — always returns zero
- * records here; detect it to name the real cause instead of a bare empty result.
- */
-const ENSEMBL_GENE_ID = /^ENSG\d+$/i;
 
 const ClinVarRowSchema = z
   .object({
@@ -100,8 +135,7 @@ const ClinVarRowSchema = z
 
 export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   title: 'gnomad-genetics-mcp-server: search clinvar',
-  description:
-    'Search ClinVar (NCBI E-utilities) for a gene and return its classified variants — clinical significance, review status with a 0–4 star rating, associated conditions, molecular consequences, submission counts, and gnomAD-compatible identifiers (canonical SPDI, rsIDs, GRCh38 variant ID for gnomad_get_variant) — turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by clinical_significance (e.g. pathogenic) and a minimum star rating. Each call returns one window of up to 500 ClinVar records: total_found is the ClinVar candidate count for the search terms, taken before the significance and star filters narrow each window, and next_offset continues through the rest via offset. A window too large to inline is staged on a DataCanvas table named clinvar_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank or count across the window. A window that fits inline stages no table unless canvas_id is supplied. Keyless, but honors NCBI_API_KEY for a higher rate limit. When the canvas is disabled the tool returns a capped inline preview. Credit: ClinVar, NCBI.',
+  description: `Search ClinVar (NCBI E-utilities) for a gene and return its classified variants — clinical significance, review status with a 0–4 star rating, associated conditions, molecular consequences, submission counts, and gnomAD-compatible identifiers (canonical SPDI, rsIDs, GRCh38 variant ID for gnomad_get_variant) — turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by clinical_significance (e.g. pathogenic) and a minimum star rating. Each call returns one window of up to limit ClinVar records (default ${LIMIT.default}): total_found is the ClinVar count for the search terms (the match count for a mapped significance term, a candidate count for any other), and next_offset continues through the rest via offset. ${STAGING_DESCRIPTION} Keyless, but honors NCBI_API_KEY for a higher rate limit. Credit: ClinVar, NCBI.`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     // Tool-specific override of the shared geneField: ClinVar indexes HGNC
@@ -115,7 +149,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .trim()
       .optional()
       .describe(
-        'Filter by ClinVar clinical significance term (e.g. pathogenic, likely_pathogenic, uncertain significance), matched as whole words; underscores read as spaces. Blank means no filter.',
+        "Filter by ClinVar germline classification, case-insensitive, matched as whole words; underscores read as spaces. pathogenic (Pathogenic and Likely pathogenic, combined and low-penetrance forms included), likely pathogenic, uncertain significance, vus (Uncertain significance plus VUS-high, VUS-mid, and VUS-low), likely benign, benign (Benign and Likely benign), and conflicting search ClinVar's classification index, so their windows hold matching records only. Any other term (e.g. risk factor) narrows a text search, and its windows can return fewer rows than limit. Blank means no filter.",
       ),
     min_review_stars: z
       .number()
@@ -133,20 +167,19 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .describe(
         'Zero-based position of the first ClinVar record in this window. Pass next_offset from the previous call to continue.',
       ),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(CLINVAR_WINDOW_MAX)
-      .default(CLINVAR_WINDOW_MAX)
-      .describe(
-        'ClinVar records to fetch in this window (1–500). Counted before the clinical_significance and min_review_stars filters, so a window can return fewer rows.',
-      ),
+    limit: limitSchema(
+      LIMIT,
+      'ClinVar records to fetch in this window. A mapped clinical_significance term and min_review_stars narrow the search itself, so their windows hold matching records; any other significance term is filtered after the fetch, so its windows can return fewer rows.',
+    ),
     canvas_id: CanvasIdSchema.optional().describe(
-      'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, each search writes its window to the clinvar_variants table on that canvas, replacing (not appending to) the previous one — even when the window fits inline; a window with no rows removes the table. An Ensembl gene ID searches nothing and leaves the canvas as it was. Omit to stage on a fresh canvas only when the window is too large to inline.',
+      CANVAS_ON
+        ? 'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, each search writes its window to the clinvar_variants table on that canvas, replacing (not appending to) the previous one — even when the window fits inline; a window with no rows removes the table. An Ensembl gene ID searches nothing and leaves the canvas as it was. Omit to stage on a fresh canvas only when the window is too large to inline.'
+        : 'Ignored: DataCanvas is off on this server, so every row of the window is returned inline.',
     ),
   }),
   output: z.object({
+    gene: z.string().describe('The gene searched, as given.'),
+    filters: FiltersSchema,
     preview: z
       .array(ClinVarRowSchema)
       .describe(
@@ -155,17 +188,23 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     canvas_id: z
       .string()
       .describe(
-        'Canvas holding table_name (or the canvas_id you supplied) — pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the window fit inline and no canvas_id was supplied, the gene was an Ensembl ID (nothing was searched), or the canvas is disabled.',
+        CANVAS_ON
+          ? 'Canvas holding table_name (or the canvas_id you supplied) — pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the window fit inline and no canvas_id was supplied, the gene was an Ensembl ID (nothing was searched), or the canvas is disabled.'
+          : CANVAS_OFF_FIELD,
       ),
     table_name: z
       .string()
       .describe(
-        "Canvas table this call staged (clinvar_variants), holding this window's rows — inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table.",
+        CANVAS_ON
+          ? "Canvas table this call staged (clinvar_variants), holding this window's rows — inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table."
+          : CANVAS_OFF_FIELD,
       ),
     spilled: z
       .boolean()
       .describe(
-        "True when this window's rows exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all.",
+        CANVAS_ON
+          ? "True when this window's rows exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all."
+          : 'Always false: DataCanvas is off on this server, so preview holds every row of the window.',
       ),
     total: z
       .number()
@@ -173,7 +212,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     total_found: z
       .number()
       .describe(
-        'ClinVar records matching the gene and filter terms across every window, counted before the post-fetch significance and star filters.',
+        'ClinVar records matching the gene and filter terms across every window, counted by the search before the post-fetch filters: the match count for a mapped significance term, a candidate count for any other.',
       ),
     truncated: z
       .boolean()
@@ -193,7 +232,9 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .string()
       .optional()
       .describe(
-        'Guidance on completeness (the offset that continues the list, or an offset past the end), no-match results, a capped preview when the canvas is disabled, the staged table with its next steps (gnomad_dataframe_describe, then gnomad_dataframe_query), and which identifier to pass to gnomad_get_variant.',
+        CANVAS_ON
+          ? 'Guidance on a clamped limit, completeness (the offset that continues the list, or an offset past the end), no-match results, the staged table with its next steps (gnomad_dataframe_describe, then gnomad_dataframe_query), and which identifier to pass to gnomad_get_variant.'
+          : 'Guidance on a clamped limit, completeness (the offset that continues the list, or an offset past the end), no-match results, and which identifier to pass to gnomad_get_variant.',
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -237,18 +278,27 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   ],
 
   async handler(input, ctx) {
+    const echo = {
+      gene: input.gene,
+      filters: {
+        clinical_significance: normalizeSignificance(input.clinical_significance) ?? null,
+        min_review_stars: input.min_review_stars ?? null,
+      },
+    };
     /**
-     * ClinVar's [gene] index resolves HGNC symbols only, so an Ensembl gene ID
-     * always yields zero records. Name the real cause instead of running a
-     * guaranteed-empty NCBI query and returning the misdirecting generic
-     * "verify the gene symbol" notice. Nothing was searched, so the canvas is
-     * not touched either — a supplied canvas_id and its table stay as they were.
+     * ClinVar's [gene] index resolves HGNC symbols only, so an Ensembl gene ID,
+     * versioned or not, always yields zero records. Name the real cause instead
+     * of running a guaranteed-empty NCBI query and returning the misdirecting
+     * generic "verify the gene symbol" notice. The check rewrites nothing, so
+     * GNOMAD_NORMALIZE_IDS does not gate it. Nothing was searched, so the canvas
+     * is not touched either — a supplied canvas_id and its table stay as they were.
      */
     if (ENSEMBL_GENE_ID.test(input.gene)) {
       ctx.enrich.notice(
         `ClinVar search needs an HGNC symbol; Ensembl gene IDs (ENSG…) are not indexed by ClinVar. Resolve "${input.gene}" to its symbol (e.g. via ensembl_lookup_gene) and retry.`,
       );
       return {
+        ...echo,
         preview: [],
         canvas_id: '',
         table_name: '',
@@ -261,13 +311,14 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       };
     }
 
+    const { applied: limit, notice: clamped } = clampLimit(ctx, LIMIT, input.limit);
     const search = await getClinVarService().searchGene(
       input.gene,
       {
         clinicalSignificance: input.clinical_significance,
         minReviewStars: input.min_review_stars,
         offset: input.offset,
-        limit: input.limit,
+        limit,
       },
       ctx,
     );
@@ -275,14 +326,15 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
 
     /**
      * ctx.enrich.notice is last-wins, so every part is collected here and
-     * written once, in order: completeness → capped preview → staged table →
+     * written once, in order: clamped limit → completeness → staged table →
      * identifiers.
      */
     const notices: string[] = [];
-    const completeness = windowNotice(input, search);
+    if (clamped) notices.push(clamped);
+    const completeness = windowNotice({ ...echo, offset: input.offset, limit }, search);
     if (completeness) notices.push(completeness);
 
-    const { capped, staged } = await stageRows({
+    const staged = await stageRows({
       rows,
       canvasId: input.canvas_id,
       tableName: TABLE_NAME,
@@ -290,11 +342,6 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       previewChars: PREVIEW_CHARS,
       ctx,
     });
-    if (capped) {
-      notices.push(
-        `Canvas is disabled (set CANVAS_PROVIDER_TYPE=duckdb) — showing ${staged.preview.length} of ${rows.length} records in this window. Enable the canvas to query every row with gnomad_dataframe_query.`,
-      );
-    }
     if (staged.table_name) {
       notices.push(
         `Staged this window's ${staged.total} record(s) in table "${staged.table_name}" (canvas_id ${staged.canvas_id}). Call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to run SQL over the staged window.`,
@@ -306,6 +353,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
+      ...echo,
       ...staged,
       total_found: search.totalFound,
       truncated: search.truncated,
@@ -317,6 +365,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   format: (result) => {
     const lines = [
       `## ClinVar — ${result.total} record(s)`,
+      `**Gene:** ${escapeMarkdownInline(result.gene)} | **Filters:** ${filterList(result.filters, escapeMarkdownInline) ?? 'none'}`,
       `**Total found:** ${result.total_found} | **Truncated:** ${result.truncated ? 'yes' : 'no'} | **Next offset:** ${result.next_offset ?? 'none'}`,
       `**Unavailable IDs:** ${result.unavailable_ids.length ? result.unavailable_ids.join(', ') : 'none'}`,
       `**Spilled:** ${result.spilled ? 'yes' : 'no'}`,
@@ -338,21 +387,31 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   },
 });
 
-interface SearchInput {
-  clinical_significance?: string | undefined;
+/** One searched window: the echoed gene and filters, and the offset and applied limit. */
+interface SearchWindow {
+  filters: Filters;
   gene: string;
   limit: number;
-  min_review_stars?: number | undefined;
   offset: number;
 }
 
+/**
+ * `clinical_significance=…, min_review_stars=…` for the filters set, else
+ * undefined. `render` escapes the caller's significance for content[].
+ */
+function filterList(filters: Filters, render: (text: string) => string = (text) => text) {
+  const parts: string[] = [];
+  if (filters.clinical_significance != null) {
+    parts.push(`clinical_significance=${render(filters.clinical_significance)}`);
+  }
+  if (filters.min_review_stars != null) parts.push(`min_review_stars=${filters.min_review_stars}`);
+  return parts.length ? parts.join(', ') : undefined;
+}
+
 /** ` matching clinical_significance=…, min_review_stars=…` for the filters applied, else ''. */
-function filterText(input: SearchInput): string {
-  const filters: string[] = [];
-  const significance = normalizeSignificance(input.clinical_significance);
-  if (significance) filters.push(`clinical_significance=${significance}`);
-  if (input.min_review_stars != null) filters.push(`min_review_stars=${input.min_review_stars}`);
-  return filters.length ? ` matching ${filters.join(', ')}` : '';
+function filterText(input: SearchWindow): string {
+  const filters = filterList(input.filters);
+  return filters ? ` matching ${filters}` : '';
 }
 
 /**
@@ -361,7 +420,7 @@ function filterText(input: SearchInput): string {
  * with no rows that is not the whole list gets the window's position — the
  * continuation or the end of the list — never the no-records text.
  */
-function windowNotice(input: SearchInput, search: ClinVarSearchResult): string | undefined {
+function windowNotice(input: SearchWindow, search: ClinVarSearchResult): string | undefined {
   const { offset, limit } = input;
   const { totalFound, nextOffset } = search;
   const range = `${offset + 1}–${Math.min(offset + limit, totalFound)} of ${totalFound}`;

@@ -40,49 +40,106 @@ function starsForReviewStatus(status: string | null | undefined): number {
 }
 
 /**
- * Whole-word, case-insensitive classification match. A `pathogenic` query keeps
- * "Pathogenic", "Likely pathogenic", and "Pathogenic/Likely pathogenic" but not
- * "Conflicting classifications of pathogenicity" — the word boundary stops the
- * query from matching inside "pathogenicity". `requested` is already
- * normalized by normalizeSignificance().
+ * A significance filter as searchGene() applies it: the ESearch clause that
+ * narrows the candidate IDs, and the whole-word, case-insensitive test the
+ * post-fetch filter runs on each record's germline classification.
  */
-function matchesSignificance(value: string | null, requested: string): boolean {
-  if (!value) return false;
-  const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${escaped}\\b`, 'i').test(value);
+export interface SignificanceMatch {
+  clause: string;
+  pattern: RegExp;
 }
 
 /**
- * The clinical-significance filter as both the ESearch term and the post-fetch
- * filter use it: `"` dropped (the term quotes the phrase itself), underscores
- * read as spaces so the documented `likely_pathogenic` form works, trimmed.
- * Blank after that means no filter — form clients send `""` or whitespace for
- * an untouched field.
+ * Terms ClinVar indexes as germline-classification properties, keyed by
+ * normalizeSignificance()'s value. A `[prop]` clause selects exactly the
+ * records the paired pattern keeps, so the ESearch count is the match count;
+ * a classification such as "Pathogenic, low penetrance" or "VUS-high" carries
+ * only its own property, so each clause names every property its pattern
+ * accepts. Word boundaries keep `pathogenic` out of "Conflicting
+ * classifications of pathogenicity".
+ */
+const SIGNIFICANCE_TERMS = new Map<string, SignificanceMatch>([
+  [
+    'pathogenic',
+    {
+      clause:
+        '(clinsig_pathogenic[prop] OR clinsig_likely_pathogenic[prop] OR clinsig_pathogenic_low_penetrance[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])',
+      pattern: /\bpathogenic\b/i,
+    },
+  ],
+  [
+    'likely pathogenic',
+    {
+      clause: '(clinsig_likely_pathogenic[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])',
+      pattern: /\blikely pathogenic\b/i,
+    },
+  ],
+  [
+    'uncertain significance',
+    { clause: 'clinsig_vus[prop]', pattern: /\buncertain significance\b/i },
+  ],
+  [
+    'vus',
+    {
+      clause:
+        '(clinsig_vus[prop] OR clinsig_vus_high[prop] OR clinsig_vus_mid[prop] OR clinsig_vus_low[prop])',
+      pattern: /\b(?:uncertain significance|vus)\b/i,
+    },
+  ],
+  ['likely benign', { clause: 'clinsig_likely_benign[prop]', pattern: /\blikely benign\b/i }],
+  [
+    'benign',
+    { clause: '(clinsig_benign[prop] OR clinsig_likely_benign[prop])', pattern: /\bbenign\b/i },
+  ],
+  ['conflicting', { clause: 'clinsig_has_conflicts[prop]', pattern: /\bconflicting\b/i }],
+]);
+
+/**
+ * The clause and post-filter for a significance already normalized by
+ * normalizeSignificance(). A mapped term reads its `[prop]` pair. Any other
+ * term goes out as a quoted `[clinical_significance]` phrase, which NCBI
+ * rewrites to `[All Fields]`: it only narrows the candidates, and an unquoted
+ * multi-word phrase there would match nothing.
+ */
+export function significanceMatch(term: string): SignificanceMatch {
+  return (
+    SIGNIFICANCE_TERMS.get(term) ?? {
+      clause: `"${term}"[clinical_significance]`,
+      pattern: new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'),
+    }
+  );
+}
+
+/**
+ * The clinical-significance filter as the ESearch term, the post-fetch filter,
+ * and the tool's echo and notices use it: `"` dropped (the term quotes the
+ * phrase itself), underscores read as spaces so the documented
+ * `likely_pathogenic` form works, trimmed, and lowercased so any casing selects
+ * the same term. Blank after that means no filter — form clients send `""` or
+ * whitespace for an untouched field.
  */
 export function normalizeSignificance(value: string | undefined): string | undefined {
-  const normalized = value?.replace(/"/g, '').replace(/_/g, ' ').trim();
+  const normalized = value?.replace(/"/g, '').replace(/_/g, ' ').trim().toLowerCase();
   return normalized ? normalized : undefined;
 }
 
 /**
  * Build the ESearch term. The gene goes out as a quoted phrase, so query
  * syntax in it — parentheses, brackets, a trailing `OR` — stays inside the
- * `[gene]` field instead of detaching the tag and searching all fields. NCBI
- * rewrites the `[clinical_significance]` tag to `[All Fields]`, where an
- * unquoted multi-word phrase matches nothing, so the significance goes out
- * quoted too. The star floor goes out as an OR of the exact review-status
- * values at or above it; a floor of 0 admits every status, including ones the
- * star map does not know, so it adds no clause. Both filter clauses only
- * narrow the candidate set — the post-fetch filters in searchGene() stay
- * authoritative. `symbol` and `significance` arrive with `"` already removed.
+ * `[gene]` field instead of detaching the tag and searching all fields. The
+ * significance clause comes from significanceMatch(). The star floor goes out
+ * as an OR of the exact review-status values at or above it; a floor of 0
+ * admits every status, including ones the star map does not know, so it adds
+ * no clause. The post-fetch filters in searchGene() stay authoritative over
+ * both filter clauses. `symbol` arrives with `"` already removed.
  */
 function buildEsearchTerm(
   symbol: string,
-  significance: string | undefined,
+  significance: SignificanceMatch | undefined,
   minReviewStars: number | undefined,
 ): string {
   const clauses = [`"${symbol}"[gene]`];
-  if (significance) clauses.push(`"${significance}"[clinical_significance]`);
+  if (significance) clauses.push(significance.clause);
   if (minReviewStars != null && minReviewStars > 0) {
     const statuses = Object.entries(REVIEW_STATUS_STARS)
       .filter(([, stars]) => stars >= minReviewStars)
@@ -143,8 +200,14 @@ function grch38VariantId(spdi: string | null): string | null {
 /** ClinVar's `last_evaluated` for a classification that has no evaluation date. */
 const NO_EVALUATION_DATE = '1/01/01 00:00';
 
-/** Default and maximum ESearch window, in candidate VariationIDs. */
-export const CLINVAR_WINDOW_MAX = 500;
+/** ESearch window, in candidate VariationIDs, when a search names no limit. */
+export const CLINVAR_WINDOW_DEFAULT = 10;
+/**
+ * Largest window the tool serves: a full window of the longest real records
+ * (BRCA1) is about 1 MB on each response surface, and its 31 sequential NCBI
+ * requests fit the 45 s call budget at keyless pacing.
+ */
+export const CLINVAR_WINDOW_CAP = 1_500;
 /** Largest ESearch `retstart` NCBI accepts (signed 32-bit); past it ESearch answers 200 with an empty body. */
 export const CLINVAR_OFFSET_MAX = 2_147_483_647;
 /** esummary batch size per request. */
@@ -276,8 +339,10 @@ export class ClinVarService {
 
   /**
    * Search one window of ClinVar candidates for a gene. `offset`/`limit` page
-   * the ESearch ID list; the significance and star filters then narrow the
-   * window's rows, so a window can hold fewer rows than `limit`.
+   * the ESearch ID list. A mapped significance term and the star floor are in
+   * the ESearch term, so their windows are dense; an unmapped term matches
+   * across all fields, and the post-fetch filters, which stay authoritative,
+   * can leave its window shorter than `limit`.
    */
   async searchGene(
     gene: string,
@@ -287,8 +352,9 @@ export class ClinVarService {
     const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
     ctx.signal.throwIfAborted();
     const offset = filters.offset ?? 0;
-    const limit = filters.limit ?? CLINVAR_WINDOW_MAX;
-    const significance = normalizeSignificance(filters.clinicalSignificance);
+    const limit = filters.limit ?? CLINVAR_WINDOW_DEFAULT;
+    const term = normalizeSignificance(filters.clinicalSignificance);
+    const significance = term ? significanceMatch(term) : undefined;
     /**
      * NCBI ignores an empty quoted phrase and falls back to searching every
      * field for "gene" — all of ClinVar — so a gene of nothing but quotes and
@@ -298,8 +364,13 @@ export class ClinVarService {
     if (!symbol) {
       return { rows: [], totalFound: 0, truncated: false, nextOffset: null, unavailableIds: [] };
     }
-    const term = buildEsearchTerm(symbol, significance, filters.minReviewStars);
-    const { ids, count } = await this.esearch(term, offset, limit, ctx, deadline);
+    const { ids, count } = await this.esearch(
+      buildEsearchTerm(symbol, significance, filters.minReviewStars),
+      offset,
+      limit,
+      ctx,
+      deadline,
+    );
 
     const rows: ClinVarRow[] = [];
     const unavailableIds: string[] = [];
@@ -308,13 +379,18 @@ export class ClinVarService {
       rows.push(...batch.rows);
       unavailableIds.push(...batch.unavailable);
     }
-    // The ESearch clauses only narrow the candidate set — the significance
-    // phrase matches across all fields, so a pathogenic query still leaks
-    // "Benign"/"Uncertain significance"/"Conflicting…" rows. Both filters are
-    // enforced here, post-fetch, and compose when both are set.
+    /**
+     * Both filters are enforced here, post-fetch, and compose when both are
+     * set; the ESearch clauses only select candidates. A mapped term's
+     * property clause selects what its pattern keeps, but an unmapped phrase
+     * matches across all fields and leaks other classifications.
+     */
     let filtered = rows;
     if (significance) {
-      filtered = filtered.filter((r) => matchesSignificance(r.clinical_significance, significance));
+      filtered = filtered.filter(
+        (r) =>
+          r.clinical_significance != null && significance.pattern.test(r.clinical_significance),
+      );
     }
     if (filters.minReviewStars != null) {
       const floor = filters.minReviewStars;

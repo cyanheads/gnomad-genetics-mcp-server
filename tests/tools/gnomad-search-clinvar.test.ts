@@ -1,22 +1,24 @@
 /**
  * @fileoverview Behavior tests for the gnomad_search_clinvar handler — the
  * second upstream service (NCBI E-utilities). The first blocks stub the ClinVar
- * service and cover canvas-disabled (a preview of the rows within the
- * 11,000-character budget, empty canvas_id, no-match + cap notices),
- * canvas-enabled staging (no canvas for a fit without canvas_id, a spill past
- * the budget, a supplied canvas_id that replaces or drops the table), the
- * Ensembl-ID short-circuit that touches no canvas, and format() rendering. The
- * contract-surface blocks run the real service behind a fake fetch through
- * runToolContract, covering result windows and their notices, the
- * upstream_unavailable contract, gnomAD-compatible identifiers, blank and
- * quoted significance filters, the quoted gene term, the notice/staging matrix
- * across every reachable response shape, the ~24 KB response budget on the
+ * service and cover canvas-disabled (every row of the window inline, empty
+ * canvas_id, no-match notice), canvas-enabled staging (no canvas for a fit
+ * without canvas_id, a spill past the budget, a supplied canvas_id that
+ * replaces or drops the table), the Ensembl-ID short-circuit that touches no
+ * canvas, and format() rendering. The contract-surface blocks run the real
+ * service behind a fake fetch through runToolContract, covering result windows
+ * and their notices, the limit default, clamp, and strict mode, the gene and
+ * filter echo, descriptions gated on the canvas, the upstream_unavailable
+ * contract, gnomAD-compatible identifiers, mapped, blank, and quoted
+ * significance filters, the quoted gene term, the notice/staging matrix across
+ * every reachable response shape, the ~24 KB canvas-on response budget on the
  * heaviest real records, and ClinVar's no-date placeholder and blank germline
  * values on both surfaces and as SQL NULL on a real DuckDB canvas.
  * @module tests/tools/gnomad-search-clinvar.test
  */
 
 import { readFileSync } from 'node:fs';
+import { z } from '@cyanheads/mcp-ts-core';
 import {
   CanvasRegistry,
   DataCanvas,
@@ -26,6 +28,7 @@ import {
 import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetServerConfig } from '@/config/server-config.js';
 import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 import * as clinvarModule from '@/services/clinvar/clinvar-service.js';
@@ -33,6 +36,7 @@ import { initClinVarService } from '@/services/clinvar/clinvar-service.js';
 import type { ClinVarRow, ClinVarSearchResult } from '@/services/clinvar/types.js';
 
 type CallToolResult = Awaited<ReturnType<typeof runToolContract>>;
+type SchemaProperties = { properties: Record<string, Record<string, unknown>> };
 
 function row(i: number): ClinVarRow {
   return {
@@ -149,7 +153,7 @@ describe('gnomad_search_clinvar handler — canvas disabled', () => {
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
-  it('previews the longest prefix within the budget and notices the truncation (#37)', async () => {
+  it('returns every row one character past the budget, with no notice (#59)', async () => {
     const rows = [...Array.from({ length: 19 }, (_, i) => sized(i + 1, 550)), sized(20, 551)];
     stubClinvar(async () => rows);
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
@@ -158,41 +162,9 @@ describe('gnomad_search_clinvar handler — canvas disabled', () => {
     const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(result.total).toBe(20);
-    expect(result.preview).toEqual(rows.slice(0, 19));
-    expect(getEnrichment(ctx).notice).toMatch(/showing 19 of 20 records/);
-  });
-
-  it('previews fewer heavy rows than light ones under the same budget (#37)', async () => {
-    stubClinvar(async () => Array.from({ length: 18 }, (_, i) => sized(i + 1, 1_100)));
-    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
-
-    const ctx = createMockContext({ errors: gnomadSearchClinvar.errors });
-    const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
-    const result = await gnomadSearchClinvar.handler(input, ctx as never);
-
-    expect(result.preview).toHaveLength(10);
-    expect(getEnrichment(ctx).notice).toMatch(/showing 10 of 18 records/);
-  });
-
-  it('previews the same rows with the canvas disabled as the canvas-on spill does (#37)', async () => {
-    const rows = Array.from({ length: 60 }, (_, i) => row(i + 1));
-    stubClinvar(async () => rows);
-    const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
-
-    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
-    const off = await gnomadSearchClinvar.handler(
-      input,
-      createMockContext({ errors: gnomadSearchClinvar.errors }) as never,
-    );
-    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(fakeCanvas().canvas as never);
-    const on = await gnomadSearchClinvar.handler(
-      input,
-      createMockContext({ errors: gnomadSearchClinvar.errors }) as never,
-    );
-
-    expect(on.spilled).toBe(true);
-    expect(off.preview).toEqual(on.preview);
+    expect(result).toMatchObject({ total: 20, spilled: false, canvas_id: '', table_name: '' });
+    expect(result.preview).toEqual(rows);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
   it('emits a no-match notice naming the filters', async () => {
@@ -234,6 +206,28 @@ describe('gnomad_search_clinvar handler — Ensembl gene ID', () => {
     expect(notice).toMatch(/not indexed by ClinVar/);
     expect(notice).toContain('ENSG00000169174');
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+  it.each(['true', 'false'])(
+    'short-circuits a versioned ENSG id the same way with GNOMAD_NORMALIZE_IDS=%s',
+    async (normalizeIds) => {
+      vi.stubEnv('GNOMAD_NORMALIZE_IDS', normalizeIds);
+      resetServerConfig();
+      const fake = stubClinvar(async () => [row(1)]);
+      vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+      const result = await runToolContract(gnomadSearchClinvar, { gene: 'ENSG00000169174.12' });
+
+      vi.unstubAllEnvs();
+      resetServerConfig();
+      expect(fake.searchGene).not.toHaveBeenCalled();
+      expect(result.structuredContent).toMatchObject({
+        total: 0,
+        notice:
+          'ClinVar search needs an HGNC symbol; Ensembl gene IDs (ENSG…) are not indexed by ClinVar. Resolve "ENSG00000169174.12" to its symbol (e.g. via ensembl_lookup_gene) and retry.',
+      });
+    },
+  );
 
   it('renders no disabled-canvas text for an ENSG id with the canvas enabled (#33)', async () => {
     vi.restoreAllMocks();
@@ -429,8 +423,15 @@ describe('gnomad_search_clinvar handler — upstream failure', () => {
   });
 });
 
+/** The #70 echo of a search with no filters. */
+const NO_FILTERS = {
+  gene: 'LDLR',
+  filters: { clinical_significance: null, min_review_stars: null },
+};
+
 describe('gnomad_search_clinvar format()', () => {
   const base = {
+    ...NO_FILTERS,
     canvas_id: '',
     table_name: '',
     spilled: false,
@@ -677,10 +678,10 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
     vi.restoreAllMocks();
   });
 
-  it('reports the ESearch count and the next offset on the first default window', async () => {
+  it('reports the ESearch count and the next offset on a first window of 500', async () => {
     const urls = fakeNcbi({ count: '1571', idlist: ids(1_000_000, 500) });
 
-    const result = await run({ gene: 'PCSK9' });
+    const result = await run({ gene: 'PCSK9', limit: 500 });
 
     expect(result.isError).toBeFalsy();
     expect(urls[0]?.searchParams.get('retstart')).toBe('0');
@@ -722,7 +723,7 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
   it('closes the last window with truncated=false and next_offset=null', async () => {
     fakeNcbi({ count: '1571', idlist: ids(3_000_000, 71) });
 
-    const result = await run({ gene: 'PCSK9', offset: 1500 });
+    const result = await run({ gene: 'PCSK9', offset: 1500, limit: 500 });
 
     const sc = result.structuredContent as Record<string, unknown>;
     expect(sc).toMatchObject({ total: 71, total_found: 1571, truncated: false, next_offset: null });
@@ -770,7 +771,12 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
   it('names a filtered-empty last window as the end of the list, not a no-match', async () => {
     fakeNcbi({ count: '1571', idlist: ids(8_000_000, 71) });
 
-    const result = await run({ gene: 'PCSK9', clinical_significance: 'pathogenic', offset: 1500 });
+    const result = await run({
+      gene: 'PCSK9',
+      clinical_significance: 'pathogenic',
+      offset: 1500,
+      limit: 500,
+    });
 
     const sc = result.structuredContent as Record<string, unknown>;
     expect(sc).toMatchObject({ total: 0, total_found: 1571, truncated: false, next_offset: null });
@@ -818,7 +824,6 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
   it.each([
     { offset: -1 },
     { limit: 0 },
-    { limit: 501 },
     { offset: 1.5 },
     // ESearch retstart is a signed 32-bit integer; past it NCBI answers 200 with an empty body.
     { offset: 2_147_483_648 },
@@ -835,24 +840,47 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
 
   it.each([
     { offset: 0, limit: 1 },
-    { offset: 0, limit: 500 },
-  ])('accepts the window boundaries %j', async (window) => {
+    { offset: 0, limit: 1500 },
+  ])('accepts the window boundaries %j without a clamp notice', async (window) => {
     const urls = fakeNcbi({ count: '0', idlist: [] });
 
     const result = await run({ gene: 'PCSK9', ...window });
 
     expect(result.isError).toBeFalsy();
     expect(urls[0]?.searchParams.get('retmax')).toBe(String(window.limit));
+    expect((result.structuredContent as { notice: string }).notice).not.toMatch(/clamped/);
   });
 
-  it('sends the significance phrase and review-status floor in the ESearch term', async () => {
+  it('sends the significance property clause and review-status floor in the ESearch term (#67)', async () => {
     const urls = fakeNcbi({ count: '0', idlist: [] });
 
     await run({ gene: 'BRCA1', clinical_significance: 'pathogenic', min_review_stars: 3 });
 
     expect(urls[0]?.searchParams.get('term')).toBe(
-      '"BRCA1"[gene] AND "pathogenic"[clinical_significance] AND ("practice guideline"[Review status] OR "reviewed by expert panel"[Review status])',
+      '"BRCA1"[gene] AND (clinsig_pathogenic[prop] OR clinsig_likely_pathogenic[prop] OR clinsig_pathogenic_low_penetrance[prop] OR clinsig_likely_pathogenic_low_penetrance[prop]) AND ("practice guideline"[Review status] OR "reviewed by expert panel"[Review status])',
     );
+  });
+
+  it('searches VUS through the property clause and keeps the Uncertain significance rows (#67)', async () => {
+    // 4759136 and 2610176 are Uncertain significance in the live fixture; 2878 is Benign/Likely benign.
+    const urls = fakeNcbi({ count: '777', idlist: ['4759136', '2878', '2610176'] });
+
+    const result = await run({ gene: 'PCSK9', clinical_significance: 'VUS', limit: 3 });
+
+    expect(urls[0]?.searchParams.get('term')).toBe(
+      '"PCSK9"[gene] AND (clinsig_vus[prop] OR clinsig_vus_high[prop] OR clinsig_vus_mid[prop] OR clinsig_vus_low[prop])',
+    );
+    const sc = result.structuredContent as { preview: ClinVarRow[]; total_found: number };
+    expect(sc.total_found).toBe(777);
+    expect(sc.preview.map((r) => [r.clinvar_variation_id, r.clinical_significance])).toEqual([
+      ['4759136', 'Uncertain significance'],
+      ['2610176', 'Uncertain significance'],
+    ]);
+    const text = textOf(result);
+    expect(text.match(/^\*\*Variant:\*\* /gm)).toHaveLength(2);
+    expect(text).toContain('**VariationID:** 4759136 ');
+    expect(text).toContain('**VariationID:** 2610176 ');
+    expect(text).toContain('**Filters:** clinical_significance=vus');
   });
 
   it('carries the completeness part before the identifier part in one notice', async () => {
@@ -867,6 +895,245 @@ describe('gnomad_search_clinvar result windows (#28)', () => {
     expect(identifiers).toBeGreaterThan(completeness);
     expect(notice).toMatch(/gnomad_get_variant/);
   });
+});
+
+describe('gnomad_search_clinvar limit (#63)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('fetches a window of 10 records when limit is omitted', async () => {
+    const urls = fakeNcbi({ count: '1571', idlist: ids(1_100_000, 10) });
+
+    const result = await run({ gene: 'PCSK9' });
+
+    expect(urls[0]?.searchParams.get('retmax')).toBe('10');
+    expect(urls.filter((u) => u.pathname.endsWith('/esummary.fcgi'))).toHaveLength(1);
+    expect(result.structuredContent).toMatchObject({
+      total: 10,
+      total_found: 1571,
+      truncated: true,
+      next_offset: 10,
+    });
+  });
+
+  it('clamps a limit above 1,500 to the cap, with the notice on both surfaces', async () => {
+    const urls = fakeNcbi({ count: '16107', idlist: ['2878', '4880644'] });
+
+    const result = await run({ gene: 'BRCA1', limit: 5000 });
+
+    expect(result.isError).toBeFalsy();
+    expect(urls[0]?.searchParams.get('retmax')).toBe('1500');
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc).toMatchObject({ truncated: true, next_offset: 1500 });
+    expect(sc.notice).toBe(
+      'Requested limit 5000 was clamped to the cap of 1500. This window covers ClinVar candidates 1–1500 of 16107 for "BRCA1"; continue with offset=1500 for the next window. To check population frequency, pass grch38_variant_id to gnomad_get_variant with a GRCh38 dataset (gnomad_r4 or gnomad_r3); prefer it over rsids, since one rsID can match several gnomAD variants.',
+    );
+    const text = textOf(result);
+    expect(text).toContain('Requested limit 5000 was clamped to the cap of 1500.');
+    expect(text).toContain('**Next offset:** 1500');
+  });
+
+  it('still rejects a fractional limit with InvalidParams', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const result = await runToolContract(gnomadSearchClinvar, { gene: 'PCSK9', limit: 2.5 });
+
+    expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+      JsonRpcErrorCode.InvalidParams,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('advertises a default of 10 and no maximum', () => {
+    const limit = (z.toJSONSchema(gnomadSearchClinvar.input) as SchemaProperties).properties.limit;
+    expect(limit).toMatchObject({ default: 10, minimum: 1 });
+    expect(limit).not.toHaveProperty('maximum');
+  });
+
+  describe('with GNOMAD_CLAMP_LIMITS=false', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('advertises a maximum of 1,500 and rejects 1501 with InvalidParams', async () => {
+      vi.stubEnv('GNOMAD_CLAMP_LIMITS', 'false');
+      vi.resetModules();
+      const { gnomadSearchClinvar: strict } = await import(
+        '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js'
+      );
+      const fetch = vi.spyOn(globalThis, 'fetch');
+
+      const result = await runToolContract(strict, { gene: 'PCSK9', limit: 1501 });
+
+      expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+        JsonRpcErrorCode.InvalidParams,
+      );
+      expect(fetch).not.toHaveBeenCalled();
+      expect((z.toJSONSchema(strict.input) as SchemaProperties).properties.limit).toMatchObject({
+        default: 10,
+        maximum: 1500,
+      });
+    });
+  });
+});
+
+describe('gnomad_search_clinvar with the canvas off pages without skipping rows (#59)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('returns every row of a window past the preview budget, and next_offset follows it', async () => {
+    fakeNcbi({ count: '1571', idlist: ids(1_200_000, 60) });
+
+    const result = await run({ gene: 'PCSK9', limit: 60 });
+
+    const sc = result.structuredContent as Record<string, unknown>;
+    const preview = sc.preview as ClinVarRow[];
+    expect(preview.map((r) => r.clinvar_variation_id)).toEqual(ids(1_200_000, 60));
+    expect(sc).toMatchObject({
+      total: 60,
+      spilled: false,
+      canvas_id: '',
+      table_name: '',
+      next_offset: 60,
+    });
+    expect(sc.notice).not.toMatch(/CANVAS_PROVIDER_TYPE|showing \d+ of/);
+    const text = textOf(result);
+    expect(text.match(/^\*\*Variant:\*\* /gm)).toHaveLength(60);
+    expect(text).not.toContain('CANVAS_PROVIDER_TYPE');
+  });
+});
+
+describe('gnomad_search_clinvar gene and filter echo (#70)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('echoes the gene and the normalized filters on both surfaces', async () => {
+    fakeNcbi({ count: '0', idlist: [] });
+
+    const result = await run({
+      gene: 'PCSK9',
+      clinical_significance: 'likely_pathogenic',
+      min_review_stars: 2,
+      offset: 20,
+      limit: 30,
+    });
+
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc.gene).toBe('PCSK9');
+    // Row filters only: offset and limit never appear.
+    expect(sc.filters).toEqual({ clinical_significance: 'likely pathogenic', min_review_stars: 2 });
+    expect(textOf(result)).toContain(
+      '**Gene:** PCSK9 | **Filters:** clinical_significance=likely pathogenic, min_review_stars=2',
+    );
+  });
+
+  it.each([
+    ['omitted', {}],
+    ['blank', { clinical_significance: '  ' }],
+  ])('echoes %s filters as null and renders none', async (_label, filters) => {
+    fakeNcbi({ count: '0', idlist: [] });
+
+    const result = await run({ gene: 'PCSK9', ...filters });
+
+    expect((result.structuredContent as { filters: unknown }).filters).toEqual({
+      clinical_significance: null,
+      min_review_stars: null,
+    });
+    expect(textOf(result)).toContain('**Gene:** PCSK9 | **Filters:** none');
+  });
+
+  it('echoes the gene and filters for an Ensembl ID it searched nothing for', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+
+    const result = await runToolContract(gnomadSearchClinvar, {
+      gene: 'ENSG00000169174',
+      clinical_significance: 'pathogenic',
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({
+      gene: 'ENSG00000169174',
+      filters: { clinical_significance: 'pathogenic', min_review_stars: null },
+    });
+    expect(textOf(result)).toContain(
+      '**Gene:** ENSG00000169174 | **Filters:** clinical_significance=pathogenic',
+    );
+  });
+
+  it('escapes Markdown in the echoed gene and significance in content[] only', async () => {
+    fakeNcbi({ count: '0', idlist: [] });
+
+    const result = await run({ gene: 'PCSK9*[x]', clinical_significance: 'risk *factor*' });
+
+    expect(result.structuredContent).toMatchObject({
+      gene: 'PCSK9*[x]',
+      filters: { clinical_significance: 'risk *factor*', min_review_stars: null },
+    });
+    expect(textOf(result)).toContain(
+      '**Gene:** PCSK9\\*\\[x\\] | **Filters:** clinical_significance=risk \\*factor\\*',
+    );
+  });
+});
+
+describe('gnomad_search_clinvar descriptions follow the canvas gate (#72)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  /** Every advertised string of the tools/list entry: description, input, output, and enrichment schemas. */
+  async function advertised() {
+    vi.resetModules();
+    const { gnomadSearchClinvar: definition } = await import(
+      '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js'
+    );
+    return JSON.stringify([
+      definition.description,
+      z.toJSONSchema(definition.input),
+      z.toJSONSchema(definition.output.extend(definition.enrichment ?? {})),
+    ]);
+  }
+
+  it('names no gnomad_dataframe_ tool with CANVAS_PROVIDER_TYPE=none', async () => {
+    vi.stubEnv('CANVAS_PROVIDER_TYPE', 'none');
+    const surface = await advertised();
+    expect(surface).not.toContain('gnomad_dataframe_');
+    expect(surface).not.toMatch(/capped/i);
+  });
+
+  it.each([undefined, 'duckdb'])(
+    'names gnomad_dataframe_describe and gnomad_dataframe_query with CANVAS_PROVIDER_TYPE=%s',
+    async (value) => {
+      vi.stubEnv('CANVAS_PROVIDER_TYPE', value);
+      const surface = await advertised();
+      expect(surface).toContain('gnomad_dataframe_describe');
+      expect(surface).toContain('gnomad_dataframe_query');
+    },
+  );
 });
 
 describe('gnomad_search_clinvar gnomAD-compatible identifiers (#29)', () => {
@@ -956,7 +1223,7 @@ describe('gnomad_search_clinvar blank clinical_significance (#31)', () => {
     const result = await run({ gene: 'TTR', clinical_significance: ' pathogenic ' });
 
     expect(urls[0]?.searchParams.get('term')).toBe(
-      '"TTR"[gene] AND "pathogenic"[clinical_significance]',
+      '"TTR"[gene] AND (clinsig_pathogenic[prop] OR clinsig_likely_pathogenic[prop] OR clinsig_pathogenic_low_penetrance[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])',
     );
     expect((result.structuredContent as { notice: string }).notice).toContain(
       'clinical_significance=pathogenic.',
@@ -983,7 +1250,7 @@ describe('gnomad_search_clinvar quoted input (#28, #40)', () => {
     const result = await run({ gene: 'PCSK9', clinical_significance: '"pathogenic"' });
 
     expect(urls[0]?.searchParams.get('term')).toBe(
-      '"PCSK9"[gene] AND "pathogenic"[clinical_significance]',
+      '"PCSK9"[gene] AND (clinsig_pathogenic[prop] OR clinsig_likely_pathogenic[prop] OR clinsig_pathogenic_low_penetrance[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])',
     );
     const sc = result.structuredContent as { preview: ClinVarRow[]; total: number };
     expect(sc.total).toBe(1);
@@ -1044,6 +1311,7 @@ describe('gnomad_search_clinvar format() staged line', () => {
   it('renders the staged canvas_id and table for a spilled window', () => {
     const text = (
       gnomadSearchClinvar.format?.({
+        ...NO_FILTERS,
         preview: [],
         canvas_id: 'cnvclinvar',
         table_name: 'clinvar_variants',
@@ -1067,6 +1335,7 @@ describe('gnomad_search_clinvar format() staged line (#21, #33)', () => {
   const render = (result: Parameters<NonNullable<typeof gnomadSearchClinvar.format>>[0]) =>
     (gnomadSearchClinvar.format?.(result) ?? []).map((b) => ('text' in b ? b.text : '')).join('');
   const base = {
+    ...NO_FILTERS,
     preview: [row(1)],
     spilled: false,
     total: 1,
@@ -1239,15 +1508,11 @@ describe('gnomad_search_clinvar notice and staging matrix (#21, #33, #35)', () =
     const acquires = enabled && (cell.size === 'spill' || cell.canvasId !== undefined);
     const canvasId = acquires ? (cell.canvasId ?? MINTED) : '';
     const staged = acquires && shape.rows > 0;
-    // Canvas off, the preview is the prefix within the same budget a canvas-on spill uses.
-    const capped = !enabled && cell.size === 'spill';
+    // Canvas off, the preview is every row of the window (#59).
     const previewed = (result.structuredContent as { preview: ClinVarRow[] }).preview.length;
-    if (capped) expect(previewed).toBeLessThan(shape.rows);
+    if (!enabled) expect(previewed).toBe(shape.rows);
     const parts = [
       shape.completeness,
-      capped
-        ? `Canvas is disabled (set CANVAS_PROVIDER_TYPE=duckdb) — showing ${previewed} of ${shape.rows} records in this window. Enable the canvas to query every row with gnomad_dataframe_query.`
-        : undefined,
       staged ? clinvarPointer(shape.rows, canvasId) : undefined,
       shape.rows > 0 ? IDENTIFIERS : undefined,
     ].filter(Boolean);
@@ -1273,6 +1538,7 @@ describe('gnomad_search_clinvar notice and staging matrix (#21, #33, #35)', () =
           : NEUTRAL,
     );
     expect(text).not.toMatch(/Canvas disabled\*\*/);
+    expect(text).not.toContain('CANVAS_PROVIDER_TYPE');
     for (const part of parts) expect(text).toContain(part as string);
     // Both surfaces carry the same preview rows.
     const preview = sc.preview as ClinVarRow[];
@@ -1292,34 +1558,25 @@ describe('gnomad_search_clinvar response budget (#37)', () => {
     vi.restoreAllMocks();
   });
 
-  it.each(['enabled', 'disabled'] as const)(
-    'keeps a full 500-record window of the heaviest real records under 24 KB with the canvas %s',
-    async (mode) => {
-      // The 24 longest real ESummary records captured from BRCA1/BRCA2 (normalized
-      // rows of 1,128–1,250 JSON characters, about twice the average), then
-      // re-keyed copies of them — a window a row-count cap would push past 24 KB.
-      fakeNcbi(
-        { count: '16064', idlist: [...HEAVY.result.uids, ...ids(9_600_000, 476)] },
-        [],
-        HEAVY,
-      );
-      const { canvas, tables } = fakeCanvas();
-      vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(
-        mode === 'enabled' ? (canvas as never) : undefined,
-      );
+  it('keeps a full 500-record window of the heaviest real records under 24 KB with the canvas enabled', async () => {
+    // The 24 longest real ESummary records captured from BRCA1/BRCA2 (normalized
+    // rows of 1,128–1,250 JSON characters, about twice the average), then
+    // re-keyed copies of them — a window a row-count cap would push past 24 KB.
+    fakeNcbi({ count: '16064', idlist: [...HEAVY.result.uids, ...ids(9_600_000, 476)] }, [], HEAVY);
+    const { canvas, tables } = fakeCanvas();
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
 
-      const result = await run({ gene: 'BRCA1' });
+    const result = await run({ gene: 'BRCA1', limit: 500 });
 
-      const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
-      expect(bytes).toBeLessThan(24_000);
-      expect(bytes).toBeGreaterThan(15_000);
-      const sc = result.structuredContent as { preview: ClinVarRow[]; total: number };
-      expect(sc.total).toBe(500);
-      expect(sc.preview.length).toBeLessThan(sc.total);
-      for (const r of sc.preview) expect(JSON.stringify(r).length).toBeGreaterThan(1_100);
-      if (mode === 'enabled') expect(tables.clinvar_variants).toHaveLength(sc.total);
-    },
-  );
+    const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+    expect(bytes).toBeLessThan(24_000);
+    expect(bytes).toBeGreaterThan(15_000);
+    const sc = result.structuredContent as { preview: ClinVarRow[]; total: number };
+    expect(sc.total).toBe(500);
+    expect(sc.preview.length).toBeLessThan(sc.total);
+    for (const r of sc.preview) expect(JSON.stringify(r).length).toBeGreaterThan(1_100);
+    expect(tables.clinvar_variants).toHaveLength(sc.total);
+  });
 });
 
 /* ------------------------------------------------------------------------- */

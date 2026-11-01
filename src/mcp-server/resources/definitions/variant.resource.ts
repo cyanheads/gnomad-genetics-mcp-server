@@ -2,8 +2,10 @@
  * @fileoverview gnomad://variant/{dataset}/{variantId} — the same population
  * record gnomad_get_variant returns for a single variant. The dataset segment
  * keeps the URI self-describing: a frequency without its dataset silently
- * misleads. The tool is the reliable path; this is convenience for clients that
- * support injectable context.
+ * misleads. An absent coordinate ID that lifts over from the other build fails
+ * as variant_not_found_other_build with the lifted IDs in its error data, as
+ * the tool's failed[] item does. The tool is the reliable path; this is
+ * convenience for clients that support injectable context.
  * @module mcp-server/resources/definitions/variant.resource
  */
 
@@ -48,9 +50,16 @@ export const variantResource = resource('gnomad://variant/{dataset}/{variantId}'
     {
       reason: 'variant_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'The variant is absent from the requested dataset.',
+      when: 'The variant is absent from the requested dataset with no liftover candidate from the other build: rsIDs are never lifted, and a liftover lookup that fails or runs out of time leaves this reason.',
       recovery:
-        'Confirm the ID and dataset, or run gnomad_get_coverage to check the position is callable before concluding true absence.',
+        "A coordinate ID carries no build, so confirm it is on the dataset's reference build, then run gnomad_get_coverage to check the position is callable before concluding true absence.",
+    },
+    {
+      reason: 'variant_not_found_other_build',
+      code: JsonRpcErrorCode.NotFound,
+      when: "The coordinate ID is absent from the requested dataset and, read as an ID on the other reference build, lifts over to the IDs in candidates on the dataset's build.",
+      recovery:
+        'This ID is absent from the dataset, and the same string also resolves on the other reference build. If the ID was written for that build, read the resource again with a candidate as the variantId. If it was not, treat it as absent and run gnomad_get_coverage to check the position is callable.',
     },
     {
       reason: 'ambiguous_rsid',
@@ -116,13 +125,24 @@ export const variantResource = resource('gnomad://variant/{dataset}/{variantId}'
     if (!normalized) {
       throw ctx.fail('invalid_variant_id', 'Invalid variant ID.');
     }
-    const record = await svc.getVariant(normalized.canonical, dsCtx, ctx);
-    if (!record) {
+    // One start for the lookup and its liftover hint, so both share the read's deadline.
+    const startedAt = Date.now();
+    const record = await svc.getVariant(normalized.canonical, dsCtx, ctx, { startedAt });
+    if (record) return record;
+    const lifted = await svc.liftoverCandidates([normalized.canonical], dsCtx, ctx, {
+      startedAt,
+    });
+    const candidates = lifted.get(normalized.canonical);
+    if (candidates) {
       throw ctx.fail(
-        'variant_not_found',
-        `Variant "${params.variantId}" not found in ${params.dataset}.`,
+        'variant_not_found_other_build',
+        `Variant "${params.variantId}" not found in ${params.dataset}. Read as an ID on the other reference build, the same string lifts over to the ${dsCtx.reference_genome} ${candidates.length === 1 ? 'ID' : 'IDs'} in candidates.`,
+        { candidates },
       );
     }
-    return record;
+    throw ctx.fail(
+      'variant_not_found',
+      `Variant "${params.variantId}" not found in ${params.dataset}.`,
+    );
   },
 });

@@ -2,10 +2,13 @@
  * @fileoverview gnomad_list_gene_variants — every variant in a gene / transcript
  * / region with allele frequencies, predicted consequences, and per-callset QC
  * filters, filterable by consequence class, a max-AF threshold, and QC status
- * (pass_only, applied after qc_filtered is counted). Sets larger than the inline
- * preview spill to a DataCanvas table (gene_variants) for gnomad_dataframe_describe
- * and gnomad_dataframe_query; returns canvas_id + table_name plus the preview.
- * Degrades to a capped inline preview when the canvas is disabled.
+ * (pass_only, which also reads counts without joint data from the passing
+ * callsets, and drops the failed rows after qc_filtered counts them), and
+ * returned one offset/limit page of the filtered rows at a time. gnomAD lists a
+ * target only whole, so every page re-fetches it. At offset 0 a result past the
+ * inline budget also spills every row to a DataCanvas table (gene_variants) for
+ * gnomad_dataframe_describe and gnomad_dataframe_query; a later page never
+ * stages. Echoes the resolved target and the row filters.
  * @module mcp-server/tools/definitions/gnomad-list-gene-variants.tool
  */
 
@@ -13,11 +16,14 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { isCanvasEnabled } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
-import type { GeneVariantRow } from '@/services/gnomad/types.js';
+import type { GeneVariantRow, GenomeTarget } from '@/services/gnomad/types.js';
 import { rowSchema, stagedLine, stageRows } from '../canvas-staging.js';
+import { type CountLimit, clampLimit, limitSchema } from '../count-limit.js';
 import {
   datasetField,
+  normalizedRegion,
   optionalGeneField,
   REGION_REGEX,
   referenceGenomeField,
@@ -27,13 +33,18 @@ import {
 /** Stable canvas table name for this tool's spill. */
 const TABLE_NAME = 'gene_variants';
 /**
- * Inline preview budget in JSON characters of the preview rows, canvas on or
- * off. Each row lands on both surfaces (structuredContent and the format()
- * line), measured at ~1.68 serialized bytes per JSON character on real PCSK9
- * rows, so 14,000 keeps a response near 23 KB. Being counted in characters, the
- * budget holds that size as rows widen: a wider row previews fewer rows.
+ * Staging budget in JSON characters of every row a call at offset 0 keeps: a
+ * result within it stages no table unless canvas_id is supplied, and one past
+ * it spills every row to gene_variants. Either way the rows returned inline are
+ * the page, offset to offset + limit.
  */
-const PREVIEW_CHARS = 14_000;
+const STAGING_CHARS = 14_000;
+
+/** Rows per page. At the cap a page of real TTN rows is about 1 MB of structuredContent. */
+const LIMIT: CountLimit = { tool: 'gnomad_list_gene_variants', default: 25, cap: 3_000 };
+
+/** Read once as the definition evaluates: the descriptions name the dataframe tools only when they are registered. */
+const CANVAS_ON = isCanvasEnabled();
 
 /** gene_variants column types, declared from GeneVariantRow in its field order. */
 const TABLE_SCHEMA = rowSchema<GeneVariantRow>({
@@ -69,17 +80,17 @@ const GeneVariantRowSchema = z
       .number()
       .nullable()
       .describe(
-        'Allele frequency, ac/an from the same source — the value max_af filters on; null when an is 0.',
+        'Allele frequency, ac/an from the same source — the value max_af filters on, so under pass_only a row without joint data reads its passing callsets; null when an is 0.',
       ),
     ac: z
       .number()
       .describe(
-        "Allele count — gnomAD's joint exome + genome count on gnomad_r4, the sum across carried callsets on datasets without joint data.",
+        "Allele count — gnomAD's joint exome + genome count on gnomad_r4; on datasets without joint data the sum across carried callsets, or under pass_only across those that passed QC.",
       ),
     an: z
       .number()
       .describe(
-        "Allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant; on gnomad_r3, gnomad_r2_1, and exac (no joint data), the sum across carried callsets.",
+        "Allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant or failed QC; on gnomad_r3, gnomad_r2_1, and exac (no joint data), the sum across carried callsets — a QC-failed one included, except under pass_only, which sums only the callsets that passed, as gnomAD's browser table does.",
       ),
     consequence: z
       .string()
@@ -92,7 +103,11 @@ const GeneVariantRowSchema = z
       .describe(
         "gnomAD's category of consequence (the terms each holds are listed on the consequence_class filter): lof is pLoF, missense covers missense and inframe indels, start_lost, and stop_lost; other includes a null consequence.",
       ),
-    homozygote_count: z.number().describe('Homozygote count, from the same source as ac and an.'),
+    homozygote_count: z
+      .number()
+      .describe(
+        'Homozygote count, from the same source as ac and an — under pass_only, the passing callsets of a row without joint data.',
+      ),
     source: z.string().describe('Carried callset(s), pipe-joined (e.g. exome|genome).'),
     flags: z.string().describe('Quality flags, pipe-joined (empty when none).'),
     exome_filters: callsetFiltersField('exome'),
@@ -117,10 +132,34 @@ const GeneVariantRowSchema = z
   })
   .describe('One gene-variant row — also the canvas table column set.');
 
+const RowFiltersSchema = z
+  .object({
+    consequence_class: GeneVariantRowSchema.shape.consequence_class
+      .nullable()
+      .describe('The consequence_class filter; null when omitted.'),
+    max_af: z.number().nullable().describe('The max_af filter; null when omitted.'),
+    pass_only: z
+      .literal(true)
+      .nullable()
+      .describe('true when pass_only was set; null when omitted or false.'),
+  })
+  .describe(
+    'The row filters this call applied, each null when not set. offset, limit, and canvas_id are not filters.',
+  );
+
+type RowFilters = z.infer<typeof RowFiltersSchema>;
+
+/** What the description says about staging, present only while the dataframe tools are registered. */
+const STAGING_GUIDANCE = CANVAS_ON
+  ? ' At offset 0, a result too large to inline is also staged on a DataCanvas table named gene_variants holding every matching variant, returned as canvas_id and table_name — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than one page. A result that fits inline stages no table unless canvas_id is supplied, and a page past offset 0 never stages.'
+  : '';
+
+/** Description of the canvas fields with the canvas off, where they never carry a value. */
+const CANVAS_OFF_FIELD = 'DataCanvas is off in this deployment, so this call stages nothing.';
+
 export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   title: 'gnomad-genetics-mcp-server: list gene variants',
-  description:
-    "List every gnomAD variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. Every row carries its exome and genome QC filters and a qc_status; qc_filtered counts the matching variants that failed QC in every callset carrying them (often AC0, no high-quality carrier, at AF 0), which gnomAD's browser hides by default — read them as low-confidence, not observed variants, or pass pass_only to drop them. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE=none) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/",
+  description: `List every gnomAD variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. Every row carries its exome and genome QC filters and a qc_status; qc_filtered counts the matching variants that failed QC in every callset carrying them (often AC0, no high-quality carrier, at AF 0), which gnomAD's browser hides by default — read them as low-confidence, not observed variants, or pass pass_only to drop them. Each call returns one page: up to limit matching variants from offset, in gnomAD's genomic order, with total counting every match; pass next_offset as offset until it is null. gnomAD lists a target only whole, so each page re-fetches the whole target — page a large gene with filters and a large limit.${STAGING_GUIDANCE} Supply exactly one of gene, transcript_id, or region. Echoes the resolved target, the row filters, and the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -131,19 +170,20 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .describe(
         'Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.',
       ),
-    region: z
-      .union([
+    region: normalizedRegion(
+      z.union([
         z.literal(''),
         z
           .string()
-          .regex(REGION_REGEX, 'Region must be chrom-start-stop, e.g. 13-32315474-32400266.')
+          .regex(REGION_REGEX, 'Region must be chrom-start-stop, e.g. 1-55039447-55064852.')
           .describe(
-            'Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266) on chromosome 1–22, X, or Y, optional chr prefix.',
+            'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852) on chromosome 1–22, X, or Y, optional chr prefix.',
           ),
-      ])
+      ]),
+    )
       .optional()
       .describe(
-        'Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266): chromosome 1–22, X, or Y with an optional chr prefix (mitochondrial regions are not served), a span (stop − start) under 2,500,000 bp, and at most ~30,000 variants. Mutually exclusive with gene and transcript_id.',
+        'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852): chromosome 1–22, X, or Y with an optional chr prefix (mitochondrial regions are not served), a span (stop − start) under 2,500,000 bp, and at most ~30,000 variants. Mutually exclusive with gene and transcript_id.',
       ),
     consequence_class: z
       .enum(['lof', 'missense', 'synonymous', 'other'])
@@ -163,44 +203,77 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .boolean()
       .optional()
       .describe(
-        "Keep only variants that passed gnomAD QC in at least one callset carrying them (qc_status pass), as gnomAD's browser shows by default. Applied after consequence_class and max_af; qc_filtered still counts the dropped rows. Omit to list every matching variant with its QC columns — a single-position region then never reads as absent because of QC.",
+        "Keep only variants that passed gnomAD QC in at least one callset carrying them (qc_status pass), with the counts gnomAD's browser table shows by default: a row without joint data (gnomad_r3, gnomad_r2_1, exac) reads ac, an, af, and homozygote_count from its passing callsets only, and max_af filters on that af; gnomad_r4 rows keep their joint counts. The drop follows consequence_class and max_af, and qc_filtered still counts the dropped rows. Omit to list every matching variant with its QC columns and a QC-failed callset's counts included — a single-position region then never reads as absent because of QC.",
       ),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Zero-based position, among the variants the filters keep, of the first one on this page. Pass next_offset from the previous call to continue.',
+      ),
+    limit: limitSchema(LIMIT, 'Matching variants on this page.'),
     canvas_id: CanvasIdSchema.optional().describe(
-      'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, this call always writes its result to the gene_variants table on that canvas, replacing (not appending to) the previous one — even when the result fits inline; a result with no variants removes the table. Omit to stage on a fresh canvas only when the result is too large to inline.',
+      CANVAS_ON
+        ? 'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, a call at offset 0 always writes its result to the gene_variants table on that canvas, replacing (not appending to) the previous one — even when the result fits inline; a result with no variants removes the table. A page past offset 0 leaves the table as it was. Omit to stage on a fresh canvas only when the result is too large to inline.'
+        : `Ignored: ${CANVAS_OFF_FIELD}`,
     ),
     dataset: datasetField,
     reference_genome: referenceGenomeField,
   }),
   output: z.object({
+    target: z
+      .string()
+      .describe(
+        'The resolved target the rows describe: gene symbol or Ensembl gene ID, transcript ID, or region, as normalized for the lookup.',
+      ),
+    target_kind: z
+      .enum(['gene', 'transcript', 'region'])
+      .describe('Which target type was queried.'),
+    filters: RowFiltersSchema,
     preview: z
       .array(GeneVariantRowSchema)
       .describe(
-        'Inline preview rows — the immediate answer; every matching variant unless spilled.',
+        'This page: up to limit matching variants from offset, in genomic order — the immediate answer.',
       ),
     canvas_id: z
       .string()
       .describe(
-        'Canvas holding table_name (or the canvas_id you supplied) — pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the result fit inline and no canvas_id was supplied, or the canvas is disabled.',
+        CANVAS_ON
+          ? 'Canvas holding table_name (or the canvas_id you supplied) — pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the result fit inline and no canvas_id was supplied, or the page started past offset 0.'
+          : `Always empty: ${CANVAS_OFF_FIELD}`,
       ),
     table_name: z
       .string()
       .describe(
-        'Canvas table this call staged (gene_variants), holding every matching variant — inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table.',
+        CANVAS_ON
+          ? 'Canvas table this call staged (gene_variants), holding every matching variant — inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table, as on every page past offset 0.'
+          : `Always empty: ${CANVAS_OFF_FIELD}`,
       ),
     spilled: z
       .boolean()
       .describe(
-        'True when the result exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all.',
+        CANVAS_ON
+          ? 'True when the matching variants exceeded the inline budget at offset 0, so this call staged every one of them in table_name; the page holds at most limit of them either way.'
+          : `Always false: ${CANVAS_OFF_FIELD}`,
       ),
     total: z
       .number()
       .describe(
-        'Total matching variants, including any beyond the preview — counted after pass_only drops QC-failed rows when it is set, so it then excludes the qc_filtered rows.',
+        'Total matching variants across every page, not just this one — counted after pass_only drops QC-failed rows when it is set, so it then excludes the qc_filtered rows.',
       ),
+    truncated: z
+      .boolean()
+      .describe('True when matching variants remain past this page; continue with next_offset.'),
+    next_offset: z
+      .number()
+      .nullable()
+      .describe('offset for the next page; null when this page reaches the last matching variant.'),
     qc_filtered: z
       .number()
       .describe(
-        'Matching variants that failed gnomAD QC in every callset carrying them (qc_status filtered), counted over every match — not just the preview — before pass_only drops them.',
+        'Matching variants that failed gnomAD QC in every callset carrying them (qc_status filtered), counted over every match — not just this page — before pass_only drops them.',
       ),
     dataset: z.string().describe('Effective gnomAD dataset.'),
     reference_genome: z.string().describe('Effective reference build.'),
@@ -210,7 +283,9 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .string()
       .optional()
       .describe(
-        'Guidance when no variants matched, when matching variants failed gnomAD QC (the qc_filtered count, and what pass_only dropped), when the canvas is disabled and the preview is capped, and — when a table was staged — its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.',
+        CANVAS_ON
+          ? 'Guidance when no variants matched, when matching variants failed gnomAD QC (the qc_filtered count, and what pass_only dropped), when limit was clamped to its cap, the next offset when no staged table holds the rest, an offset past the end, and — when a table was staged — its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.'
+          : 'Guidance when no variants matched, when matching variants failed gnomAD QC (the qc_filtered count, and what pass_only dropped), when limit was clamped to its cap, the next offset while variants remain, and an offset past the end.',
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -235,7 +310,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'The region names a chromosome outside 1–22, X, Y, or breaks the coordinate bounds.',
       recovery:
-        'Pass region as chrom-start-stop on chromosome 1–22, X, or Y (optional chr prefix, e.g. chr13-32315474-32400266), with start at least 1, stop below 1,000,000,000, and start ≤ stop.',
+        'Pass region as chrom-start-stop on chromosome 1–22, X, or Y (optional chr prefix, e.g. chr1-55039447-55064852), with start at least 1, stop below 1,000,000,000, and start ≤ stop.',
       thrownBy: 'service',
     },
     {
@@ -252,6 +327,22 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       when: 'The gene, transcript, or region is on the mitochondrial chromosome (M or MT).',
       recovery:
         'Mitochondrial variants are outside this server; look them up in the gnomAD browser at https://gnomad.broadinstitute.org/, or query a target on chromosomes 1–22, X, or Y.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'gene_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'gnomAD holds no gene matching the symbol or Ensembl ID in this build.',
+      recovery:
+        'Check the symbol spelling, or resolve a stable Ensembl gene ID in this build via ensembl_lookup_gene, then retry.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'transcript_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'gnomAD holds no transcript matching transcript_id in this build.',
+      recovery:
+        'Pass an Ensembl transcript ID in this build in its unversioned ENST form (e.g. ENST00000302118), resolved via ensembl_lookup_gene; RefSeq IDs such as NM_174936.4 are not served.',
       thrownBy: 'service',
     },
     {
@@ -303,10 +394,21 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       { gene: input.gene, transcript_id: input.transcript_id, region: input.region || undefined },
       ctx,
     );
+    const { applied: limit, notice: clamped } = clampLimit(ctx, LIMIT, input.limit);
+    const filters: RowFilters = {
+      consequence_class: input.consequence_class ?? null,
+      max_af: input.max_af ?? null,
+      pass_only: input.pass_only ? true : null,
+    };
 
+    // passOnly picks each row's counts in the service; the QC-failed rows are dropped below.
     const matched = await svc.listGeneVariants(
       target,
-      { consequenceClass: input.consequence_class, maxAf: input.max_af },
+      {
+        consequenceClass: input.consequence_class,
+        maxAf: input.max_af,
+        passOnly: input.pass_only === true,
+      },
       dsCtx,
       ctx,
     );
@@ -315,15 +417,34 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     const rows = input.pass_only ? matched.filter((row) => row.qc_status === 'pass') : matched;
 
     /**
+     * Only offset 0 stages. gnomAD lists the target whole, so a later page
+     * re-fetches the same rows, and staging them again would rewrite the table
+     * the first page staged, or acquire a fresh canvas for every page.
+     */
+    const staged =
+      input.offset === 0
+        ? await stageRows({
+            rows,
+            canvasId: input.canvas_id,
+            tableName: TABLE_NAME,
+            schema: TABLE_SCHEMA,
+            previewChars: STAGING_CHARS,
+            ctx,
+          })
+        : undefined;
+    const preview = rows.slice(input.offset, input.offset + limit);
+    const end = input.offset + preview.length;
+    const nextOffset = end < rows.length ? end : null;
+
+    /**
      * ctx.enrich.notice is last-wins, so every part is collected here and
-     * written once, in order: no-match or QC → capped preview → staged table.
+     * written once, in order: clamp → no-match or QC → page position → staged table.
      */
     const notices: string[] = [];
-    const scope = targetScope(target.kind, target.value, input);
+    if (clamped) notices.push(clamped);
+    const scope = targetScope(target, filters);
     if (matched.length === 0) {
-      notices.push(
-        `No variants in ${scope}. Broaden the filters, or verify the ${target.kind} exists in this dataset.`,
-      );
+      notices.push(`No variants in ${scope}. Broaden the filters.`);
     } else if (rows.length === 0) {
       notices.push(
         `All ${qcFiltered} variant(s) in ${scope} failed gnomAD QC in every callset carrying them, so pass_only dropped them. Omit pass_only to list them with their exome_filters and genome_filters.`,
@@ -336,20 +457,17 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       );
     }
 
-    const { capped, staged } = await stageRows({
-      rows,
-      canvasId: input.canvas_id,
-      tableName: TABLE_NAME,
-      schema: TABLE_SCHEMA,
-      previewChars: PREVIEW_CHARS,
-      ctx,
-    });
-    if (capped) {
+    if (rows.length > 0 && input.offset >= rows.length) {
       notices.push(
-        `Canvas is disabled (set CANVAS_PROVIDER_TYPE=duckdb) — showing ${staged.preview.length} of ${rows.length} variants. Enable the canvas to query the full set with gnomad_dataframe_query.`,
+        `offset ${input.offset} is past the end of the ${rows.length} matching variant(s); use an offset below ${rows.length}.`,
+      );
+    } else if (nextOffset != null && !staged?.table_name) {
+      // A staged table already reaches every row, so only a page without one names the next offset.
+      notices.push(
+        `Showing variants ${input.offset + 1}–${end} of ${rows.length}; continue with offset=${nextOffset} for the next page.`,
       );
     }
-    if (staged.table_name) {
+    if (staged?.table_name) {
       notices.push(
         `Staged ${staged.total} variant(s) in table "${staged.table_name}" (canvas_id ${staged.canvas_id}). Call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to run SQL over every staged row.`,
       );
@@ -357,7 +475,16 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
-      ...staged,
+      target: target.value,
+      target_kind: target.kind,
+      filters,
+      preview,
+      canvas_id: staged?.canvas_id ?? '',
+      table_name: staged?.table_name ?? '',
+      spilled: staged?.spilled ?? false,
+      total: rows.length,
+      truncated: nextOffset != null,
+      next_offset: nextOffset,
       qc_filtered: qcFiltered,
       dataset: dsCtx.dataset,
       reference_genome: dsCtx.reference_genome,
@@ -367,7 +494,9 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   format: (result) => {
     const lines = [
       `## Gene variants — ${result.total} total`,
+      `**Target:** ${result.target_kind} ${escapeMarkdownInline(result.target)} | **Filters:** ${filterParts(result.filters).join(', ') || 'none'}`,
       `**Dataset:** ${result.dataset} (${result.reference_genome}) | **Spilled:** ${result.spilled ? 'yes' : 'no'} | **QC filtered:** ${result.qc_filtered}`,
+      `**Truncated:** ${result.truncated ? 'yes' : 'no'} | **Next offset:** ${result.next_offset ?? 'none'}`,
       stagedLine(result),
       '',
       `Showing ${result.preview.length} preview row(s):`,
@@ -396,15 +525,21 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   },
 });
 
-/** The target and its filters, as the no-match and QC notices name them. */
-function targetScope(
-  kind: string,
-  value: string,
-  input: { consequence_class?: string | undefined; max_af?: number | undefined },
-): string {
-  const filters: string[] = [];
-  if (input.consequence_class) filters.push(`consequence_class=${input.consequence_class}`);
-  if (input.max_af != null) filters.push(`max_af=${input.max_af}`);
-  const filterText = filters.length ? ` matching ${filters.join(', ')}` : '';
-  return `${kind} "${value}"${filterText}`;
+/** Each row filter set, as `name=value` in input order — the echo's rendering. */
+function filterParts(filters: RowFilters): string[] {
+  const parts: string[] = [];
+  if (filters.consequence_class) parts.push(`consequence_class=${filters.consequence_class}`);
+  if (filters.max_af != null) parts.push(`max_af=${filters.max_af}`);
+  if (filters.pass_only) parts.push('pass_only=true');
+  return parts;
+}
+
+/**
+ * The target and the filters that chose its matching variants, as the no-match
+ * and QC notices name them. pass_only is left out: those notices report what it
+ * dropped from that set themselves.
+ */
+function targetScope(target: GenomeTarget, filters: RowFilters): string {
+  const parts = filterParts({ ...filters, pass_only: null });
+  return `${target.kind} "${target.value}"${parts.length ? ` matching ${parts.join(', ')}` : ''}`;
 }

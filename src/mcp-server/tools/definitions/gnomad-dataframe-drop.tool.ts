@@ -1,17 +1,18 @@
 /**
  * @fileoverview gnomad_dataframe_drop — opt-in tool to drop a named table from a
  * canvas to reclaim memory. A mutation (readOnlyHint: false), so it is gated
- * behind GNOMAD_DATAFRAME_DROP_ENABLED (off by default) via the disabledTool()
- * wrapper: present in the manifest/landing page but absent from tools/list and
- * uncallable when off. Per-table TTL already reclaims memory automatically — this
- * is a convenience, not a requirement.
+ * behind GNOMAD_DATAFRAME_DROP_ENABLED (off by default), and on DataCanvas being
+ * on, via the disabledTool() wrapper: present in the manifest/landing page but
+ * absent from tools/list and uncallable while either is off. Per-table TTL
+ * already reclaims memory automatically — this is a convenience, not a
+ * requirement.
  * @module mcp-server/tools/definitions/gnomad-dataframe-drop.tool
  */
 
 import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { isDataframeDropEnabled } from '@/config/server-config.js';
+import { isCanvasEnabled, isDataframeDropEnabled } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
 const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
@@ -88,14 +89,20 @@ const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
 });
 
 /**
- * Conditionally registered: the real tool when GNOMAD_DATAFRAME_DROP_ENABLED=true,
- * otherwise a disabled placeholder absent from tools/list (present-but-uncallable
- * on the manifest/landing page).
+ * Conditionally registered: the real tool when DataCanvas is on and
+ * GNOMAD_DATAFRAME_DROP_ENABLED=true, otherwise a disabled placeholder absent
+ * from tools/list (present-but-uncallable on the manifest/landing page) whose
+ * reason names the gate that is off, the canvas first.
  */
-export const gnomadDataframeDrop = isDataframeDropEnabled()
-  ? gnomadDataframeDropDef
-  : disabledTool(gnomadDataframeDropDef, {
-      reason:
-        'Canvas table drop is turned off in this deployment — the research surface stays read-only.',
-      hint: 'GNOMAD_DATAFRAME_DROP_ENABLED=true',
-    });
+export const gnomadDataframeDrop = !isCanvasEnabled()
+  ? disabledTool(gnomadDataframeDropDef, {
+      reason: 'DataCanvas is turned off in this deployment, so there is no table to drop.',
+      hint: 'CANVAS_PROVIDER_TYPE=duckdb',
+    })
+  : isDataframeDropEnabled()
+    ? gnomadDataframeDropDef
+    : disabledTool(gnomadDataframeDropDef, {
+        reason:
+          'Canvas table drop is turned off in this deployment — the research surface stays read-only.',
+        hint: 'GNOMAD_DATAFRAME_DROP_ENABLED=true',
+      });

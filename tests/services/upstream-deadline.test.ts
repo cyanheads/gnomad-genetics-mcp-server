@@ -5,6 +5,7 @@
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
+import { variantResource } from '@/mcp-server/resources/definitions/variant.resource.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import { ClinVarService } from '@/services/clinvar/clinvar-service.js';
@@ -238,6 +239,116 @@ describe('upstream call deadlines', () => {
     expect(outcome).toMatchObject({ data: { reason: 'upstream_timeout' } });
     expect(paths).toHaveLength(2);
     await first;
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('ends a stalled liftover request at the batch deadline, leaving plain variant_not_found', async () => {
+    initGnomadService({} as never, {} as never);
+    const starts: [operation: string, at: number][] = [];
+    const startedAt = Date.now();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const operation = /query (\w+)/.exec(JSON.parse(String(init?.body)).query)?.[1] ?? '';
+      starts.push([operation, Date.now() - startedAt]);
+      if (operation === 'GnomadLiftover') return pending(init?.signal);
+      await new Promise((resolve) => setTimeout(resolve, 20_000));
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: 'Variant not found' }],
+          data: { variant: null, clinvar_variant: null },
+        }),
+      );
+    });
+    let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const call = runToolContract(gnomadGetVariant, { variants: ['1-1-A-T'] }).then((settled) => {
+      result = settled;
+    });
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result?.structuredContent).toMatchObject({
+      failed: [{ variant: '1-1-A-T', reason: 'variant_not_found' }],
+    });
+    expect(starts).toEqual([
+      ['GnomadVariant', 0],
+      ['GnomadLiftover', 20_000],
+    ]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(starts).toHaveLength(2);
+    await call;
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('ends a stalled liftover for the variant resource at the read deadline', async () => {
+    initGnomadService({} as never, {} as never);
+    const starts: [operation: string, at: number][] = [];
+    const startedAt = Date.now();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const operation = /query (\w+)/.exec(JSON.parse(String(init?.body)).query)?.[1] ?? '';
+      starts.push([operation, Date.now() - startedAt]);
+      if (operation === 'GnomadLiftover') return pending(init?.signal);
+      await new Promise((resolve) => setTimeout(resolve, 20_000));
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: 'Variant not found' }],
+          data: { variant: null, clinvar_variant: null },
+        }),
+      );
+    });
+    let outcome: unknown;
+    const read = Promise.resolve(
+      variantResource.handler(
+        variantResource.params!.parse({ dataset: 'gnomad_r4', variantId: '1-1-A-T' }),
+        createMockContext({ errors: variantResource.errors }) as never,
+      ),
+    ).catch((error: unknown) => {
+      outcome = error;
+    });
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(outcome).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toMatchObject({ data: { reason: 'variant_not_found' } });
+    expect(starts).toEqual([
+      ['GnomadVariant', 0],
+      ['GnomadLiftover', 20_000],
+    ]);
+    await read;
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('starts no liftover request once the batch items spent the deadline', async () => {
+    initGnomadService({} as never, {} as never);
+    const operations: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const { query, variables } = JSON.parse(String(init?.body));
+      operations.push(/query (\w+)/.exec(query)?.[1] ?? '');
+      if (variables.variantId === '1-1-A-T')
+        return new Response(
+          JSON.stringify({
+            errors: [{ message: 'Variant not found' }],
+            data: { variant: null, clinvar_variant: null },
+          }),
+        );
+      return pending(init?.signal);
+    });
+    let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const call = runToolContract(gnomadGetVariant, { variants: ['1-1-A-T', '1-2-A-T'] }).then(
+      (settled) => {
+        result = settled;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result?.structuredContent).toMatchObject({
+      failed: [
+        { variant: '1-1-A-T', reason: 'variant_not_found' },
+        { variant: '1-2-A-T', reason: 'upstream_timeout' },
+      ],
+    });
+    expect(operations).not.toContain('GnomadLiftover');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(operations).not.toContain('GnomadLiftover');
+    await call;
   });
 
   it.each(['rsid', 'split'] as const)(

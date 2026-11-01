@@ -75,7 +75,7 @@ describe('variant and rsID parser fuzz', () => {
     const fetch = vi.spyOn(globalThis, 'fetch');
     initGnomadService({} as never, {} as never);
     const input = gnomadGetVariant.input.parse({
-      variants: ['rsNOPE', '1-100-N-T', '1:100:A:T', ' 1-100-A-T '],
+      variants: ['rsNOPE', '1-100-N-T', '1:100-A-T', ' 1-100-A-T '],
     });
 
     const result = await gnomadGetVariant.handler(

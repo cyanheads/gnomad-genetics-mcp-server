@@ -10,7 +10,7 @@
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getServerConfig } from '@/config/server-config.js';
+import { getServerConfig, resetServerConfig } from '@/config/server-config.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
@@ -358,5 +358,78 @@ describe('gnomad_get_gene_constraint release provenance', () => {
     expect(gnomadGetGeneConstraint.description).toMatch(/on exac[^.]*pLI is the intolerance/);
     expect(shape.constraint_flags.description).toMatch(/exac/);
     expect(shape.constraint_release.description).toMatch(/no v3 constraint/);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+describe('gnomad_get_gene_constraint identifier normalization (#62)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetServerConfig();
+  });
+
+  /** gnomAD as it matches genes: case-sensitively, by unversioned ID or symbol. Returns the requests. */
+  function serveExactGenes(): { query: string; variables: { gene: string } }[] {
+    const requests: { query: string; variables: { gene: string } }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { gene: string };
+      };
+      requests.push(request);
+      if (!['ENSG00000169174', 'PCSK9'].includes(request.variables.gene)) {
+        return Response.json({ errors: [{ message: 'Gene not found' }], data: { gene: null } });
+      }
+      return Response.json({
+        data: {
+          gene: {
+            gene_id: 'ENSG00000169174',
+            symbol: 'PCSK9',
+            gnomad_constraint: null,
+            exac_constraint: null,
+          },
+        },
+      });
+    });
+    initGnomadService({} as never, {} as never);
+    return requests;
+  }
+
+  it.each(['ensg00000169174', 'ENSG00000169174.12'])(
+    'resolves %s as ENSG00000169174 by stable ID',
+    async (gene) => {
+      const requests = serveExactGenes();
+
+      const result = await runToolContract(gnomadGetGeneConstraint, { gene });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ gene_id: 'ENSG00000169174' });
+      expect(requests[0]?.variables.gene).toBe('ENSG00000169174');
+      expect(requests[0]?.query).toContain('gene_id: $gene');
+    },
+  );
+
+  it.each(['pcsk9', 'ENSG00000182378.PAR_Y', 'ENSG00000182378_PAR_Y', 'ENSG00000182378.14_PAR_Y'])(
+    'sends %s to gnomAD unchanged',
+    async (gene) => {
+      const requests = serveExactGenes();
+
+      await runToolContract(gnomadGetGeneConstraint, { gene });
+
+      expect(requests[0]?.variables.gene).toBe(gene);
+    },
+  );
+
+  it('fails a lowercase Ensembl ID as gene_not_found with GNOMAD_NORMALIZE_IDS=false', async () => {
+    vi.stubEnv('GNOMAD_NORMALIZE_IDS', 'false');
+    resetServerConfig();
+    const requests = serveExactGenes();
+
+    const result = await runToolContract(gnomadGetGeneConstraint, { gene: 'ensg00000169174' });
+
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.NotFound, data: { reason: 'gene_not_found' } },
+    });
+    expect(requests[0]?.variables.gene).toBe('ensg00000169174');
   });
 });

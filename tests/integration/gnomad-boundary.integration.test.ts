@@ -156,16 +156,17 @@ describe('GnomadService variant boundary', () => {
         },
       };
     });
-    const svc = new GnomadService(getServerConfig());
+    initGnomadService({} as never, {} as never);
 
-    const result = await svc.getVariant(
-      'RS11591147',
-      svc.resolveDatasetContext('gnomad_r4'),
-      createMockContext(),
+    // gnomAD rejects an uppercase rsID as invalid, so the tool lowercases it first (#62).
+    const { found } = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({ variants: ['RS11591147'] }),
+      createMockContext({ errors: gnomadGetVariant.errors }),
     );
+    const [result] = found;
 
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.variables).toEqual({ rsid: 'RS11591147', dataset: 'gnomad_r4' });
+    expect(requests[0]?.variables).toEqual({ rsid: 'rs11591147', dataset: 'gnomad_r4' });
     expect(requests[1]?.variables).toEqual({
       variantId: '1-55051215-G-GA',
       referenceGenome: 'GRCh38',

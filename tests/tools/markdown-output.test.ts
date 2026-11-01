@@ -8,6 +8,8 @@ import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import { gnomadDataframeQuery } from '@/mcp-server/tools/definitions/gnomad-dataframe-query.tool.js';
 import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
+import { gnomadListGeneVariants } from '@/mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js';
+import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 
 describe('Markdown output preserves upstream values', () => {
   it('escapes coverage targets while preserving numeric precision and unknowns', async () => {
@@ -71,5 +73,61 @@ describe('Markdown output preserves upstream values', () => {
     expect(text).toContain('**columns:** \\*label\\*, source');
     expect(text).toContain('"source":"exome\\|genome"');
     expect(text).toContain('"\\*label\\*":"\\[x\\](https://example.com)"');
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/70
+  it('escapes the echoed list target while structured output keeps it as given', async () => {
+    const output = {
+      target: 'PCSK9*[x](https://example.com)',
+      target_kind: 'gene' as const,
+      filters: { consequence_class: 'lof' as const, max_af: 0.001, pass_only: true as const },
+      preview: [],
+      canvas_id: '',
+      table_name: '',
+      spilled: false,
+      total: 0,
+      truncated: false,
+      next_offset: null,
+      qc_filtered: 0,
+      dataset: 'gnomad_r4',
+      reference_genome: 'GRCh38',
+    };
+    const result = await runToolContract(
+      { ...gnomadListGeneVariants, handler: async () => output },
+      { gene: 'PCSK9' },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(output);
+    const text = result.content.map((block) => ('text' in block ? block.text : '')).join('\n');
+    expect(text).toContain(
+      '**Target:** gene PCSK9\\*\\[x\\](https://example.com) | **Filters:** consequence_class=lof, max_af=0.001, pass_only=true',
+    );
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/70
+  it('escapes the echoed ClinVar gene and significance while structured output keeps them as given', async () => {
+    const output = {
+      gene: 'PCSK9*',
+      filters: { clinical_significance: 'risk *factor*', min_review_stars: 2 },
+      preview: [],
+      canvas_id: '',
+      table_name: '',
+      spilled: false,
+      total: 0,
+      total_found: 0,
+      truncated: false,
+      next_offset: null,
+      unavailable_ids: [],
+    };
+    const result = await runToolContract(
+      { ...gnomadSearchClinvar, handler: async () => output },
+      { gene: 'PCSK9' },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(output);
+    const text = result.content.map((block) => ('text' in block ? block.text : '')).join('\n');
+    expect(text).toContain(
+      '**Gene:** PCSK9\\* | **Filters:** clinical_significance=risk \\*factor\\*, min_review_stars=2',
+    );
   });
 });

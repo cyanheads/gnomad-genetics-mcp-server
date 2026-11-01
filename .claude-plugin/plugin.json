@@ -36,7 +36,9 @@
     "GNOMAD_MAX_VARIANT_BATCH": { "type": "string", "title": "Variant batch limit", "description": "Optional maximum variant IDs per call.", "default": "" },
     "CLINVAR_BASE_URL": { "type": "string", "title": "ClinVar API URL", "description": "Optional NCBI E-utilities endpoint override.", "default": "" },
     "NCBI_API_KEY": { "type": "string", "title": "NCBI API key", "description": "Optional NCBI key to raise the E-utilities rate limit.", "sensitive": true, "default": "" },
-    "GNOMAD_DATAFRAME_DROP_ENABLED": { "type": "string", "title": "Enable dataframe drop", "description": "Optional boolean enabling the dataframe drop tool.", "default": "" }
+    "GNOMAD_DATAFRAME_DROP_ENABLED": { "type": "string", "title": "Enable dataframe drop", "description": "Optional boolean enabling the dataframe drop tool.", "default": "" },
+    "GNOMAD_CLAMP_LIMITS": { "type": "string", "title": "Clamp over-cap limits", "description": "Optional boolean (default true). false rejects a limit above its cap instead of clamping it with a notice.", "default": "" },
+    "GNOMAD_NORMALIZE_IDS": { "type": "string", "title": "Normalize identifiers", "description": "Optional boolean (default true). false rejects non-canonical ID spellings instead of rewriting them.", "default": "" }
   },
   "mcpServers": {
     "gnomad-genetics-mcp-server": {
@@ -51,7 +53,9 @@
         "GNOMAD_MAX_VARIANT_BATCH": "${user_config.GNOMAD_MAX_VARIANT_BATCH}",
         "CLINVAR_BASE_URL": "${user_config.CLINVAR_BASE_URL}",
         "NCBI_API_KEY": "${user_config.NCBI_API_KEY}",
-        "GNOMAD_DATAFRAME_DROP_ENABLED": "${user_config.GNOMAD_DATAFRAME_DROP_ENABLED}"
+        "GNOMAD_DATAFRAME_DROP_ENABLED": "${user_config.GNOMAD_DATAFRAME_DROP_ENABLED}",
+        "GNOMAD_CLAMP_LIMITS": "${user_config.GNOMAD_CLAMP_LIMITS}",
+        "GNOMAD_NORMALIZE_IDS": "${user_config.GNOMAD_NORMALIZE_IDS}"
       }
     }
   }

@@ -17,8 +17,23 @@ async function definitions() {
   const { gnomadDataframeDrop } = await import(
     '@/mcp-server/tools/definitions/gnomad-dataframe-drop.tool.js'
   );
-  return { variant: gnomadGetVariant, drop: gnomadDataframeDrop };
+  const { gnomadDataframeQuery } = await import(
+    '@/mcp-server/tools/definitions/gnomad-dataframe-query.tool.js'
+  );
+  const { gnomadDataframeDescribe } = await import(
+    '@/mcp-server/tools/definitions/gnomad-dataframe-describe.tool.js'
+  );
+  return {
+    variant: gnomadGetVariant,
+    drop: gnomadDataframeDrop,
+    query: gnomadDataframeQuery,
+    describe: gnomadDataframeDescribe,
+  };
 }
+
+/** The disabledTool() reason on a definition; undefined when the tool is registered. */
+const disabledReason = (definition: object) =>
+  (definition as { __mcpDisabled?: { reason: string } }).__mcpDisabled?.reason;
 
 describe('definition configuration', () => {
   it('characterizes schema and description agreement for an exported cap', async () => {
@@ -34,10 +49,55 @@ describe('definition configuration', () => {
     );
   });
 
+  it.each([undefined, '', `\${CANVAS_PROVIDER_TYPE}`, 'duckdb'])(
+    'registers the dataframe query and describe tools with CANVAS_PROVIDER_TYPE=%j',
+    async (value) => {
+      vi.stubEnv('CANVAS_PROVIDER_TYPE', value);
+      const { query, describe, drop } = await definitions();
+      expect(disabledReason(query)).toBeUndefined();
+      expect(disabledReason(describe)).toBeUndefined();
+      // The drop tool still follows its own gate, off by default.
+      expect(disabledReason(drop)).toMatch(/drop is turned off/);
+    },
+  );
+
+  it.each([undefined, 'true'])(
+    'disables every dataframe tool with CANVAS_PROVIDER_TYPE=none and GNOMAD_DATAFRAME_DROP_ENABLED=%j',
+    async (drop) => {
+      vi.stubEnv('CANVAS_PROVIDER_TYPE', 'none');
+      vi.stubEnv('GNOMAD_DATAFRAME_DROP_ENABLED', drop);
+      const tools = await definitions();
+      for (const tool of [tools.query, tools.describe, tools.drop]) {
+        expect(disabledReason(tool)).toMatch(/DataCanvas is turned off/);
+      }
+    },
+  );
+
+  it('registers the drop tool when the canvas and its own gate are both on', async () => {
+    vi.stubEnv('CANVAS_PROVIDER_TYPE', 'duckdb');
+    vi.stubEnv('GNOMAD_DATAFRAME_DROP_ENABLED', 'true');
+    const { drop } = await definitions();
+    expect(disabledReason(drop)).toBeUndefined();
+  });
+
+  it('advertises no limit maximum on gnomad_dataframe_query, and 3,000 with GNOMAD_CLAMP_LIMITS=false', async () => {
+    const over = { canvas_id: 'cnvquery01', sql: 'SELECT 1', limit: 3_001 };
+    const clamping = (await definitions()).query.input;
+    expect(z.toJSONSchema(clamping).properties?.limit).not.toHaveProperty('maximum');
+    expect(clamping.safeParse(over).success).toBe(true);
+
+    vi.resetModules();
+    vi.stubEnv('GNOMAD_CLAMP_LIMITS', 'false');
+    const strict = (await definitions()).query.input;
+    expect(z.toJSONSchema(strict).properties?.limit).toMatchObject({ maximum: 3_000, default: 25 });
+    expect(strict.safeParse(over).success).toBe(false);
+  });
+
   it.each([
     ['GNOMAD_MAX_CONCURRENCY', 'abc'],
     ['GNOMAD_MAX_VARIANT_BATCH', '-1'],
     ['GNOMAD_DATAFRAME_DROP_ENABLED', 'invalid'],
+    ['GNOMAD_CLAMP_LIMITS', 'invalid'],
   ])('defers invalid %s to full startup validation', async (name, value) => {
     vi.stubEnv(name, value);
     await expect(definitions()).resolves.toBeDefined();

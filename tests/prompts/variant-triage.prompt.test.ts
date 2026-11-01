@@ -7,9 +7,10 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { describe, expect, it } from 'vitest';
-import { GNOMAD_DATASETS } from '@/config/server-config.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GNOMAD_DATASETS, resetServerConfig } from '@/config/server-config.js';
 import { variantTriagePrompt } from '@/mcp-server/prompts/definitions/variant-triage.prompt.js';
+import { VARIANT_OR_RSID_REGEX } from '@/mcp-server/tools/shared-schemas.js';
 
 /** Flatten the generated messages to a single string for substring assertions. */
 async function renderText(args: Record<string, unknown>): Promise<string> {
@@ -181,6 +182,15 @@ describe('gnomad_variant_triage prompt', () => {
     expect(schema.required).toEqual(['variant']);
   });
 
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+  it('keeps variant required in the input JSON Schema prompts/list derives its arguments from', () => {
+    const schema = variantTriagePrompt.args!['~standard'].jsonSchema.input({
+      target: 'draft-2020-12',
+    }) as { required?: string[]; properties: Record<string, { pattern?: string }> };
+    expect(schema.required).toEqual(['variant']);
+    expect(schema.properties.variant?.pattern).toBe(VARIANT_OR_RSID_REGEX.source);
+  });
+
   it.each(['   ', '', '\t'])('treats a blank gene %j as omitted', async (gene) => {
     const text = await renderText({ variant: 'rs11591147', gene });
     expect(text).toContain('gnomad_get_gene_constraint(gene: <symbol>');
@@ -208,4 +218,55 @@ describe('gnomad_variant_triage prompt', () => {
       expect(synthesis).toContain('filtered qc_status');
     },
   );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it.each(['1-55039974-G-T', 'rs11591147'])(
+    'has the callability step settle the build on variant_not_found_other_build before checking coverage (%s)',
+    async (variant) => {
+      const text = await renderText({ variant, dataset: 'gnomad_r2_1' });
+      const coverageStep = text.split('\n').find((line) => line.startsWith('3. ')) ?? '';
+
+      expect(coverageStep).toContain('`variant_not_found_other_build`');
+      expect(coverageStep).toContain('`candidates`');
+      expect(coverageStep.indexOf('variant_not_found_other_build')).toBeLessThan(
+        coverageStep.indexOf('gnomad_get_coverage('),
+      );
+    },
+  );
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+describe('gnomad_variant_triage identifier normalization (#62)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetServerConfig();
+  });
+
+  it('emits a chr-prefixed colon ID as chrom-pos-ref-alt in every step', async () => {
+    const text = await renderText({ variant: 'chr1:55039974:G:T' });
+
+    expect(text).toContain('Triage variant **1-55039974-G-T**');
+    expect(text).toContain('gnomad_get_variant(variants: ["1-55039974-G-T"])');
+    expect(text).toContain('gnomad_get_coverage(region: "1-55039974-55039974")');
+    expect(text).not.toContain('chr1:55039974:G:T');
+  });
+
+  it('emits an uppercase rsID lowercased in every step', async () => {
+    const text = await renderText({ variant: 'RS505151' });
+
+    expect(text).toContain('Triage variant **rs505151**');
+    expect(text).toContain('gnomad_get_variant(variants: ["rs505151"])');
+    expect(text).not.toContain('RS505151');
+  });
+
+  it('rejects a colon ID and keeps an uppercase rsID as written with GNOMAD_NORMALIZE_IDS=false', async () => {
+    vi.stubEnv('GNOMAD_NORMALIZE_IDS', 'false');
+    resetServerConfig();
+
+    expect(variantTriagePrompt.args!.safeParse({ variant: 'chr1:55039974:G:T' }).success).toBe(
+      false,
+    );
+    const text = await renderText({ variant: 'RS505151' });
+    expect(text).toContain('gnomad_get_variant(variants: ["RS505151"])');
+  });
 });

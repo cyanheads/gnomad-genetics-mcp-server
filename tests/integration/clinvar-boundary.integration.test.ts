@@ -72,6 +72,12 @@ async function runExhausting(operation: () => Promise<unknown>): Promise<McpErro
   return settled;
 }
 
+/** ESearch clauses for the mapped `pathogenic` and `likely pathogenic` terms (#67). */
+const PATHOGENIC_CLAUSE =
+  '(clinsig_pathogenic[prop] OR clinsig_likely_pathogenic[prop] OR clinsig_pathogenic_low_penetrance[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])';
+const LIKELY_PATHOGENIC_CLAUSE =
+  '(clinsig_likely_pathogenic[prop] OR clinsig_likely_pathogenic_low_penetrance[prop])';
+
 /** An ESearch envelope: `count` is the full hit count, `idlist` the window. */
 function esearchBody(idlist: string[], count = String(idlist.length)): Response {
   return new Response(JSON.stringify({ esearchresult: { count, idlist } }));
@@ -212,11 +218,9 @@ describe('ClinVarService E-utilities boundary', () => {
 
     expect(urls).toHaveLength(2);
     expect(urls[0]?.searchParams.get('db')).toBe('clinvar');
-    expect(urls[0]?.searchParams.get('term')).toBe(
-      '"LDLR"[gene] AND "pathogenic"[clinical_significance]',
-    );
+    expect(urls[0]?.searchParams.get('term')).toBe(`"LDLR"[gene] AND ${PATHOGENIC_CLAUSE}`);
     expect(urls[0]?.searchParams.get('retstart')).toBe('0');
-    expect(urls[0]?.searchParams.get('retmax')).toBe('500');
+    expect(urls[0]?.searchParams.get('retmax')).toBe('10');
     expect(urls[1]?.searchParams.get('id')).toBe('1,2');
     expect(totalFound).toBe(2);
     expect(rows).toEqual([
@@ -383,11 +387,25 @@ describe('ClinVarService ESearch term (#28, #31)', () => {
   }
 
   it.each([
-    ['uncertain significance', '"TTR"[gene] AND "uncertain significance"[clinical_significance]'],
-    ['uncertain_significance', '"TTR"[gene] AND "uncertain significance"[clinical_significance]'],
-    [' pathogenic ', '"TTR"[gene] AND "pathogenic"[clinical_significance]'],
-    ['likely_pathogenic', '"TTR"[gene] AND "likely pathogenic"[clinical_significance]'],
-    ['"benign"', '"TTR"[gene] AND "benign"[clinical_significance]'],
+    ['pathogenic', `"TTR"[gene] AND ${PATHOGENIC_CLAUSE}`],
+    ['Pathogenic', `"TTR"[gene] AND ${PATHOGENIC_CLAUSE}`],
+    [' pathogenic ', `"TTR"[gene] AND ${PATHOGENIC_CLAUSE}`],
+    ['likely pathogenic', `"TTR"[gene] AND ${LIKELY_PATHOGENIC_CLAUSE}`],
+    ['likely_pathogenic', `"TTR"[gene] AND ${LIKELY_PATHOGENIC_CLAUSE}`],
+    ['LIKELY_PATHOGENIC', `"TTR"[gene] AND ${LIKELY_PATHOGENIC_CLAUSE}`],
+    [' likely pathogenic ', `"TTR"[gene] AND ${LIKELY_PATHOGENIC_CLAUSE}`],
+    ['uncertain significance', '"TTR"[gene] AND clinsig_vus[prop]'],
+    ['uncertain_significance', '"TTR"[gene] AND clinsig_vus[prop]'],
+    [
+      'VUS',
+      '"TTR"[gene] AND (clinsig_vus[prop] OR clinsig_vus_high[prop] OR clinsig_vus_mid[prop] OR clinsig_vus_low[prop])',
+    ],
+    ['likely benign', '"TTR"[gene] AND clinsig_likely_benign[prop]'],
+    ['"benign"', '"TTR"[gene] AND (clinsig_benign[prop] OR clinsig_likely_benign[prop])'],
+    ['conflicting', '"TTR"[gene] AND clinsig_has_conflicts[prop]'],
+    // Unmapped terms keep the quoted phrase, lowercased like every term.
+    ['risk factor', '"TTR"[gene] AND "risk factor"[clinical_significance]'],
+    ['Risk_Factor', '"TTR"[gene] AND "risk factor"[clinical_significance]'],
     ['   ', '"TTR"[gene]'],
     ['', '"TTR"[gene]'],
     ['"', '"TTR"[gene]'],
@@ -490,7 +508,7 @@ describe('ClinVarService gene term (#40)', () => {
     await search('BRCA1)', { clinicalSignificance: 'pathogenic', minReviewStars: 4 });
 
     expect(urls[0]?.searchParams.get('term')).toBe(
-      '"BRCA1)"[gene] AND "pathogenic"[clinical_significance] AND ("practice guideline"[Review status])',
+      `"BRCA1)"[gene] AND ${PATHOGENIC_CLAUSE} AND ("practice guideline"[Review status])`,
     );
   });
 

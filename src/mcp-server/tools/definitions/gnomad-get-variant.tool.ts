@@ -8,7 +8,9 @@
  * concurrently under GnomadService's upstream-concurrency cap, with per-item
  * partial success — one bad ID never fails the call, each failed[] item carries
  * its typed reason and declared recovery hint, and found[]/failed[] stay in
- * input order.
+ * input order. Absent coordinate IDs share best-effort liftover requests (one
+ * per 25 IDs) after the batch settles, which name the IDs each lifts to from
+ * the other build.
  * @module mcp-server/tools/definitions/gnomad-get-variant.tool
  */
 
@@ -173,7 +175,7 @@ const VariantRecordSchema = z
     an: z
       .number()
       .describe(
-        "Overall allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant; on gnomad_r3, gnomad_r2_1, and exac (no joint data), the sum across carried callset(s).",
+        "Overall allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant; on gnomad_r3, gnomad_r2_1, and exac (no joint data), the sum across carried callset(s), a callset that failed QC included — callsets carries each one's own AN and filters.",
       ),
     af: z
       .number()
@@ -239,13 +241,15 @@ const VariantRecordSchema = z
 
 /**
  * Every reason a failed[] item can carry: the tool's own per-item rejections
- * (malformed, absent) and each reason GnomadService.getVariant throws. Each is
- * declared in the tool's errors[], whose recovery hint the item carries.
+ * (malformed, absent, absent with a liftover hint) and each reason
+ * GnomadService.getVariant throws. Each is declared in the tool's errors[],
+ * whose recovery hint the item carries.
  */
 const FailureReason = z
   .enum([
     'invalid_variant_id',
     'variant_not_found',
+    'variant_not_found_other_build',
     'mitochondrial_unsupported',
     'ambiguous_rsid',
     'graphql_error',
@@ -270,22 +274,25 @@ const FailedItem = z
     candidates: z
       .array(z.string())
       .optional()
-      .describe('Concrete variant IDs to retry when an rsID is ambiguous.'),
+      .describe(
+        "Concrete variant IDs to retry: for ambiguous_rsid, the chrom-pos-ref-alt IDs the rsID maps to; for variant_not_found_other_build, the IDs this string lifts over to on the dataset's reference build when read as an ID on the other build.",
+      ),
   })
   .describe('One failed input ID, why it failed, and what to do next.');
 
 /**
  * Per-item batch outcome — a resolved record or a typed failure. Each input ID
- * maps to one of these, so one bad ID can't fail the batch. Bucketed in input
- * order after the concurrent dispatch settles.
+ * maps to one of these, so one bad ID can't fail the batch. A variant_not_found
+ * failure keeps the canonical ID it sent as `absentId`, which the liftover pass
+ * looks up once the batch settles. Bucketed in input order.
  */
 type VariantLookupOutcome =
   | { ok: true; record: z.infer<typeof VariantRecordSchema> }
-  | { ok: false; failure: z.infer<typeof FailedItem> };
+  | { ok: false; failure: z.infer<typeof FailedItem>; absentId?: string };
 
 export const gnomadGetVariant = tool('gnomad_get_variant', {
   title: 'gnomad-genetics-mcp-server: get variant',
-  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, each callset's own counts and QC filters with a qc_status, the most severe transcript consequence beside the consequence on the gene's MANE Select (else canonical) transcript, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. A qc_status of filtered means the variant failed gnomAD QC in every callset carrying it (gnomAD's browser hides these by default; AC0 means no high-quality carrier), so treat its counts as low-confidence rather than an observed frequency. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] — with its reason and a recovery hint — without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
+  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, each callset's own counts and QC filters with a qc_status, the most severe transcript consequence beside the consequence on the gene's MANE Select (else canonical) transcript, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. A qc_status of filtered means the variant failed gnomAD QC in every callset carrying it (gnomAD's browser hides these by default; AC0 means no high-quality carrier), so treat its counts as low-confidence rather than an observed frequency. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] — with its reason and a recovery hint — without failing the others. A coordinate ID carries no build: an absent one whose string also lifts over from the other build fails as variant_not_found_other_build, with the lifted IDs on the dataset's build in candidates, while a string valid on both builds can name a different variant on each, which no not-found path can see — so keep IDs on the dataset's build. variant_not_found means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     variants: z
@@ -334,9 +341,16 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'variant_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'A well-formed ID is absent from the requested dataset; reported per item in failed[].',
+      when: 'A well-formed ID is absent from the requested dataset with no liftover candidate from the other build: rsIDs are never lifted, and a liftover lookup that fails or runs out of time leaves this reason. Reported per item in failed[].',
       recovery:
-        'Confirm the ID and dataset, or run gnomad_get_coverage to check the position is callable before concluding true absence.',
+        "A coordinate ID carries no build, so confirm it is on the dataset's reference build, then run gnomad_get_coverage to check the position is callable before concluding true absence.",
+    },
+    {
+      reason: 'variant_not_found_other_build',
+      code: JsonRpcErrorCode.NotFound,
+      when: "A coordinate ID is absent from the requested dataset and, read as an ID on the other reference build, lifts over to the IDs in candidates on the dataset's build; reported per item in failed[].",
+      recovery:
+        'This ID is absent from the dataset, and the same string also resolves on the other reference build. If the ID was written for that build, retry with a candidate. If it was not, treat it as absent and run gnomad_get_coverage to check the position is callable.',
     },
     {
       reason: 'mitochondrial_unsupported',
@@ -413,15 +427,12 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       reason: z.infer<typeof FailureReason>,
       error: string,
       candidates?: string[],
-    ): VariantLookupOutcome => ({
-      ok: false,
-      failure: {
-        variant,
-        error,
-        reason,
-        recovery: ctx.recoveryFor(reason).recovery.hint,
-        ...(candidates?.length ? { candidates } : {}),
-      },
+    ): z.infer<typeof FailedItem> => ({
+      variant,
+      error,
+      reason,
+      recovery: ctx.recoveryFor(reason).recovery.hint,
+      ...(candidates?.length ? { candidates } : {}),
     });
 
     // Dispatch every ID concurrently; GnomadService's maxConcurrency semaphore
@@ -440,36 +451,70 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       input.variants.map(async (variantId): Promise<VariantLookupOutcome> => {
         const normalized = normalizeVariantIdentifier(variantId);
         if (!normalized) {
-          return failure(
-            variantId,
-            'invalid_variant_id',
-            'Malformed ID. Expected chrom-pos-ref-alt (e.g. 1-55051215-G-GA) with ACGT alleles, or an rsID (e.g. rs11591147).',
-          );
+          return {
+            ok: false,
+            failure: failure(
+              variantId,
+              'invalid_variant_id',
+              'Malformed ID. Expected chrom-pos-ref-alt (e.g. 1-55051215-G-GA) with ACGT alleles, or an rsID (e.g. rs11591147).',
+            ),
+          };
         }
         try {
           const record = await svc.getVariant(normalized.canonical, dsCtx, ctx, { startedAt });
           if (record) return { ok: true, record };
-          return failure(variantId, 'variant_not_found', `Not found in ${dsCtx.dataset}.`);
+          return {
+            ok: false,
+            failure: failure(variantId, 'variant_not_found', `Not found in ${dsCtx.dataset}.`),
+            absentId: normalized.canonical,
+          };
         } catch (err) {
           if (ctx.signal.aborted || !(err instanceof McpError)) throw err;
           const reason = FailureReason.safeParse(err.data?.reason);
           if (!reason.success) throw err;
           const candidates = err.data?.candidates;
-          return failure(
-            variantId,
-            reason.data,
-            err.message,
-            Array.isArray(candidates) ? candidates : undefined,
-          );
+          return {
+            ok: false,
+            failure: failure(
+              variantId,
+              reason.data,
+              err.message,
+              Array.isArray(candidates) ? candidates : undefined,
+            ),
+          };
         }
       }),
     );
 
+    // An absent ID's string may also name a variant on the other build.
+    // Best-effort liftover requests (one per 25 absent IDs), under the batch's
+    // deadline, turn each that lifts into variant_not_found_other_build; the
+    // service skips rsIDs, so a batch with no absent coordinate ID sends none.
+    const absentIds = outcomes.flatMap((outcome) =>
+      !outcome.ok && outcome.absentId ? [outcome.absentId] : [],
+    );
+    const lifted = absentIds.length
+      ? await svc.liftoverCandidates(absentIds, dsCtx, ctx, { startedAt })
+      : new Map<string, string[]>();
+
     const found: z.infer<typeof VariantRecordSchema>[] = [];
     const failed: z.infer<typeof FailedItem>[] = [];
     for (const outcome of outcomes) {
-      if (outcome.ok) found.push(outcome.record);
-      else failed.push(outcome.failure);
+      if (outcome.ok) {
+        found.push(outcome.record);
+        continue;
+      }
+      const candidates = outcome.absentId ? lifted.get(outcome.absentId) : undefined;
+      failed.push(
+        candidates
+          ? failure(
+              outcome.failure.variant,
+              'variant_not_found_other_build',
+              `Not found in ${dsCtx.dataset}. Read as an ID on the other reference build, the same string lifts over to the ${dsCtx.reference_genome} ${candidates.length === 1 ? 'ID' : 'IDs'} in candidates.`,
+              candidates,
+            )
+          : outcome.failure,
+      );
     }
 
     ctx.log.info('gnomad_get_variant resolved', {

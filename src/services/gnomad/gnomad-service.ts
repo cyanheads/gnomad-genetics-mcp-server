@@ -10,7 +10,7 @@
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, notFound, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
@@ -22,6 +22,7 @@ import {
   upstreamGraphqlMessages,
   upstreamUnavailable,
 } from '@/services/upstream-error.js';
+import { normalizeIdentifier } from './identifier-normalization.js';
 import {
   CLINVAR_BY_VARIANT_ID_QUERY,
   GENE_CONSTRAINT_BY_ID_QUERY,
@@ -30,6 +31,7 @@ import {
   GENE_COVERAGE_BY_SYMBOL_QUERY,
   GENE_VARIANTS_BY_ID_QUERY,
   GENE_VARIANTS_BY_SYMBOL_QUERY,
+  liftoverQuery,
   REGION_COVERAGE_QUERY,
   REGION_VARIANTS_QUERY,
   TRANSCRIPT_COVERAGE_QUERY,
@@ -99,6 +101,44 @@ const REGION_TOO_LARGE_MESSAGE =
  */
 export const CLINVAR_LOOKUP_BUDGET_MS = UPSTREAM_CALL_BUDGET_MS;
 
+/**
+ * gnomAD's liftover table pairs GRCh37 sources with GRCh38 targets. An ID a
+ * dataset lacks is read as written for the other build: on a GRCh38 dataset as
+ * a GRCh37 source, whose target is the candidate; on a GRCh37 dataset as a
+ * GRCh38 target, whose source is the candidate. `idBuild` is the build the
+ * query names, the one the ID is read as; `queried` is the entry side that
+ * echoes the ID asked for.
+ */
+const LIFTOVER_DIRECTION = {
+  GRCh38: {
+    argument: 'source_variant_id',
+    idBuild: 'GRCh37',
+    queried: 'source',
+    candidate: 'liftover',
+  },
+  GRCh37: {
+    argument: 'liftover_variant_id',
+    idBuild: 'GRCh38',
+    queried: 'liftover',
+    candidate: 'source',
+  },
+} as const satisfies Record<
+  ReferenceGenome,
+  {
+    argument: 'source_variant_id' | 'liftover_variant_id';
+    idBuild: ReferenceGenome;
+    queried: 'source' | 'liftover';
+    candidate: 'source' | 'liftover';
+  }
+>;
+
+/**
+ * IDs per liftover request. gnomAD can answer a large liftover document with
+ * the reply to a different one, so a batch above this size goes out as several
+ * requests, each well under the size where that was seen.
+ */
+const LIFTOVER_REQUEST_IDS = 25;
+
 /** v4/v3 are GRCh38; v2.1 and ExAC are GRCh37. */
 function refGenomeForDataset(dataset: Dataset): ReferenceGenome {
   return dataset === 'gnomad_r2_1' || dataset === 'exac' ? 'GRCh37' : 'GRCh38';
@@ -138,6 +178,24 @@ function assertNuclearFeature(
       `${target.kind === 'transcript' ? 'Transcript' : 'Gene'} "${target.value}"`,
     );
   }
+}
+
+/**
+ * gnomAD answers a gene or transcript it does not hold with a null root beside
+ * "Gene not found" / "Transcript not found". Its lookup is keyed by build, so
+ * the null cannot tell an unknown ID from one absent on this build: the
+ * message names the build. A real feature with no rows keeps a non-null root.
+ */
+function assertFeatureFound(
+  target: GenomeTarget,
+  data: { gene?: unknown; transcript?: unknown },
+  dsCtx: DatasetContext,
+): void {
+  if (target.kind === 'region' || data[target.kind] !== null) return;
+  throw notFound(
+    `${target.kind === 'gene' ? 'Gene' : 'Transcript'} "${target.value}" not found in ${dsCtx.reference_genome}.`,
+    { reason: `${target.kind}_not_found`, retryable: false },
+  );
 }
 
 function invalidRegion(message: string): McpError {
@@ -304,6 +362,14 @@ const ClinVarOnlyResponse = z.object({ clinvar_variant: RawClinVar });
 const VariantSearchResponse = z.object({
   variant_search: z.array(z.object({ variant_id: z.string() })),
 });
+
+/** One alias of the liftover document: every table entry for its ID, empty when none. */
+const LiftoverEntries = z.array(
+  z.object({
+    source: z.object({ variant_id: z.string() }),
+    liftover: z.object({ variant_id: z.string() }),
+  }),
+);
 
 /** gnomAD's errors carry `message` alone — never a `path` — so nothing here keys on one. */
 const GraphqlEnvelope = z.object({
@@ -1005,6 +1071,92 @@ export class GnomadService {
     }
   }
 
+  /**
+   * Where each variant ID the dataset lacks would sit on the dataset's build if
+   * it were written for the other one, from gnomAD's liftover table: aliased
+   * requests of up to {@link LIFTOVER_REQUEST_IDS} distinct coordinate IDs each,
+   * sent in turn, keyed in the result by the ID as passed, with only IDs that
+   * lift present. rsIDs are dropped, since gnomAD fails the whole document on
+   * one, and a call with none left sends nothing. Best-effort like
+   * {@link lookupClinvar}: a GraphQL error, an HTTP failure, a transient error
+   * outlasting the retries, a reply whose entries name IDs other than the ones
+   * asked for, or the call budget anchored at `startedAt` (epoch ms, default
+   * now) running out returns no candidates for that request's IDs. A cancelled
+   * caller still rejects. A resolved lift says only that the string names a
+   * variant on the other build, never that the caller meant that build.
+   */
+  async liftoverCandidates(
+    variantIds: readonly string[],
+    dsCtx: DatasetContext,
+    ctx: Context,
+    { startedAt = Date.now() }: { startedAt?: number } = {},
+  ): Promise<Map<string, string[]>> {
+    ctx.signal.throwIfAborted();
+    const ids = [...new Set(variantIds.filter((id) => !RSID.test(id)))];
+    if (ids.length === 0) return new Map();
+    const deadline = startedAt + UPSTREAM_CALL_BUDGET_MS;
+    if (deadline - Date.now() <= 0) {
+      ctx.log.warning('Skipped the liftover lookup: its time budget was already spent.', {
+        variantIds: ids,
+      });
+      return new Map();
+    }
+    const direction = LIFTOVER_DIRECTION[dsCtx.reference_genome];
+    const lifted = new Map<string, string[]>();
+    for (let start = 0; start < ids.length; start += LIFTOVER_REQUEST_IDS) {
+      const chunk = ids.slice(start, start + LIFTOVER_REQUEST_IDS);
+      for (const [id, candidates] of await this.liftoverRequest(chunk, direction, ctx, deadline)) {
+        lifted.set(id, candidates);
+      }
+    }
+    return lifted;
+  }
+
+  /** One aliased liftover request for `ids`; see {@link liftoverCandidates}. */
+  private async liftoverRequest(
+    ids: readonly string[],
+    direction: (typeof LIFTOVER_DIRECTION)[ReferenceGenome],
+    ctx: Context,
+    deadline: number,
+  ): Promise<Map<string, string[]>> {
+    try {
+      const data = await this.graphql(
+        liftoverQuery(ids.length, direction.argument),
+        {
+          ...Object.fromEntries(ids.map((id, index) => [`v${index}`, id])),
+          referenceGenome: direction.idBuild,
+        },
+        z.object(Object.fromEntries(ids.map((_, index) => [`l${index}`, LiftoverEntries]))),
+        'gnomad.liftover',
+        ctx,
+        { deadline },
+      );
+      const lifted = new Map<string, string[]>();
+      for (const [index, id] of ids.entries()) {
+        const entries = data[`l${index}`] ?? [];
+        // An entry for another ID means the reply answers a different document.
+        if (entries.some((entry) => entry[direction.queried].variant_id !== id)) {
+          ctx.log.warning(
+            'Liftover reply names variant IDs it was not asked for; the absent IDs stay plain not-found.',
+            { variantIds: ids },
+          );
+          return new Map();
+        }
+        const candidates = new Set(entries.map((entry) => entry[direction.candidate].variant_id));
+        if (candidates.size) lifted.set(id, [...candidates]);
+      }
+      return lifted;
+    } catch (err) {
+      if (ctx.signal.aborted || !(err instanceof McpError)) throw err;
+      ctx.log.warning('Liftover lookup failed; the absent IDs stay plain not-found.', {
+        variantIds: ids,
+        reason: err.data?.reason,
+        error: err.message,
+      });
+      return new Map();
+    }
+  }
+
   private assertVariantBuild(
     variant: NonNullable<z.infer<typeof RawVariant>>,
     dsCtx: DatasetContext,
@@ -1122,13 +1274,16 @@ export class GnomadService {
    * Fetch gene loss-of-function constraint by symbol or Ensembl gene ID. gnomAD
    * picks the table by build alone, so exac reads gene.exac_constraint beside
    * the GRCh37 gnomAD table, and every result names its constraint release.
+   * gnomAD matches an Ensembl ID case-sensitively and unversioned, so one is
+   * normalized first under GNOMAD_NORMALIZE_IDS; a symbol is sent as given.
    */
   async getGeneConstraint(
-    gene: string,
+    geneRef: string,
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<GeneConstraint | null> {
     const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
+    const gene = normalizeIdentifier('gene', geneRef);
     const byId = ENSEMBL_GENE_ID.test(gene);
     const data = await this.graphql(
       byId ? GENE_CONSTRAINT_BY_ID_QUERY : GENE_CONSTRAINT_BY_SYMBOL_QUERY,
@@ -1171,10 +1326,16 @@ export class GnomadService {
   /**
    * List variants in a gene / transcript / region, filtered by consequence class
    * and max-AF. Returns the full normalized row set (the handler spills it).
+   * passOnly selects the counts a row reads (see normalizeListVariant) but drops
+   * no row: the caller counts the QC-failed rows first, then drops them.
    */
   async listGeneVariants(
     target: GenomeTarget,
-    filters: { consequenceClass?: ConsequenceClass | undefined; maxAf?: number | undefined },
+    filters: {
+      consequenceClass?: ConsequenceClass | undefined;
+      maxAf?: number | undefined;
+      passOnly?: boolean | undefined;
+    },
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<GeneVariantRow[]> {
@@ -1188,11 +1349,12 @@ export class GnomadService {
       ctx,
       { relayRegionRejections: true, deadline },
     );
+    assertFeatureFound(target, data, dsCtx);
     assertNuclearFeature(target, data.gene ?? data.transcript);
     const raw = (data.gene ?? data.transcript ?? data.region)?.variants ?? [];
     // gnomAD's gene table marks consequences off the primary transcript on gene targets only.
     const primary = data.gene ? genePrimaryTranscript(data.gene) : null;
-    const rows = raw.map((r) => this.normalizeListVariant(r, primary));
+    const rows = raw.map((r) => this.normalizeListVariant(r, primary, filters.passOnly ?? false));
     return rows.filter((row) => {
       if (filters.consequenceClass && row.consequence_class !== filters.consequenceClass)
         return false;
@@ -1204,28 +1366,39 @@ export class GnomadService {
   private normalizeListVariant(
     r: RawListVariantT,
     primary: ReturnType<typeof genePrimaryTranscript>,
+    passOnly: boolean,
   ): GeneVariantRow {
     const { exome, genome, joint } = r;
+    const exomeFilters = carriedFilters(exome);
+    const genomeFilters = carriedFilters(genome);
+    const qc = qcStatus([exomeFilters, genomeFilters]);
     /**
      * Overall counts match normalizeVariant(): gnomAD's joint record where it
      * carries an AC (gnomad_r4), else the sum across exome + genome. ac, an, and
      * homozygote_count share that one source and af = ac/an, so max_af filters
      * on the frequency the row shows. The per-callset upstream af describes one
      * callset only and never stands in for it.
+     *
+     * Under passOnly the sum leaves out a callset that failed QC, as gnomAD's
+     * browser table drops it before merging (VariantList/filterVariants.ts); the
+     * joint record is read whole there too. A row no callset passed keeps the
+     * full sum, so qc_filtered, counted before the caller drops that row,
+     * matches the same rows with and without passOnly.
      */
+    const dropFailed = passOnly && qc === 'pass';
+    const ex = !dropFailed || exomeFilters?.length === 0 ? exome : null;
+    const ge = !dropFailed || genomeFilters?.length === 0 ? genome : null;
     const counts =
       joint?.ac != null
         ? { ac: joint.ac, an: joint.an ?? 0, homozygote_count: joint.homozygote_count ?? 0 }
         : {
-            ac: (exome?.ac ?? 0) + (genome?.ac ?? 0),
-            an: (exome?.an ?? 0) + (genome?.an ?? 0),
-            homozygote_count: (exome?.homozygote_count ?? 0) + (genome?.homozygote_count ?? 0),
+            ac: (ex?.ac ?? 0) + (ge?.ac ?? 0),
+            an: (ex?.an ?? 0) + (ge?.an ?? 0),
+            homozygote_count: (ex?.homozygote_count ?? 0) + (ge?.homozygote_count ?? 0),
           };
     const source: string[] = [];
     if (exome?.ac != null) source.push('exome');
     if (genome?.ac != null) source.push('genome');
-    const exomeFilters = carriedFilters(exome);
-    const genomeFilters = carriedFilters(genome);
     const transcriptId = r.transcript_id ?? null;
     return {
       variant_id: r.variant_id,
@@ -1239,7 +1412,7 @@ export class GnomadService {
       flags: (r.flags ?? []).join('|'),
       exome_filters: exomeFilters?.join('|') ?? null,
       genome_filters: genomeFilters?.join('|') ?? null,
-      qc_status: qcStatus([exomeFilters, genomeFilters]),
+      qc_status: qc,
       transcript_id: transcriptId,
       consequence_transcript: primary && (transcriptId === primary.id ? primary.kind : 'other'),
     };
@@ -1257,6 +1430,7 @@ export class GnomadService {
       relayRegionRejections: true,
       deadline,
     });
+    assertFeatureFound(target, data, dsCtx);
     const feature = data.gene ?? data.transcript;
     assertNuclearFeature(target, feature);
     // gnomAD answers with histogram buckets, not bases, and zero-fills every

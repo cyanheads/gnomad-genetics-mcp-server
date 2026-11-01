@@ -32,7 +32,7 @@ export interface ClinVarRow {
 /** Filters and window for a gene-level ClinVar search. */
 export interface ClinVarFilters {
   clinicalSignificance?: string | undefined;
-  /** Candidate-ID page size (ESearch `retmax`). Defaults to 500. */
+  /** Candidate-ID page size (ESearch `retmax`). Defaults to CLINVAR_WINDOW_DEFAULT (10). */
   limit?: number | undefined;
   minReviewStars?: number | undefined;
   /** Zero-based index of the first candidate ID (ESearch `retstart`). Defaults to 0. */

@@ -1,8 +1,8 @@
 /**
  * @fileoverview Unit tests for GnomadService logic — dataset→build derivation,
  * coherence validation, the by-symbol/by-id gene routing, the region parser,
- * how coverage buckets are selected and summarized, and how upstream failures
- * are classified. The coverage and classification tests fake only global
+ * how coverage buckets are selected and summarized, how upstream failures are
+ * classified, and the best-effort liftover hint. The fetch-seam tests fake only global
  * fetch, so the real retry loop, fetchWithTimeout, response validation, and the
  * sanitizer all run; everything here is deterministic and offline-safe.
  * @module tests/services/gnomad-service.test
@@ -17,6 +17,8 @@ import {
   classifyConsequence,
   GnomadService,
 } from '@/services/gnomad/gnomad-service.js';
+import type { Dataset } from '@/services/gnomad/types.js';
+import { UPSTREAM_CALL_BUDGET_MS } from '@/services/upstream-deadline.js';
 import { fakeCoverage, LIVE_COVERAGE } from '../helpers/fake-gnomad-coverage.js';
 import {
   CDKN2A_R2_1_GENE,
@@ -289,6 +291,163 @@ describe("GnomadService.listGeneVariants — gnomAD's joint record (#53)", () =>
     ]);
 
     expect(row).toMatchObject({ ac: 0, an: 152156, af: 0, source: 'exome' });
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/78
+describe("GnomadService.listGeneVariants — pass_only reads a row's passing callsets (#78)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** List raw rows through the real fetch seam, response validation, normalizer, and filters. */
+  async function listRows(
+    variants: unknown[],
+    filters: { maxAf?: number; passOnly?: boolean },
+    dataset: Dataset = 'gnomad_r2_1',
+  ) {
+    serveData({ region: { variants } });
+    return svc.listGeneVariants(
+      { kind: 'region', value: '1-55505483-55528992' },
+      filters,
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+  }
+
+  // Live gnomad_r2_1 rows, captured 2026-11-01 (UTC).
+  const EXOME_AC0 = {
+    variant_id: '1-55505483-C-G',
+    consequence: '5_prime_UTR_variant',
+    transcript_id: 'ENST00000302118',
+    flags: [],
+    exome: { ac: 0, an: 178930, af: 0, homozygote_count: 0, filters: ['AC0'] },
+    genome: { ac: 1, an: 31408, af: 0.00003183902190524707, homozygote_count: 0, filters: [] },
+    joint: null,
+  };
+  /** The RF-filtered genome callset carries most of the alleles. */
+  const GENOME_RF = {
+    variant_id: '13-32970100-T-TC',
+    consequence: 'intron_variant',
+    transcript_id: 'ENST00000544455',
+    flags: ['lcr'],
+    exome: { ac: 7, an: 2412, af: 0.002902155887230514, homozygote_count: 0, filters: [] },
+    genome: { ac: 1085, an: 14548, af: 0.07458069837778389, homozygote_count: 8, filters: ['RF'] },
+    joint: null,
+  };
+  const BOTH_FILTERED = {
+    variant_id: '1-55528992-G-A',
+    consequence: 'intron_variant',
+    transcript_id: 'ENST00000302118',
+    flags: [],
+    exome: { ac: 0, an: 199854, af: 0, homozygote_count: 0, filters: ['AC0'] },
+    genome: { ac: 1, an: 31350, af: 0.00003189792663476874, homozygote_count: 0, filters: ['RF'] },
+    joint: null,
+  };
+  const BOTH_PASSED = {
+    variant_id: '1-55528992-G-T',
+    consequence: 'intron_variant',
+    transcript_id: 'ENST00000302118',
+    flags: [],
+    exome: { ac: 1, an: 199854, af: 0.000005003652666446506, homozygote_count: 0, filters: [] },
+    genome: { ac: 1, an: 31350, af: 0.00003189792663476874, homozygote_count: 0, filters: [] },
+    joint: null,
+  };
+  const ALL_ROWS = [EXOME_AC0, GENOME_RF, BOTH_FILTERED, BOTH_PASSED];
+
+  /** Each row's counts and QC columns, keyed by variant ID. */
+  const byId = (rows: Awaited<ReturnType<typeof listRows>>) =>
+    Object.fromEntries(
+      rows.map((row) => [
+        row.variant_id,
+        {
+          ac: row.ac,
+          an: row.an,
+          af: row.af,
+          homozygote_count: row.homozygote_count,
+          source: row.source,
+          exome_filters: row.exome_filters,
+          genome_filters: row.genome_filters,
+          qc_status: row.qc_status,
+        },
+      ]),
+    );
+
+  it('without pass_only, sums every carried callset, a QC-failed one included', async () => {
+    const rows = byId(await listRows(ALL_ROWS, {}));
+
+    expect(rows['1-55505483-C-G']).toMatchObject({ ac: 1, an: 210338, af: 1 / 210338 });
+    expect(rows['13-32970100-T-TC']).toMatchObject({
+      ac: 1092,
+      an: 16960,
+      af: 1092 / 16960,
+      homozygote_count: 8,
+    });
+    expect(rows['1-55528992-G-A']).toMatchObject({ ac: 1, an: 231204, af: 1 / 231204 });
+  });
+
+  it('under pass_only, reads ac, an, and homozygote_count from the callsets that passed QC', async () => {
+    const rows = byId(await listRows(ALL_ROWS, { passOnly: true }));
+
+    expect(rows['1-55505483-C-G']).toEqual({
+      ac: 1,
+      an: 31408,
+      af: 1 / 31408,
+      homozygote_count: 0,
+      // source and the QC columns still describe every carried callset.
+      source: 'exome|genome',
+      exome_filters: 'AC0',
+      genome_filters: '',
+      qc_status: 'pass',
+    });
+    expect(rows['13-32970100-T-TC']).toEqual({
+      ac: 7,
+      an: 2412,
+      af: 7 / 2412,
+      homozygote_count: 0,
+      source: 'exome|genome',
+      exome_filters: '',
+      genome_filters: 'RF',
+      qc_status: 'pass',
+    });
+    // Both callsets passed: the sum stands.
+    expect(rows['1-55528992-G-T']).toMatchObject({ ac: 2, an: 231204, af: 2 / 231204 });
+  });
+
+  it('under pass_only, filters max_af on the af of the passing callsets', async () => {
+    // Summed AF 1/210338 ≈ 4.75e-6 is below 1e-5; the passing genome's 1/31408 ≈ 3.18e-5 is above it.
+    expect(await listRows([EXOME_AC0], { maxAf: 0.00001 })).toHaveLength(1);
+    expect(await listRows([EXOME_AC0], { maxAf: 0.00001, passOnly: true })).toEqual([]);
+
+    // Summed AF 1092/16960 ≈ 0.064 is above 0.01; the passing exome's 7/2412 ≈ 0.0029 is below it.
+    expect(await listRows([GENOME_RF], { maxAf: 0.01 })).toEqual([]);
+    const [kept] = await listRows([GENOME_RF], { maxAf: 0.01, passOnly: true });
+    expect(kept).toMatchObject({ variant_id: '13-32970100-T-TC', ac: 7, an: 2412 });
+  });
+
+  it('under pass_only, keeps the summed counts of a row no callset passed, so max_af matches it as without', async () => {
+    // The handler counts it in qc_filtered before pass_only drops it: the match set must not move.
+    const [row] = await listRows([BOTH_FILTERED], { passOnly: true });
+    expect(row).toMatchObject({ ac: 1, an: 231204, af: 1 / 231204, qc_status: 'filtered' });
+
+    // Summed AF ≈ 4.33e-6 is above 1e-6, with and without pass_only.
+    expect(await listRows([BOTH_FILTERED], { maxAf: 0.000001 })).toEqual([]);
+    expect(await listRows([BOTH_FILTERED], { maxAf: 0.000001, passOnly: true })).toEqual([]);
+  });
+
+  it("leaves a joint row's counts unchanged under pass_only, a failed callset included", async () => {
+    // Live gnomad_r4 PCSK9 row, captured 2026-11-01 (UTC): exome AC0, genome passing.
+    const jointRow = {
+      variant_id: '1-55039793-C-T',
+      consequence: '5_prime_UTR_variant',
+      flags: [],
+      exome: { ac: 0, an: 1412788, af: 0, homozygote_count: 0, filters: ['AC0'] },
+      genome: { ac: 3, an: 152276, af: 0.00001970106911135044, homozygote_count: 0, filters: [] },
+      joint: { ac: 3, an: 1565064, homozygote_count: 0 },
+    };
+
+    for (const passOnly of [false, true]) {
+      const [row] = await listRows([jointRow], { passOnly }, 'gnomad_r4');
+      expect(row).toMatchObject({ ac: 3, an: 1565064, af: 3 / 1565064, qc_status: 'pass' });
+    }
   });
 });
 
@@ -1415,6 +1574,118 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
   });
 });
 
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/56
+describe('GnomadService — a gene or transcript gnomAD does not hold (#56)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  type FeatureTarget = { kind: 'gene' | 'transcript'; value: string };
+  const operations: Record<
+    'list' | 'coverage',
+    (t: FeatureTarget, d: Dataset) => Promise<unknown>
+  > = {
+    list: (target: FeatureTarget, dataset: Dataset) =>
+      svc.listGeneVariants(target, {}, svc.resolveDatasetContext(dataset), createMockContext()),
+    coverage: (target: FeatureTarget, dataset: Dataset) =>
+      svc.getCoverage(target, svc.resolveDatasetContext(dataset), createMockContext()),
+  };
+  const nullRoot = (root: 'gene' | 'transcript', ...messages: string[]) =>
+    JSON.stringify({ errors: messages.map((message) => ({ message })), data: { [root]: null } });
+
+  it.each([
+    ['list', 'gene', 'NOTAGENE123', 'gnomad_r4', 'Gene not found', 'gene_not_found', 'GRCh38'],
+    ['list', 'gene', 'NOTAGENE123', 'gnomad_r2_1', 'Gene not found', 'gene_not_found', 'GRCh37'],
+    [
+      'list',
+      'transcript',
+      'NM_174936.4',
+      'gnomad_r4',
+      'Transcript not found',
+      'transcript_not_found',
+      'GRCh38',
+    ],
+    ['coverage', 'gene', 'NOTAGENE123', 'gnomad_r4', 'Gene not found', 'gene_not_found', 'GRCh38'],
+    [
+      'coverage',
+      'transcript',
+      'ENST99999999999',
+      'exac',
+      'Transcript not found',
+      'transcript_not_found',
+      'GRCh37',
+    ],
+  ] as const)(
+    '%s raises a null %s root (%s on %s) as %s, naming %s, after one request',
+    async (operation, kind, value, dataset, message, reason, build) => {
+      const fetch = fakeReplies({ status: 200, body: nullRoot(kind, message) });
+
+      const error = (await settle(() =>
+        operations[operation]({ kind, value }, dataset),
+      )) as McpError;
+
+      expect(error).toBeInstanceOf(McpError);
+      expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+      expect(error.data).toEqual({ reason, retryable: false });
+      expect(error.message).toBe(
+        `${kind === 'gene' ? 'Gene' : 'Transcript'} "${value}" not found in ${build}.`,
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['list', 'coverage'] as const)(
+    '%s raises a null gene root that arrives without an error message as gene_not_found',
+    async (operation) => {
+      fakeReplies({ status: 200, body: JSON.stringify({ data: { gene: null } }) });
+
+      await expect(
+        settle(() => operations[operation]({ kind: 'gene', value: 'NOTAGENE123' }, 'gnomad_r4')),
+      ).resolves.toMatchObject({ data: { reason: 'gene_not_found' } });
+    },
+  );
+
+  it('retries a transient message beside a null root and its not-found message, then fails as upstream_unavailable', async () => {
+    const fetch = fakeReplies({
+      status: 200,
+      body: nullRoot('gene', 'Gene not found', 'Request timed out'),
+    });
+
+    const error = (await settle(() =>
+      operations.list({ kind: 'gene', value: 'PCSK9' }, 'gnomad_r4'),
+    )) as McpError;
+
+    expect(error.data).toMatchObject({ reason: 'upstream_unavailable', retryable: true });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps any other message beside a null transcript root a graphql_error', async () => {
+    fakeReplies({ status: 200, body: nullRoot('transcript', 'Invalid transcript ID') });
+
+    await expect(
+      settle(() => operations.coverage({ kind: 'transcript', value: 'ENST1' }, 'gnomad_r4')),
+    ).resolves.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'graphql_error', retryable: false },
+    });
+  });
+
+  it('refuses a mitochondrial gene ahead of reading its variants', async () => {
+    fakeReplies({
+      status: 200,
+      body: JSON.stringify({ data: { gene: { chrom: 'M', variants: [] } } }),
+    });
+
+    await expect(
+      settle(() => operations.list({ kind: 'gene', value: 'MT-TL1' }, 'gnomad_r3')),
+    ).resolves.toMatchObject({ data: { reason: 'mitochondrial_unsupported' } });
+  });
+});
+
 describe('GnomadService.getVariant — ClinVar attribution through the retry loop', () => {
   const GNOMAD_ORIGIN = new URL(getServerConfig().gnomadApiBaseUrl).origin;
   const ID = '1-55051215-G-GA';
@@ -1691,6 +1962,245 @@ describe('GnomadService.getVariant — ClinVar attribution through the retry loo
       expect(outcome).toBeInstanceOf(Error);
       expect(outcome).not.toHaveProperty('variant_id');
       expect(operations.at(-1)).toBe('GnomadClinvar');
+    },
+  );
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+describe('GnomadService.liftoverCandidates — the best-effort liftover hint', () => {
+  /** Live gnomAD liftover entries (GRCh37 source → GRCh38 target), captured 2026-11-01. */
+  const PCSK9 = {
+    source: { variant_id: '1-55505647-G-T' },
+    liftover: { variant_id: '1-55039974-G-T' },
+  };
+  const r4 = svc.resolveDatasetContext('gnomad_r4');
+  const r2 = svc.resolveDatasetContext('gnomad_r2_1');
+
+  /** Fake gnomAD with `respond`, recording each request's query and variables. */
+  function fakeLiftover(
+    respond: (
+      request: { query: string; variables: Record<string, unknown> },
+      init: RequestInit | undefined,
+    ) => Response | Promise<Response>,
+  ) {
+    const requests: { query: string; variables: Record<string, unknown> }[] = [];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      requests.push(request);
+      return respond(request, init);
+    });
+    return { fetch, requests };
+  }
+
+  /** A request that stays pending until its signal aborts, as a stalled upstream does. */
+  const hang = (init: RequestInit | undefined) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ['GRCh38 (gnomad_r4)', r4, '1-55505647-G-T', 'source_variant_id', 'GRCh37', '1-55039974-G-T'],
+    [
+      'GRCh37 (gnomad_r2_1)',
+      r2,
+      '1-55039974-G-T',
+      'liftover_variant_id',
+      'GRCh38',
+      '1-55505647-G-T',
+    ],
+  ])(
+    'on a %s dataset reads the ID as written for the other build and returns the side on the dataset build',
+    async (_label, dsCtx, id, argument, idBuild, candidate) => {
+      const { requests } = fakeLiftover(() => Response.json({ data: { l0: [PCSK9] } }));
+
+      const lifted = await svc.liftoverCandidates([id], dsCtx, createMockContext());
+
+      expect(lifted).toEqual(new Map([[id, [candidate]]]));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.query).toContain(
+        `l0: liftover(${argument}: $v0, reference_genome: $referenceGenome) { source { variant_id } liftover { variant_id } }`,
+      );
+      expect(requests[0]?.variables).toEqual({ v0: id, referenceGenome: idBuild });
+    },
+  );
+
+  it('sends one alias per distinct coordinate ID, never an rsID, and keys only the IDs that lift', async () => {
+    const { requests } = fakeLiftover(() => Response.json({ data: { l0: [PCSK9], l1: [] } }));
+
+    const lifted = await svc.liftoverCandidates(
+      ['1-55505647-G-T', 'rs11591147', '1-55505648-A-C', '1-55505647-G-T', 'RS1'],
+      r4,
+      createMockContext(),
+    );
+
+    expect(lifted).toEqual(new Map([['1-55505647-G-T', ['1-55039974-G-T']]]));
+    expect(requests.map((request) => request.variables)).toEqual([
+      { v0: '1-55505647-G-T', v1: '1-55505648-A-C', referenceGenome: 'GRCh37' },
+    ]);
+    expect(requests[0]?.query).not.toContain('$v2');
+  });
+
+  it('returns every distinct ID an entry list lifts to', async () => {
+    const second = { source: PCSK9.source, liftover: { variant_id: '1-55039975-G-T' } };
+    fakeLiftover(() => Response.json({ data: { l0: [PCSK9, second, PCSK9] } }));
+
+    const lifted = await svc.liftoverCandidates(['1-55505647-G-T'], r4, createMockContext());
+
+    expect(lifted.get('1-55505647-G-T')).toEqual(['1-55039974-G-T', '1-55039975-G-T']);
+  });
+
+  it('distrusts the whole reply when any entry names an ID other than the one its alias asked for', async () => {
+    const foreign = {
+      source: { variant_id: '2-1000-A-C' },
+      liftover: { variant_id: '2-2000-A-C' },
+    };
+    fakeLiftover(() => Response.json({ data: { l0: [PCSK9], l1: [foreign] } }));
+
+    const lifted = await svc.liftoverCandidates(
+      ['1-55505647-G-T', '1-55505648-A-C'],
+      r4,
+      createMockContext(),
+    );
+
+    expect(lifted).toEqual(new Map());
+  });
+
+  it('sends at most 25 IDs per request and keys each candidate by its own ID', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `1-${55505600 + i}-A-C`);
+    ids[27] = PCSK9.source.variant_id;
+    const { requests } = fakeLiftover((request) => {
+      const data: Record<string, (typeof PCSK9)[]> = {};
+      for (const [key, value] of Object.entries(request.variables)) {
+        if (key === 'referenceGenome') continue;
+        data[`l${key.slice(1)}`] = value === PCSK9.source.variant_id ? [PCSK9] : [];
+      }
+      return Response.json({ data });
+    });
+
+    const lifted = await svc.liftoverCandidates(ids, r4, createMockContext());
+
+    expect(lifted).toEqual(new Map([[PCSK9.source.variant_id, [PCSK9.liftover.variant_id]]]));
+    expect(requests.map((request) => Object.keys(request.variables).length - 1)).toEqual([25, 5]);
+    expect(requests[1]?.variables).toMatchObject({ v2: PCSK9.source.variant_id });
+  });
+
+  it.each([
+    ['no IDs', []],
+    ['only rsIDs', ['rs11591147', 'RS1']],
+  ])('sends nothing for %s', async (_label, ids) => {
+    const { fetch } = fakeLiftover(() => Response.json({ data: {} }));
+
+    expect(await svc.liftoverCandidates(ids, r4, createMockContext())).toEqual(new Map());
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, (init: RequestInit | undefined) => Response | Promise<Response>, number]>([
+    [
+      'a GraphQL error on HTTP 200',
+      () => Response.json({ errors: [{ message: 'Invalid variant ID' }], data: null }),
+      1,
+    ],
+    // gnomAD sends its rate limit as an HTTP 400, and the fetch path retries every 400.
+    [
+      'an HTTP 400 through every retry',
+      () => new Response(graphqlErrors('Bad request'), { status: 400 }),
+      4,
+    ],
+    ['an HTTP 403', () => new Response('Forbidden', { status: 403 }), 1],
+    [
+      'an HTTP 500 through every retry',
+      () => new Response(graphqlErrors('An unknown error occurred'), { status: 500 }),
+      4,
+    ],
+    ['a payload off the response schema', () => Response.json({ data: { l0: null } }), 4],
+    ['a stall past the call budget', (init) => hang(init), 2],
+  ])('returns no candidates when gnomAD answers %s', async (_label, respond, fetches) => {
+    const { fetch } = fakeLiftover((_request, init) => respond(init));
+    const ctx = createMockContext();
+
+    expect(await settle(() => svc.liftoverCandidates(['1-55505647-G-T'], r4, ctx))).toEqual(
+      new Map(),
+    );
+    expect(fetch).toHaveBeenCalledTimes(fetches);
+  });
+
+  it('ends a stalled request at the call budget anchored on startedAt', async () => {
+    fakeLiftover((_request, init) => hang(init));
+    const startedAt = Date.now() - 30_000;
+    let settled: unknown;
+    void svc
+      .liftoverCandidates(['1-55505647-G-T'], r4, createMockContext(), { startedAt })
+      .then((value) => {
+        settled = value;
+      });
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toEqual(new Map());
+  });
+
+  it('skips the request when the call budget is already spent', async () => {
+    const { fetch } = fakeLiftover(() => Response.json({ data: { l0: [PCSK9] } }));
+
+    const lifted = await svc.liftoverCandidates(['1-55505647-G-T'], r4, createMockContext(), {
+      startedAt: Date.now() - UPSTREAM_CALL_BUDGET_MS,
+    });
+
+    expect(lifted).toEqual(new Map());
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a call cancelled before the lookup', async () => {
+    const { fetch } = fakeLiftover(() => Response.json({ data: { l0: [PCSK9] } }));
+    const controller = new AbortController();
+    controller.abort(new Error('client cancelled'));
+
+    await expect(
+      svc.liftoverCandidates(
+        ['1-55505647-G-T'],
+        r4,
+        createMockContext({ signal: controller.signal }),
+      ),
+    ).rejects.toThrow('client cancelled');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an Error', () => new Error('client cancelled')],
+    // A cancellation is the caller's whatever its reason's type, an McpError included.
+    ['an McpError', () => new McpError(JsonRpcErrorCode.Timeout, 'client cancelled')],
+  ])(
+    'rejects a call cancelled with %s while the request is in flight instead of degrading it',
+    async (_label, reason) => {
+      const controller = new AbortController();
+      const { fetch } = fakeLiftover((_request, init) => {
+        queueMicrotask(() => controller.abort(reason()));
+        return hang(init);
+      });
+
+      const outcome = await settle(() =>
+        svc.liftoverCandidates(
+          ['1-55505647-G-T'],
+          r4,
+          createMockContext({ signal: controller.signal }),
+        ),
+      );
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toMatchObject({ message: 'client cancelled' });
+      expect(fetch).toHaveBeenCalledOnce();
     },
   );
 });

@@ -1,7 +1,8 @@
 /**
  * @fileoverview Behavior tests for the gnomad://variant/{dataset}/{variantId}
  * resource — mirrors gnomad_get_variant for a single variant, and surfaces the
- * variant_not_found contract reason when the variant is absent from the dataset.
+ * variant_not_found contract reason when the variant is absent from the dataset,
+ * or variant_not_found_other_build when its string lifts over from the other build.
  * Handler tests stub the service accessor; the wire tests run the real service
  * behind a worker handler with only global fetch faked.
  * @module tests/resources/variant.resource.test
@@ -15,6 +16,7 @@ import { variantResource } from '@/mcp-server/resources/definitions/variant.reso
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import type { VariantRecord } from '@/services/gnomad/types.js';
+import { minimalVariant } from '../helpers/minimal-variant.js';
 import { readResourceBody, resourceRecordOf, rpcErrorOf } from '../helpers/worker-resource-read.js';
 
 afterEach(() => {
@@ -106,6 +108,9 @@ describe('gnomad://variant resource', () => {
       '1-55051215-G-GA',
       expect.anything(),
       expect.anything(),
+      {
+        startedAt: expect.any(Number),
+      },
     );
   });
 
@@ -131,6 +136,7 @@ describe('gnomad://variant resource', () => {
     const fake = {
       resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => null),
+      liftoverCandidates: vi.fn(async () => new Map<string, string[]>()),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
@@ -143,6 +149,41 @@ describe('gnomad://variant resource', () => {
       code: JsonRpcErrorCode.NotFound,
       data: { reason: 'variant_not_found' },
     });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('fails a lifted absent ID as variant_not_found_other_build, lifting under the lookup start', async () => {
+    const getVariant = vi.fn(
+      async (_id: string, _dsCtx: unknown, _ctx: unknown, _options: { startedAt: number }) => null,
+    );
+    const liftoverCandidates = vi.fn(async () => new Map([['1-55039974-G-T', ['1-55505647-G-T']]]));
+    const fake = {
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r2_1', reference_genome: 'GRCh37' }) as const,
+      getVariant,
+      liftoverCandidates,
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const ctx = createMockContext({ errors: variantResource.errors });
+    const params = variantResource.params!.parse({
+      dataset: 'gnomad_r2_1',
+      variantId: 'chr1-55039974-g-t',
+    });
+    await expect(variantResource.handler(params, ctx as never)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      message:
+        'Variant "chr1-55039974-g-t" not found in gnomad_r2_1. Read as an ID on the other reference build, the same string lifts over to the GRCh37 ID in candidates.',
+      data: { reason: 'variant_not_found_other_build', candidates: ['1-55505647-G-T'] },
+    });
+    const startedAt = getVariant.mock.calls[0]?.[3]?.startedAt;
+    expect(startedAt).toEqual(expect.any(Number));
+    expect(liftoverCandidates).toHaveBeenCalledWith(
+      ['1-55039974-G-T'],
+      expect.anything(),
+      expect.anything(),
+      { startedAt },
+    );
   });
 });
 
@@ -210,11 +251,15 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
   ])(
     'fails an absent coordinate ID with variant_not_found and its declared hint (%s)',
     async (_label, clinvar) => {
-      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
-        Response.json({
-          errors: [{ message: 'Variant not found' }],
-          data: { variant: null, clinvar_variant: clinvar },
-        }),
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+        Response.json(
+          String(init?.body).includes('GnomadLiftover')
+            ? { data: { l0: [] } }
+            : {
+                errors: [{ message: 'Variant not found' }],
+                data: { variant: null, clinvar_variant: clinvar },
+              },
+        ),
       );
       serviceModule.initGnomadService({} as never, {} as never);
 
@@ -230,9 +275,67 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
       expect(error.message).toContain('1-1-A-T');
       expect(error.message).toContain('gnomad_r4');
       expect(error.data.recovery?.hint).toBe(declared?.recovery);
-      expect(fetch).toHaveBeenCalledOnce();
+      // The variant lookup, then one liftover request for the absent ID.
+      expect(fetch).toHaveBeenCalledTimes(2);
     },
   );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('fails a GRCh38 ID on gnomad_r2_1 with variant_not_found_other_build and its candidates in error data', async () => {
+    const sent: { query: string; variables: Record<string, unknown> }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as (typeof sent)[number];
+      sent.push(request);
+      if (request.query.includes('GnomadLiftover')) {
+        return Response.json({
+          data: {
+            l0: [
+              {
+                source: { variant_id: '1-55505647-G-T' },
+                liftover: { variant_id: '1-55039974-G-T' },
+              },
+            ],
+          },
+        });
+      }
+      return Response.json({
+        errors: [{ message: 'Variant not found' }],
+        data: { variant: null, clinvar_variant: null },
+      });
+    });
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const error = await read('gnomad://variant/gnomad_r2_1/1-55039974-G-T');
+
+    const declared = variantResource.errors?.find(
+      (entry) => entry.reason === 'variant_not_found_other_build',
+    );
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'variant_not_found_other_build', candidates: ['1-55505647-G-T'] },
+    });
+    expect(error.data.recovery?.hint).toBe(declared?.recovery);
+    expect(error.message).not.toMatch(/wrong|mismatch|incorrect/i);
+    expect(sent.map((request) => request.variables)).toEqual([
+      { variantId: '1-55039974-G-T', dataset: 'gnomad_r2_1', referenceGenome: 'GRCh37' },
+      { v0: '1-55039974-G-T', referenceGenome: 'GRCh38' },
+    ]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('fails an absent rsID with variant_not_found and never sends it to liftover', async () => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json({ errors: [{ message: 'Variant not found' }], data: { variant: null } }),
+      );
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const error = await read('gnomad://variant/gnomad_r4/rs999999999999');
+
+    expect(error).toMatchObject({ data: { reason: 'variant_not_found' } });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/44
   it('keeps the record with clinvar_unavailable when only the ClinVar-only request fails', async () => {
@@ -341,5 +444,35 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
     const [found] = (tool.structuredContent as { found: VariantRecord[] }).found;
     expect(found?.an).toBe(record.an);
     expect(found?.joint_populations).toEqual(record.joint_populations);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+  it.each([
+    ['RS505151', { rsid: 'rs505151', dataset: 'gnomad_r4' }],
+    [
+      '1:55039974:G:T',
+      { variantId: '1-55039974-G-T', dataset: 'gnomad_r4', referenceGenome: 'GRCh38' },
+    ],
+  ])('resolves %s, sending gnomAD its canonical form', async (variantId, variables) => {
+    const sent: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      sent.push(request.variables);
+      if (request.query.includes('GnomadClinvar')) {
+        return Response.json({ data: { clinvar_variant: null } });
+      }
+      return Response.json({
+        data: { variant: minimalVariant('1-55039974-G-T'), clinvar_variant: null },
+      });
+    });
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const record = await readRecord(`gnomad://variant/gnomad_r4/${variantId}`);
+
+    expect(record).toMatchObject({ variant_id: '1-55039974-G-T', dataset: 'gnomad_r4' });
+    expect(sent[0]).toEqual(variables);
   });
 });

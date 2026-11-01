@@ -11,7 +11,7 @@
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getServerConfig } from '@/config/server-config.js';
+import { getServerConfig, resetServerConfig } from '@/config/server-config.js';
 import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService } from '@/services/gnomad/gnomad-service.js';
@@ -459,5 +459,188 @@ describe('gnomad_get_coverage blank gene (#31)', () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+});
+
+/** The recovery hint gnomad_get_coverage declares for a reason. */
+const declaredRecovery = (reason: string) =>
+  gnomadGetCoverage.errors?.find((entry) => entry.reason === reason)?.recovery;
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+describe('gnomad_get_coverage identifier normalization (#62)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetServerConfig();
+    vi.restoreAllMocks();
+  });
+
+  /** A transcript or gene answer with coverage, for whatever ID gnomAD was sent. */
+  const FEATURE = {
+    chrom: '1',
+    exons: [{ start: 100, stop: 110 }],
+    coverage: { exome: [], genome: [] },
+  };
+
+  it.each([
+    ['enst00000302118', 'ENST00000302118'],
+    ['ENST00000302118.5', 'ENST00000302118'],
+  ])(
+    'sends transcript %s as %s and echoes it as the target on both surfaces',
+    async (id, canonical) => {
+      vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+      const requests = fakeCoverage({ data: { transcript: FEATURE } });
+
+      const result = await runToolContract(gnomadGetCoverage, { transcript_id: id });
+
+      expect(result.isError).toBeFalsy();
+      expect(requests[0]?.variables).toMatchObject({ transcriptId: canonical });
+      expect(result.structuredContent).toMatchObject({
+        target: canonical,
+        target_kind: 'transcript',
+      });
+      expect(textOf(result)).toContain(`**Coverage — transcript:** ${canonical}`);
+      expect(textOf(result)).not.toContain(id);
+    },
+  );
+
+  it('sends a versioned Ensembl gene ID by stable ID, unversioned', async () => {
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    const requests = fakeCoverage({ data: { gene: FEATURE } });
+
+    const result = await runToolContract(gnomadGetCoverage, { gene: 'ENSG00000169174.12' });
+
+    expect(result.structuredContent).toMatchObject({ target: 'ENSG00000169174' });
+    expect(requests[0]?.variables).toMatchObject({ gene: 'ENSG00000169174' });
+    expect(requests[0]?.query).toContain('gene_id: $gene');
+  });
+
+  it('resolves a chr-prefixed colon region with thousands separators to chrom-start-stop', async () => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, {
+      region: 'chr1:55,039,447-55,064,852',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(fake.getCoverage).toHaveBeenCalledWith(
+      { kind: 'region', value: '1-55039447-55064852' },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(result.structuredContent).toMatchObject({ target: '1-55039447-55064852' });
+  });
+
+  it('still resolves the gene beside a blank region', async () => {
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, { gene: 'PCSK9', region: '' });
+
+    expect(result.isError).toBeFalsy();
+    expect(fake.getCoverage).toHaveBeenCalledWith(
+      { kind: 'gene', value: 'PCSK9' },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('rejects a colon region at the schema with GNOMAD_NORMALIZE_IDS=false', async () => {
+    vi.stubEnv('GNOMAD_NORMALIZE_IDS', 'false');
+    resetServerConfig();
+    const fake = stubService(async () => [summary('exome')]);
+
+    const result = await runToolContract(gnomadGetCoverage, { region: 'chr1:55039447-55064852' });
+
+    expect(result.isError).toBe(true);
+    expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+      JsonRpcErrorCode.InvalidParams,
+    );
+    expect(fake.getCoverage).not.toHaveBeenCalled();
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/56
+describe('gnomad_get_coverage unknown gene or transcript (#56)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const useRealService = (envelope: unknown) => {
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    return fakeCoverage(envelope);
+  };
+
+  it.each([
+    [
+      { gene: 'NOTAGENE123' },
+      'gene_not_found',
+      { errors: [{ message: 'Gene not found' }], data: { gene: null } },
+      'Gene "NOTAGENE123" not found in GRCh38.',
+    ],
+    [
+      { transcript_id: 'NM_174936.4' },
+      'transcript_not_found',
+      { errors: [{ message: 'Transcript not found' }], data: { transcript: null } },
+      'Transcript "NM_174936.4" not found in GRCh38.',
+    ],
+    [
+      { transcript_id: 'ENST99999999999' },
+      'transcript_not_found',
+      { errors: [{ message: 'Transcript not found' }], data: { transcript: null } },
+      'Transcript "ENST99999999999" not found in GRCh38.',
+    ],
+    [
+      { gene: 'NOTAGENE123', dataset: 'gnomad_r2_1' },
+      'gene_not_found',
+      { errors: [{ message: 'Gene not found' }], data: { gene: null } },
+      'Gene "NOTAGENE123" not found in GRCh37.',
+    ],
+  ] as const)(
+    'fails %j as %s with the declared recovery on both surfaces',
+    async (input, reason, envelope, message) => {
+      const requests = useRealService(envelope);
+
+      const result = await runToolContract(gnomadGetCoverage, input);
+
+      expect(result.isError).toBe(true);
+      const recovery = declaredRecovery(reason);
+      expect(recovery).toBeDefined();
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message,
+          data: { reason, recovery: { hint: recovery } },
+        },
+      });
+      expect(textOf(result)).toContain(message);
+      expect(textOf(result)).toContain(recovery ?? '');
+      expect(requests).toHaveLength(1);
+    },
+  );
+
+  it('keeps the callability notice for a known transcript with empty coverage tracks', async () => {
+    useRealService({
+      data: {
+        transcript: {
+          chrom: '1',
+          exons: [{ start: 1076, stop: 1080 }],
+          coverage: { exome: [], genome: [] },
+        },
+      },
+    });
+
+    const result = await runToolContract(gnomadGetCoverage, { transcript_id: 'ENST00000302118' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      summaries: [],
+      notice: expect.stringContaining('callability is unknown, not measured zero depth'),
+    });
+  });
+
+  it('never raises a not-found reason for a region target', async () => {
+    useRealService({ data: { region: null } });
+
+    const result = await runToolContract(gnomadGetCoverage, { region: '1-55039447-55064852' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ summaries: [], target_kind: 'region' });
   });
 });

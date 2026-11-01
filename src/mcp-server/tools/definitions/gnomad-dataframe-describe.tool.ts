@@ -1,17 +1,18 @@
 /**
  * @fileoverview gnomad_dataframe_describe — list the tables staged on a canvas
  * and their columns before writing SQL. Part of the fleet-standard canvas
- * accessor trio.
+ * accessor trio; registered only while DataCanvas is on.
  * @module mcp-server/tools/definitions/gnomad-dataframe-describe.tool
  */
 
-import { tool, z } from '@cyanheads/mcp-ts-core';
+import { disabledTool, tool, z } from '@cyanheads/mcp-ts-core';
 import { CanvasIdSchema } from '@cyanheads/mcp-ts-core/canvas';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { isCanvasEnabled } from '@/config/server-config.js';
 import { getCanvas } from '@/services/canvas-accessor.js';
 
-export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
+const gnomadDataframeDescribeDef = tool('gnomad_dataframe_describe', {
   title: 'gnomad-genetics-mcp-server: dataframe describe',
   description:
     'List the tables staged on a canvas and their columns (name and type) so you can write correct SQL for gnomad_dataframe_query. Use the canvas_id returned by gnomad_list_gene_variants or gnomad_search_clinvar. Returns one entry per table with its row count and column schema.',
@@ -62,7 +63,8 @@ export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
       );
     }
     const instance = await canvas.acquire(input.canvas_id, ctx);
-    const tables = await instance.describe();
+    // Tables only: each gnomad_dataframe_query call holds a view of its SQL for the call's length.
+    const tables = await instance.describe({ kind: 'table' });
     return {
       tables: tables.map((t) => ({
         name: t.name,
@@ -87,3 +89,11 @@ export const gnomadDataframeDescribe = tool('gnomad_dataframe_describe', {
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });
+
+/** Listed only while DataCanvas is on: with it off, no tool stages a table to describe. */
+export const gnomadDataframeDescribe = isCanvasEnabled()
+  ? gnomadDataframeDescribeDef
+  : disabledTool(gnomadDataframeDescribeDef, {
+      reason: 'DataCanvas is turned off in this deployment, so no table is staged to describe.',
+      hint: 'CANVAS_PROVIDER_TYPE=duckdb',
+    });

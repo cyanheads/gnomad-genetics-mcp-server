@@ -4,7 +4,8 @@
  * canvas, so repeated small lookups never exhaust the tenant cap; a supplied
  * canvas_id always leaves the named table holding exactly that call's rows —
  * replaced on a spill, replaced on a fit, removed on zero rows — while an
- * Ensembl-ID ClinVar call touches no canvas. Staged columns carry the declared
+ * Ensembl-ID ClinVar call and a list page past offset 0 touch no canvas.
+ * Staged columns carry the declared
  * row-type schema on both the spill and the fit-with-canvas_id path, whatever
  * the preview rows hold. Upstream services (or NCBI's fetch boundary) are
  * stubbed; staging, spillover, and the dataframe tools run for real.
@@ -243,6 +244,50 @@ describe('canvas staging against a real DuckDB canvas', () => {
     expect(sc(ensg)).toMatchObject({ canvas_id: '', table_name: '', total: 0 });
     expect(await stagedTables(canvasId)).toContain('clinvar_variants');
     expect(await stagedCount(canvasId, 'clinvar_variants')).toBe(60);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/59
+  it('stages only at offset 0: later pages mint no canvas and leave a supplied table as it was', async () => {
+    serveVariants(LIVE_VARIANTS);
+    const first = await call(gnomadListGeneVariants, { gene: 'PCSK9' });
+    const canvasId = sc(first).canvas_id as string;
+    expect(sc(first)).toMatchObject({ table_name: 'gene_variants', next_offset: 25 });
+    expect(sc(first).preview).toEqual(LIVE_VARIANTS.slice(0, 25));
+
+    // A later page re-fetches a target that now returns other rows, naming the staged canvas.
+    serveVariants(LIVE_VARIANTS.slice(0, 40));
+    const later = await call(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      offset: 25,
+      canvas_id: canvasId,
+    });
+    expect(sc(later)).toMatchObject({
+      canvas_id: '',
+      table_name: '',
+      spilled: false,
+      total: 40,
+      next_offset: null,
+    });
+    expect(sc(later).preview).toEqual(LIVE_VARIANTS.slice(25, 40));
+    expect(await stagedCount(canvasId, 'gene_variants')).toBe(LIVE_VARIANTS.length);
+
+    // Three more later pages with no canvas_id mint nothing: the second of the tenant's two slots is still free.
+    serveVariants(LIVE_VARIANTS);
+    for (const offset of [25, 50, 500]) {
+      const page = await call(gnomadListGeneVariants, { gene: 'PCSK9', offset });
+      expect(page.isError).toBeFalsy();
+      expect(sc(page)).toMatchObject({
+        canvas_id: '',
+        table_name: '',
+        total: LIVE_VARIANTS.length,
+      });
+    }
+    const second = await call(gnomadListGeneVariants, { gene: 'PCSK9' });
+    expect(second.isError).toBeFalsy();
+    expect(sc(second).canvas_id).not.toBe(canvasId);
+    expect(await stagedCount(sc(second).canvas_id as string, 'gene_variants')).toBe(
+      LIVE_VARIANTS.length,
+    );
   });
 
   it('returns the ENSG guidance for an unknown canvas_id instead of canvas_not_found (#33)', async () => {

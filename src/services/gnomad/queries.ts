@@ -6,7 +6,8 @@
  * service reads `chrom` to refuse them rather than report absence. The gene and
  * transcript coverage documents also carry `exons`, which bound the summarized
  * coverage buckets, and the gene list documents the gene's MANE Select and
- * canonical transcript IDs. Field names are grounded against the live schema
+ * canonical transcript IDs. The liftover document is built per batch, one alias
+ * per absent coordinate ID. Field names are grounded against the live schema
  * (gnomad.broadinstitute.org/api).
  * @module services/gnomad/queries
  */
@@ -127,6 +128,32 @@ query GnomadClinvar($variantId: String!, $referenceGenome: ReferenceGenomeId!) {
     clinvar_variation_id
   }
 }` as const;
+
+/**
+ * gnomAD's liftover table for several variant IDs in one request: alias `l<i>`
+ * looks up variable `$v<i>`, keyed by `argument` — `source_variant_id` reads an
+ * ID as a GRCh37 source, `liftover_variant_id` as a GRCh38 target — with
+ * `$referenceGenome` naming that ID's build. Each alias answers a list, empty
+ * when the table holds no entry. gnomAD fails the whole document with an HTTP
+ * 500 when any variable is an rsID, so only coordinate IDs belong in it.
+ */
+export function liftoverQuery(
+  count: number,
+  argument: 'source_variant_id' | 'liftover_variant_id',
+): string {
+  const indexes = Array.from({ length: count }, (_, index) => index);
+  const variables = indexes.map((index) => `$v${index}: String!`).join(', ');
+  const fields = indexes
+    .map(
+      (index) =>
+        `  l${index}: liftover(${argument}: $v${index}, reference_genome: $referenceGenome) { source { variant_id } liftover { variant_id } }`,
+    )
+    .join('\n');
+  return `
+query GnomadLiftover(${variables}, $referenceGenome: ReferenceGenomeId!) {
+${fields}
+}`;
+}
 
 /**
  * Shared gene constraint selection. `gnomad_constraint` holds the build's gnomAD

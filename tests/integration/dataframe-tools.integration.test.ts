@@ -1,23 +1,27 @@
 /**
  * @fileoverview Offline integration tests for the dataframe tool trio against
- * a real in-memory DuckDB DataCanvas. Verifies the read-only SQL gate, schema
- * discoverability, idempotent missing/already-dropped table behavior, and
- * gnomad_dataframe_query paging — next_offset walks, the row-JSON budget, and the
- * provider row cap (1,000 here) — without mocking project-owned canvas accessors
- * or handlers.
+ * a real in-memory DuckDB DataCanvas. Verifies the read-only SQL gate (refusals
+ * identical to a direct canvas query, query() nesting as deep as the gate
+ * allows), schema discoverability, the view each query call holds for its own
+ * length, idempotent missing/already-dropped table behavior, and
+ * gnomad_dataframe_query paging — next_offset walks, the 4,000,000-character
+ * row-JSON ceiling, and the canvas row cap (1,000 here) — without mocking
+ * project-owned canvas accessors or handlers.
  * @module tests/integration/dataframe-tools.integration.test
  */
 
 import { readFileSync } from 'node:fs';
 import {
+  CanvasInstance,
   CanvasRegistry,
   DataCanvas,
   DEFAULT_CANVAS_REGISTRY_OPTIONS,
   DuckdbProvider,
 } from '@cyanheads/mcp-ts-core/canvas';
+import { resetConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gnomadDataframeDescribe } from '@/mcp-server/tools/definitions/gnomad-dataframe-describe.tool.js';
 import { gnomadDataframeDrop } from '@/mcp-server/tools/definitions/gnomad-dataframe-drop.tool.js';
 import { gnomadDataframeQuery } from '@/mcp-server/tools/definitions/gnomad-dataframe-query.tool.js';
@@ -29,6 +33,9 @@ let canvas: DataCanvas;
 let canvasId: string;
 
 beforeEach(async () => {
+  // The handler pages up to the configured cap, which a real server builds its provider with.
+  vi.stubEnv('CANVAS_DEFAULT_ROW_LIMIT', '1000');
+  resetConfig();
   const provider = new DuckdbProvider({
     defaultRowLimit: 1_000,
     exportRootPath: '/tmp/gnomad-canvas-tests',
@@ -50,9 +57,48 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  resetConfig();
   setCanvas(undefined);
   await canvas.shutdown(context());
 });
+
+/** Every object on the canvas, views included, as `name:kind`. */
+async function canvasObjects() {
+  const instance = await canvas.acquire(canvasId, context());
+  return (await instance.describe()).map((entry) => `${entry.name}:${entry.kind}`);
+}
+
+/** `sql` wrapped in `depth` levels of query(). */
+const nestQuery = (sql: string, depth: number): string =>
+  depth === 0 ? sql : `SELECT * FROM query('${nestQuery(sql, depth - 1).replaceAll("'", "''")}')`;
+
+/** What `call` fails with, or undefined when it succeeds. */
+async function failureOf(call: () => unknown): Promise<unknown> {
+  try {
+    await call();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** The fields a refusal carries. */
+function refusalFields(error: unknown) {
+  const { code, message, data } = error as {
+    code: number;
+    message: string;
+    data?: { reason?: string };
+  };
+  return { code, message, reason: data?.reason };
+}
+
+/** What a direct canvas query of `sql` fails with. */
+async function directRefusal(sql: string) {
+  const instance = await canvas.acquire(canvasId, context());
+  return refusalFields(await failureOf(() => instance.query(sql)));
+}
 
 describe('gnomad dataframe tools with a real canvas', () => {
   it('describe exposes the same table and columns that query can reach', async () => {
@@ -190,6 +236,100 @@ describe('gnomad dataframe tools with a real canvas', () => {
     ).rejects.toMatchObject({ code, data: { reason } });
   });
 
+  it.each([
+    'DROP TABLE never_staged',
+    'SELECT 1; SELECT 2',
+    'SELECT * FROM never_staged',
+    'SELEC 1',
+    'SELECT nope FROM gene_variants',
+    "SELECT * FROM read_csv_auto('/tmp/private.csv')",
+    "SELECT current_setting('memory_limit')",
+    'SELECT * FROM duckdb_tables()',
+    'PIVOT gene_variants ON consequence_class USING count(*)',
+    nestQuery('SELECT variant_id FROM gene_variants', 5),
+  ])('refuses %s exactly as a direct canvas query does', async (sql) => {
+    const refusal = await failureOf(() =>
+      gnomadDataframeQuery.handler(
+        gnomadDataframeQuery.input.parse({ canvas_id: canvasId, sql }),
+        createMockContext({ tenantId: 'default', errors: gnomadDataframeQuery.errors }),
+      ),
+    );
+
+    expect(refusalFields(refusal)).toEqual(await directRefusal(sql));
+  });
+
+  it('runs SQL that nests query() as deep as the canvas gate allows', async () => {
+    const result = await gnomadDataframeQuery.handler(
+      gnomadDataframeQuery.input.parse({
+        canvas_id: canvasId,
+        sql: nestQuery('SELECT variant_id FROM gene_variants ORDER BY variant_id', 4),
+      }),
+      createMockContext({ tenantId: 'default', errors: gnomadDataframeQuery.errors }),
+    );
+    expect(result.rows).toEqual([{ variant_id: '1-100-A-T' }, { variant_id: '1-101-G-GA' }]);
+  });
+
+  it('leaves only the staged tables on the canvas after a page, a refusal, or a cancelled call', async () => {
+    const run = (sql: string, signal?: AbortSignal) =>
+      failureOf(() =>
+        gnomadDataframeQuery.handler(
+          gnomadDataframeQuery.input.parse({ canvas_id: canvasId, sql }),
+          createMockContext({
+            tenantId: 'default',
+            errors: gnomadDataframeQuery.errors,
+            ...(signal && { signal }),
+          }),
+        ),
+      );
+
+    await run('SELECT variant_id FROM gene_variants ORDER BY variant_id');
+    await run('SELECT nope FROM gene_variants');
+    // Cancel once the page statement starts, so the call ends with the view registered.
+    const controller = new AbortController();
+    const query = CanvasInstance.prototype.query;
+    vi.spyOn(CanvasInstance.prototype, 'query').mockImplementation(function (
+      this: CanvasInstance,
+      sql,
+      options,
+    ) {
+      if (sql.startsWith('SELECT * EXCLUDE')) controller.abort();
+      return query.call(this, sql, options);
+    });
+    expect(await run('SELECT variant_id FROM gene_variants', controller.signal)).toMatchObject({
+      data: { reason: 'cancelled' },
+    });
+
+    expect(await canvasObjects()).toEqual(['gene_variants:table']);
+  });
+
+  it('lists only staged tables to a describe that runs while a page is in flight', async () => {
+    let described: Awaited<ReturnType<typeof gnomadDataframeDescribe.handler>> | undefined;
+    const query = CanvasInstance.prototype.query;
+    vi.spyOn(CanvasInstance.prototype, 'query').mockImplementation(async function (
+      this: CanvasInstance,
+      sql,
+      options,
+    ) {
+      if (sql.startsWith('SELECT * EXCLUDE') && !described) {
+        described = await gnomadDataframeDescribe.handler(
+          gnomadDataframeDescribe.input.parse({ canvas_id: canvasId }),
+          createMockContext({ tenantId: 'default', errors: gnomadDataframeDescribe.errors }),
+        );
+      }
+      return await query.call(this, sql, options);
+    });
+
+    await gnomadDataframeQuery.handler(
+      gnomadDataframeQuery.input.parse({
+        canvas_id: canvasId,
+        sql: 'SELECT variant_id FROM gene_variants',
+      }),
+      createMockContext({ tenantId: 'default', errors: gnomadDataframeQuery.errors }),
+    );
+
+    expect(described?.tables.map((table) => table.name)).toEqual(['gene_variants']);
+  });
+
   it('pages a gate-passing statement like any other SELECT', async () => {
     const result = await gnomadDataframeQuery.handler(
       gnomadDataframeQuery.input.parse({
@@ -243,7 +383,7 @@ describe('gnomad dataframe tools with a real canvas', () => {
 const NUMBERS = 1_250;
 
 /** Characters of row JSON one page may carry. */
-const PAGE_CHARS = 10_000;
+const CEILING = 4_000_000;
 
 const rowChars = (rows: Record<string, unknown>[]) =>
   rows.reduce((sum, row) => sum + JSON.stringify(row).length, 0);
@@ -281,7 +421,7 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
   });
 
   it('walks a result under the cap page by page with an exact total', async () => {
-    const pages = await walkPages('SELECT n FROM numbers WHERE n < 750 ORDER BY n');
+    const pages = await walkPages('SELECT n FROM numbers WHERE n < 750 ORDER BY n', 100);
 
     expect(pages.map((page) => page.returned)).toEqual([100, 100, 100, 100, 100, 100, 100, 50]);
     expect(pages.flatMap((page) => page.rows)).toEqual(
@@ -293,7 +433,7 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
   });
 
   it.each([
-    [undefined, 10],
+    [undefined, 40],
     [500, 2],
     [333, 4],
   ])(
@@ -313,28 +453,40 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
     },
   );
 
-  it('cuts variable-width pages at the character budget without a gap or duplicate', async () => {
-    const sql = "SELECT n, repeat('x', (n % 9) * 230) AS pad FROM numbers WHERE n < 300 ORDER BY n";
+  it('cuts variable-width pages at the ceiling without a gap or duplicate', async () => {
+    const sql =
+      "SELECT n, repeat('x', (n % 3) * 1400000) AS pad FROM numbers WHERE n < 8 ORDER BY n";
     const pages = await walkPages(sql);
 
     expect(pages.flatMap((page) => page.rows.map((row) => row.n))).toEqual(
-      Array.from({ length: 300 }, (_, n) => n),
+      Array.from({ length: 8 }, (_, n) => n),
     );
     expect(pages.length).toBeGreaterThan(3);
     for (const [i, page] of pages.entries()) {
-      expect(rowChars(page.rows)).toBeLessThanOrEqual(PAGE_CHARS);
+      expect(rowChars(page.rows)).toBeLessThanOrEqual(CEILING);
       const next = pages[i + 1];
       if (next) {
-        expect(page.returned).toBeLessThan(100);
+        expect(page.returned).toBeLessThan(25);
         expect(rowChars([...page.rows, next.rows[0] as Record<string, unknown>])).toBeGreaterThan(
-          PAGE_CHARS,
+          CEILING,
         );
       }
     }
   });
 
+  it('returns a wide aggregate row whole, under the 4,000,000-character ceiling', async () => {
+    // Each ID padded to 8 digits: 1,250 of them make a row of 11,259 characters.
+    const page = await queryPage(
+      "SELECT string_agg(lpad(n::VARCHAR, 8, '0'), ',') AS ids FROM numbers",
+    );
+
+    expect(page).toMatchObject({ returned: 1, total: 1, truncated: false, next_offset: null });
+    expect(rowChars(page.rows)).toBeGreaterThan(10_000);
+    expect(String(page.rows[0]?.ids).split(',')).toHaveLength(NUMBERS);
+  });
+
   it('honors a SQL LIMIT as the whole result', async () => {
-    const page = await queryPage('SELECT n FROM numbers ORDER BY n LIMIT 100');
+    const page = await queryPage('SELECT n FROM numbers ORDER BY n LIMIT 100', { limit: 100 });
 
     expect(page.rows).toEqual(Array.from({ length: 100 }, (_, n) => ({ n })));
     expect(page).toMatchObject({ returned: 100, total: 100, truncated: false, next_offset: null });
@@ -359,15 +511,15 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
   });
 
   it('fails with row_too_large on an oversized first row and returns no rows', async () => {
-    await expect(queryPage("SELECT repeat('x', 200000) AS big")).rejects.toMatchObject({
+    await expect(queryPage("SELECT repeat('x', 4000000) AS big")).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
-      data: { reason: 'row_too_large', offset: 0 },
+      data: { reason: 'row_too_large', offset: 0, row_chars: 4_000_010 },
     });
   });
 
   it('pages up to an oversized row, then fails with row_too_large at its offset', async () => {
     const sql =
-      "SELECT n, CASE WHEN n = 5 THEN repeat('x', 20000) ELSE 'a' END AS pad FROM numbers WHERE n < 10 ORDER BY n";
+      "SELECT n, CASE WHEN n = 5 THEN repeat('x', 4000000) ELSE 'a' END AS pad FROM numbers WHERE n < 10 ORDER BY n";
 
     const first = await queryPage(sql);
     expect(first.rows.map((row) => row.n)).toEqual([0, 1, 2, 3, 4]);
@@ -379,7 +531,7 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
     expect((await queryPage(sql, { offset: 6 })).rows.map((row) => row.n)).toEqual([6, 7, 8, 9]);
   });
 
-  it('keeps a full SELECT * page of live gnomAD rows under 24 KB on both surfaces', async () => {
+  it('returns a full default SELECT * page of live gnomAD rows alike on both surfaces', async () => {
     // The server's live gnomad_r4 PCSK9 rows, captured 2026-11-01 06:23 (UTC).
     const live = JSON.parse(
       readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
@@ -419,12 +571,12 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
       next_offset: number | null;
       total: number | null;
     };
+    expect(live.length).toBeGreaterThan(25);
     expect(page.total).toBe(live.length);
-    expect(page.returned).toBeGreaterThan(0);
-    expect(page.returned).toBeLessThan(100);
-    expect(page.next_offset).toBe(page.returned);
-    expect(rowChars(page.rows)).toBeLessThanOrEqual(PAGE_CHARS);
-    expect(JSON.stringify(result).length).toBeLessThan(24_000);
+    expect(page.returned).toBe(25);
+    expect(page.next_offset).toBe(25);
+    // BIGINT counts keep their precision as strings.
+    expect(typeof page.rows[0]?.ac).toBe('string');
 
     const rowLines = textOf(result.content)
       .split('\n')
@@ -432,5 +584,8 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
     expect(rowLines.map((line) => line.replaceAll('\\|', '|'))).toEqual(
       page.rows.map((row) => `- ${JSON.stringify(row)}`),
     );
+
+    const cast = await queryPage('SELECT CAST(ac AS INTEGER) AS ac FROM gene_variants LIMIT 1');
+    expect(cast.rows).toEqual([{ ac: expect.any(Number) }]);
   });
 });

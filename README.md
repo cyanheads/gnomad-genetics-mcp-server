@@ -37,12 +37,12 @@ Population genetics over gnomAD (Broad Institute), with ClinVar clinical signifi
 |:---|:---|
 | `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per genetic-ancestry group, homozygote/hemizygote counts, quality flags, per-callset counts and QC status, transcript consequence, in-silico predictors, and joined ClinVar significance. |
 | `gnomad_get_gene_constraint` | Gene loss-of-function constraint — pLI, LOEUF (`oe_lof_upper`) with confidence interval, observed/expected ratios, and Z-scores. By HGNC symbol or Ensembl gene ID. |
-| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, filterable by consequence class, max allele frequency, and QC pass. |
+| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, filterable by consequence class, max allele frequency, and QC pass, paged by offset. |
 | `gnomad_get_coverage` | Sequencing coverage across a gene, transcript, or region — mean/median depth and the fraction of samples over depth thresholds, per callset track. |
 | `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status, conditions, submission counts, and gnomAD-compatible variant IDs, paged by offset. |
-| `gnomad_dataframe_query` | Run a read-only SQL `SELECT` across canvas tables staged by the list tools. |
-| `gnomad_dataframe_describe` | List the tables staged on a canvas and their columns before writing SQL. |
-| `gnomad_dataframe_drop` | Drop a named table from a canvas to reclaim memory. Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` — off by default. |
+| `gnomad_dataframe_query` | Run a read-only SQL `SELECT` across canvas tables staged by the list tools. Listed only while the canvas is on. |
+| `gnomad_dataframe_describe` | List the tables staged on a canvas and their columns before writing SQL. Listed only while the canvas is on. |
+| `gnomad_dataframe_drop` | Drop a named table from a canvas to reclaim memory. Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` — off by default, and listed only while the canvas is on. |
 
 ### Resources
 
@@ -65,13 +65,13 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 
 ### `gnomad_get_variant` <sub>tool</sub>
 
-- Up to 25 IDs per call (raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId on chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
-- A bad or absent ID lands in `failed[]` as `{ variant, error, reason, recovery }` without failing the rest; mitochondrial IDs (`M`, `MT`, `chrM`) fail as `mitochondrial_unsupported`, and an ambiguous rsID adds `candidates`
+- Up to 25 IDs per call (raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId on chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`). With `GNOMAD_NORMALIZE_IDS` on, an rsID is matched case-insensitively and a colon-separated ID (`1:55039974:G:T`, `chr1:…`) reads as `1-55039974-G-T`; `failed[].variant` keeps the caller's spelling
+- A bad or absent ID lands in `failed[]` as `{ variant, error, reason, recovery }` without failing the rest; mitochondrial IDs (`M`, `MT`, `chrM`) fail as `mitochondrial_unsupported`, and an ambiguous rsID adds `candidates`. A coordinate ID carries no build: an absent one whose string also lifts over from the other build fails as `variant_not_found_other_build`, with the IDs it lifts to on the dataset's build in `candidates`. The lift is a hint — the server never rewrites or retries the ID — and costs one extra request per batch, sent after the lookups and only when a coordinate ID came back absent; rsIDs are never lifted
 - Returns the full per-ancestry frequency vector, the callset(s) carrying the variant, quality flags, consequence, predictor scores, and ClinVar significance. A validated population record survives ClinVar-only failure or expiry with `clinvar: null` and `clinvar_unavailable: true`
-- On `gnomad_r4`, overall `ac`, `an`, `af`, and zygosity counts come from gnomAD's joint exome + genome data, whose `an` spans every callable sample in both callsets, even for a variant only one callset carries; `joint_populations` holds the same view per ancestry group. Datasets without joint data (`gnomad_r3`, `gnomad_r2_1`, `exac`) sum the carried callsets and return an empty `joint_populations`. `populations` stays per callset, tagged by `source`
+- On `gnomad_r4`, overall `ac`, `an`, `af`, and zygosity counts come from gnomAD's joint exome + genome data, whose `an` spans every callable sample in both callsets, even for a variant only one callset carries; `joint_populations` holds the same view per ancestry group. Datasets without joint data (`gnomad_r3`, `gnomad_r2_1`, `exac`) sum the carried callsets, a QC-failed callset included, and return an empty `joint_populations`; `callsets` carries each one's own counts and filters. `populations` stays per callset, tagged by `source`
 - `callsets.exome` and `callsets.genome` give each callset's own `ac`, `an`, `af`, zygosity counts, and QC `filters` (empty when that callset passed; the callset is null when it does not carry the variant). `qc_status` is `pass` when any callset carrying the variant passed, else `filtered` — gnomAD's browser rule. A filtered variant stays in `found[]`; its counts are low-confidence (`AC0`: no high-quality carrier)
 - `consequence` is the most severe term across transcripts, as gnomAD shows it, and `transcript_id` the isoform it sits on. `primary_transcript` gives the term on that gene's MANE Select transcript (its canonical one where there is none, as on GRCh37), with `is_mane_select`, `hgvsc`, `hgvsp`, and LOFTEE's `lof` call: a `stop_gained` on a minor isoform can be a 3′ UTR change on the MANE transcript. It is null when the variant lies outside both transcripts, as on an exon only minor isoforms carry. It is read from the same reply, at no extra request
-- Inspect each `failed[].reason`: only `variant_not_found` reports absence from the chosen dataset; timeouts and other failures leave presence unknown. Check `gnomad_get_coverage` before interpreting an absent variant
+- Inspect each `failed[].reason`: only `variant_not_found` and `variant_not_found_other_build` report absence from the chosen dataset; timeouts and other failures leave presence unknown. On `variant_not_found_other_build`, settle the build first — retry with a candidate if the ID was written for the other build — then check `gnomad_get_coverage` before interpreting an absent variant. A lift does not prove a wrong-build ID: a valid ID truly absent from the dataset can lift too. A string valid on both builds can name a different variant on each, and that lookup succeeds with no sign of it, so keep IDs on the dataset's build
 
 ---
 
@@ -94,18 +94,20 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 
 ### `gnomad_list_gene_variants` <sub>tool</sub>
 
-- Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive, chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix); a blank `gene` or `transcript_id` counts as omitted
-- A region must span less than 2,500,000 bp and hold at most ~30,000 variants, otherwise it fails as `invalid_region` or `region_too_large`; mitochondrial targets fail as `mitochondrial_unsupported`
+- Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive, chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix); a blank `gene` or `transcript_id` counts as omitted. With `GNOMAD_NORMALIZE_IDS` on, a `chrom:start-stop` region (thousands separators allowed) and a lowercase or versioned Ensembl gene or transcript ID are rewritten to the accepted form
+- A region must span less than 2,500,000 bp and hold at most ~30,000 variants, otherwise it fails as `invalid_region` or `region_too_large`; mitochondrial targets fail as `mitochondrial_unsupported`. An unknown gene or transcript fails as `gene_not_found` / `transcript_not_found`, naming the reference build; a known gene with no matching rows returns `total: 0` with a no-match notice. RefSeq transcript IDs (`NM_…`) are not served
 - Optional filters: one `consequence_class` and/or a maximum allele frequency. The classes are gnomAD's own categories: `lof` (pLoF: transcript ablation, splice acceptor/donor, stop gained, frameshift), `missense` (missense, inframe insertion/deletion, start lost, stop lost), `synonymous`, and `other` (every other term, and a null consequence)
 - Each row names the `transcript_id` its `consequence` is on. On a gene target, `consequence_transcript` marks it as gnomAD's gene table does (†): `mane_select`, `canonical` (a gene without a MANE Select, as on GRCh37), or `other` when the consequence is on another isoform — check `primary_transcript` on `gnomad_get_variant` before reading such a row as truncating. It is null on transcript and region targets
-- Each row carries `exome_filters` and `genome_filters` (pipe-joined QC filters; `""` when that callset passed, null when it does not carry the variant) and `qc_status` (`pass` / `filtered`, gnomAD's browser rule). `qc_filtered` counts the matching rows that failed QC in every callset carrying them — in PCSK9 on `gnomad_r4`, 1,499 of 4,544 as of November 2026. Rows stay listed by default; `pass_only: true` drops them after the count, as gnomAD's browser does
-- A result too large to inline is staged on the `gene_variants` canvas table, returned as `canvas_id` and `table_name` beside a preview; inspect it with `gnomad_dataframe_describe` and query it with `gnomad_dataframe_query`. Passing a `canvas_id` always writes `gene_variants` there, replacing the previous table. With the canvas disabled (`CANVAS_PROVIDER_TYPE=none`), only the capped preview is returned
+- Each row carries `exome_filters` and `genome_filters` (pipe-joined QC filters; `""` when that callset passed, null when it does not carry the variant) and `qc_status` (`pass` / `filtered`, gnomAD's browser rule). `qc_filtered` counts the matching rows that failed QC in every callset carrying them — in PCSK9 on `gnomad_r4`, 1,499 of 4,544 as of November 2026. Rows stay listed by default; `pass_only: true` drops them after the count and, on a row without joint data (`gnomad_r2_1`), reads `ac`, `an`, `af`, and `homozygote_count` from the callsets that passed QC only, as gnomAD's browser table does — `max_af` then filters on that `af`. `gnomad_r4` rows keep their joint counts either way
+- Pages with `offset` (default 0) and `limit` (default 25; a larger value is clamped to 3,000 with a notice, or rejected with `GNOMAD_CLAMP_LIMITS=false`). `total` counts every variant the filters keep, and `truncated` / `next_offset` say whether more remain (follow `next_offset` until `null`). Filters run before paging. gnomAD returns a target only whole, so each page re-fetches it: page a large gene with filters and a large `limit`
+- At `offset` 0, a result too large to inline is also staged on the `gene_variants` canvas table, holding every matching variant, and returned as `canvas_id` and `table_name`; inspect it with `gnomad_dataframe_describe` and query it with `gnomad_dataframe_query`. Passing a `canvas_id` at offset 0 always writes `gene_variants` there, replacing the previous table. A page past offset 0 never stages and leaves a supplied canvas's table as it was. With the canvas off (`CANVAS_PROVIDER_TYPE=none`), every row of each page is returned inline
+- Echoes `target`, `target_kind` (as `gnomad_get_coverage` does), and `filters` (`consequence_class`, `max_af`, `pass_only`, each null when unset)
 
 ---
 
 ### `gnomad_get_coverage` <sub>tool</sub>
 
-- Supply exactly one of `gene`, `transcript_id`, or `region` (same `chrom-start-stop` form and 2,500,000 bp limit as `gnomad_list_gene_variants`); a blank `gene` or `transcript_id` counts as omitted. Bad regions fail as `invalid_region` or `region_too_large`, and mitochondrial targets as `mitochondrial_unsupported`
+- Supply exactly one of `gene`, `transcript_id`, or `region` (same `chrom-start-stop` form and 2,500,000 bp limit as `gnomad_list_gene_variants`); a blank `gene` or `transcript_id` counts as omitted. Bad regions fail as `invalid_region` or `region_too_large`, mitochondrial targets as `mitochondrial_unsupported`, and an unknown gene or transcript as `gene_not_found` / `transcript_not_found`, naming the reference build. `target` echoes the resolved target (e.g. `ENST00000302118` for `enst00000302118` or `ENST00000302118.5`)
 - Returns mean and median read depth plus the mean fraction of samples covered at each threshold (1× through 100×), summarized per callset track, with `bucket_size`, `bucket_count`, observed `positions`, total `target_positions`, and unobserved `missing_positions` for each. Missing bases leave callability unknown; statistics describe only returned buckets, with no invented zero depths
 - `coverage_source` narrows to one track (`exome` / `genome`); omit to return every available track
 - Notices disclose partial targets and missing supported tracks. An explicitly requested unsupported track is identified separately (v3 has genome only; ExAC has exome only)
@@ -114,18 +116,21 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 
 ### `gnomad_search_clinvar` <sub>tool</sub>
 
-- Takes an HGNC symbol only (an Ensembl gene ID returns guidance and searches nothing). Optional filters: `clinical_significance` (e.g. `pathogenic`) and `min_review_stars` (0–4)
+- Takes an HGNC symbol only (an Ensembl gene ID returns guidance and searches nothing). Optional filters: `clinical_significance` and `min_review_stars` (0–4). `clinical_significance` is case-insensitive and reads underscores as spaces. `pathogenic`, `likely pathogenic`, `uncertain significance`, `vus`, `likely benign`, `benign`, and `conflicting` search ClinVar's own classification index, so their windows hold matching records only and `total_found` is the match count. `pathogenic` includes likely-pathogenic, combined, and low-penetrance classifications; `vus` adds VUS-high, VUS-mid, and VUS-low to Uncertain significance; `benign` includes Likely benign. Any other term (e.g. `risk factor`) is a whole-word filter over a text search, so its windows can return fewer rows than `limit`
 - Returns clinical significance, review status with a 0–4 star rating, conditions, molecular consequences, submission counts, and gnomAD-compatible identifiers (`canonical_spdi`, `rsids`, `grch38_variant_id`). IDs ClinVar has no summary for are listed in `unavailable_ids`
-- Pages up to 500 records per call with `offset` / `limit` (1–500); `total_found`, `truncated`, and `next_offset` say whether more remain. `limit` counts records before the filters, so a window can return fewer rows
-- A window too large to inline is staged on the `clinvar_variants` canvas table (query it with `gnomad_dataframe_describe` and `gnomad_dataframe_query`); passing a `canvas_id` always writes it there, replacing the previous table. `NCBI_API_KEY` raises the rate limit from 3 to 10 req/s
+- Pages with `offset` / `limit` (default 10; a `limit` above 1,500 is clamped to 1,500 with a notice, and `GNOMAD_CLAMP_LIMITS=false` rejects it instead); `total_found`, `truncated`, and `next_offset` say whether more remain. `limit` counts the records a window fetches, so a window returns fewer rows only when the post-fetch filter drops some, as with a significance term outside the seven above
+- A window too large to inline is staged on the `clinvar_variants` canvas table (query it with `gnomad_dataframe_describe` and `gnomad_dataframe_query`); passing a `canvas_id` always writes it there, replacing the previous table. With the canvas off (`CANVAS_PROVIDER_TYPE=none`, as in the `.mcpb` bundle), every row of the window is returned inline, so `limit` is the only page boundary. `NCBI_API_KEY` raises the rate limit from 3 to 10 req/s
+- Echoes `gene` and `filters` (`clinical_significance` as applied: lowercased, underscores as spaces; `min_review_stars`). An omitted or blank filter is `null`, and `content[]` renders `**Filters:** none` when every filter is null
 
 ---
 
 ### `gnomad_dataframe_query` <sub>tool</sub>
 
 - Runs single-statement, read-only SQL `SELECT`s against a table staged by `gnomad_list_gene_variants` or `gnomad_search_clinvar` (`gene_variants` or `clinvar_variants`); writes, DDL, and file/HTTP table functions are rejected
-- Pages with `offset` (default 0) and `limit` (default 100, max 500); returns `rows`, `columns`, `total`, `truncated`, and `next_offset` (follow it until `null`). Use an `ORDER BY` on a unique key for stable paging, and filter or aggregate in SQL to get past the `CANVAS_DEFAULT_ROW_LIMIT` cap (10,000 by default)
-- A row over the 10,000-character page budget fails with `row_too_large`; with `CANVAS_PROVIDER_TYPE=none` it fails with `canvas_disabled`
+- Pages with `offset` (default 0) and `limit` (default 25; a larger value is clamped to 3,000 with a notice, or rejected with `GNOMAD_CLAMP_LIMITS=false`); returns `rows`, `columns`, `total`, `truncated`, and `next_offset` (follow it until `null`). A page reads at most `limit` rows and ends before a row that would take its row JSON past 4,000,000 characters. Use an `ORDER BY` on a unique key for stable paging, and filter or aggregate in SQL to get past the `CANVAS_DEFAULT_ROW_LIMIT` cap (10,000 by default)
+- A first row over 4,000,000 characters of JSON fails with `row_too_large`; select fewer columns or cut long text with `substr`
+- `BIGINT` values (staged counts such as `ac` and `an`, and `COUNT(*)`) arrive as JSON strings to keep precision; `CAST(col AS INTEGER)` returns a number
+- Listed only while the canvas is on: with `CANVAS_PROVIDER_TYPE=none` it is absent from `tools/list`
 
 ---
 
@@ -133,22 +138,23 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 
 - Lists every table staged on a canvas with its row count and column schema (name and DuckDB type)
 - Call it before writing SQL for `gnomad_dataframe_query`
-- Fails with a `canvas_disabled` error when the canvas is turned off (`CANVAS_PROVIDER_TYPE=none`)
+- Lists tables only, not the views a running `gnomad_dataframe_query` call holds
+- Listed only while the canvas is on: with `CANVAS_PROVIDER_TYPE=none` it is absent from `tools/list`
 
 ---
 
 ### `gnomad_dataframe_drop` <sub>tool</sub>
 
 - Drops a named table from a canvas to reclaim memory (`destructiveHint: true`)
-- Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true`; absent from `tools/list` when off
-- An unknown or expired `canvas_id` fails as `canvas_not_found`; with `CANVAS_PROVIDER_TYPE=none` it fails with `canvas_disabled`
+- Opt-in via `GNOMAD_DATAFRAME_DROP_ENABLED=true` and the canvas on; absent from `tools/list` when either is off
+- An unknown or expired `canvas_id` fails as `canvas_not_found`
 
 ---
 
 ### `gnomad://variant/{dataset}/{variantId}` <sub>resource</sub>
 
 - Population record for one variant as `application/json`, mirroring `gnomad_get_variant`; `variantId` takes a chrom-pos-ref-alt ID or an rsID
-- Typed errors: `invalid_variant_id`, `mitochondrial_unsupported`, `variant_not_found`, `ambiguous_rsid` (with `candidates`), `graphql_error`, `upstream_build_mismatch`, `upstream_unavailable`, `upstream_timeout`, `upstream_access`, and `invalid_upstream_response`, each with a recovery hint
+- Typed errors: `invalid_variant_id`, `mitochondrial_unsupported`, `variant_not_found`, `variant_not_found_other_build` (with `candidates`), `ambiguous_rsid` (with `candidates`), `graphql_error`, `upstream_build_mismatch`, `upstream_unavailable`, `upstream_timeout`, `upstream_access`, and `invalid_upstream_response`, each with a recovery hint
 
 ---
 
@@ -162,7 +168,7 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 ### `gnomad_variant_triage` <sub>prompt</sub>
 
 - Arguments: `variant` required (chrom-pos-ref-alt or rsID; a malformed one is rejected); `gene` and `dataset` optional. `dataset` is one of `gnomad_r4`, `gnomad_r3`, `gnomad_r2_1`, `exac`, and the server default applies when omitted
-- Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`, checking `qc_status` and each callset's `filters` first) → gene constraint (`gnomad_get_gene_constraint`) → callability check (`gnomad_get_coverage` on the exact position)
+- Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`, checking `qc_status` and each callset's `filters` first) → gene constraint (`gnomad_get_gene_constraint`) → callability check, which first settles the build when step 1 reports `variant_not_found_other_build`, then runs `gnomad_get_coverage` on the exact position
 
 ## Features
 
@@ -218,7 +224,7 @@ For Docker or a source build, see [Running the server](#running-the-server).
 
 All variables are optional; the server runs keyless with the defaults below.
 
-Node and Bun load the working directory's `.env` before building tool definitions. Exported values take precedence; blank values use the schema defaults. The advertised variant cap, its input validation, and the drop-tool registration gate use those same settings. Invalid server configuration fails startup with a banner naming the variable; `DEBUG=true` includes the stack.
+Node and Bun load the working directory's `.env` before building tool definitions. Exported values take precedence; blank values use the schema defaults. The advertised variant cap, its input validation, the `limit` schemas, and the dataframe-tool registration gates use those same settings. Invalid server configuration fails startup with a banner naming the variable; `DEBUG=true` includes the stack.
 
 | Variable | Description | Default |
 |:---------|:------------|:--------|
@@ -229,8 +235,10 @@ Node and Bun load the working directory's `.env` before building tool definition
 | `GNOMAD_MAX_VARIANT_BATCH` | Maximum variant IDs accepted per `gnomad_get_variant` call. | `25` |
 | `CLINVAR_BASE_URL` | NCBI E-utilities base URL for `gnomad_search_clinvar`. | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` |
 | `NCBI_API_KEY` | Optional NCBI key. Raises the E-utilities rate limit from 3 to 10 req/s. | — |
-| `CANVAS_PROVIDER_TYPE` | DataCanvas backend for the spill/SQL path behind the list tools. `none` disables it, and the list tools then return a capped inline preview. | `duckdb` |
-| `GNOMAD_DATAFRAME_DROP_ENABLED` | Gate for the opt-in `gnomad_dataframe_drop` tool. Off by default. | `false` |
+| `CANVAS_PROVIDER_TYPE` | DataCanvas backend for the spill/SQL path behind the list tools. `none` disables it: `gnomad_list_gene_variants` then returns every row of each `offset`/`limit` page inline, `gnomad_search_clinvar` every row of its window, and the dataframe tools are not registered. | `duckdb` |
+| `GNOMAD_DATAFRAME_DROP_ENABLED` | Gate for the opt-in `gnomad_dataframe_drop` tool. Off by default; the tool also requires the canvas on. | `false` |
+| `GNOMAD_CLAMP_LIMITS` | When true, a `limit` above its tool's cap is clamped to the cap with a notice. `false` advertises the cap as the schema maximum and rejects larger values. | `true` |
+| `GNOMAD_NORMALIZE_IDS` | Rewrite identifier spellings with one clear reading before validation: an uppercase rsID to lowercase, a colon-separated variant ID or region (thousands separators allowed in a region) to `chrom-pos-ref-alt` / `chrom-start-stop`, and a lowercase or versioned Ensembl gene or transcript ID to its unversioned uppercase form. Each rewrite is logged and counted (`gnomad.identifiers.normalized`). `false` restores strict rejection. | `true` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 

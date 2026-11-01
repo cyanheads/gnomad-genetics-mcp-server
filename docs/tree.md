@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-11-01 06:40:57
+Generated on: 2026-11-01 11:39:31
 
 ```text
 gnomad-genetics-mcp-server/
@@ -166,6 +166,7 @@ gnomad-genetics-mcp-server/
 │   │       │   ├── gnomad-list-gene-variants.tool.ts
 │   │       │   └── gnomad-search-clinvar.tool.ts
 │   │       ├── canvas-staging.ts
+│   │       ├── count-limit.ts
 │   │       └── shared-schemas.ts
 │   ├── services/
 │   │   ├── clinvar/
@@ -173,6 +174,7 @@ gnomad-genetics-mcp-server/
 │   │   │   └── types.ts
 │   │   ├── gnomad/
 │   │   │   ├── gnomad-service.ts
+│   │   │   ├── identifier-normalization.ts
 │   │   │   ├── queries.ts
 │   │   │   └── types.ts
 │   │   ├── canvas-accessor.ts
@@ -180,6 +182,9 @@ gnomad-genetics-mcp-server/
 │   │   └── upstream-error.ts
 │   └── index.ts
 ├── tests/
+│   ├── config/
+│   │   ├── normalize-ids.test.ts
+│   │   └── server-config.test.ts
 │   ├── fixtures/
 │   │   ├── coverage-tracks/
 │   │   │   ├── exac-55503800-55504600.response.json
@@ -222,12 +227,14 @@ gnomad-genetics-mcp-server/
 │   ├── services/
 │   │   ├── clinvar-service.test.ts
 │   │   ├── gnomad-service.test.ts
+│   │   ├── identifier-normalization.test.ts
 │   │   ├── upstream-deadline.test.ts
 │   │   ├── upstream-error.test.ts
 │   │   └── upstream-leak.e2e.test.ts
 │   ├── smoke/
 │   │   └── tool-surface.smoke.test.ts
 │   ├── tools/
+│   │   ├── count-limit.test.ts
 │   │   ├── definition-config.test.ts
 │   │   ├── gnomad-dataframe-describe.test.ts
 │   │   ├── gnomad-dataframe-drop.test.ts

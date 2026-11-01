@@ -12,6 +12,7 @@ import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import {
   datasetField,
+  normalizedRegion,
   optionalGeneField,
   REGION_REGEX,
   referenceGenomeField,
@@ -94,8 +95,8 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       .describe(
         'Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.',
       ),
-    region: z
-      .union([
+    region: normalizedRegion(
+      z.union([
         z.literal(''),
         z
           .string()
@@ -103,7 +104,8 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
           .describe(
             'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852) on chromosome 1–22, X, or Y, optional chr prefix.',
           ),
-      ])
+      ]),
+    )
       .optional()
       .describe(
         'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852): chromosome 1–22, X, or Y with an optional chr prefix (mitochondrial regions are not served) and a span (stop − start) under 2,500,000 bp. Mutually exclusive with gene and transcript_id.',
@@ -177,6 +179,22 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       when: 'The gene, transcript, or region is on the mitochondrial chromosome (M or MT).',
       recovery:
         'Mitochondrial coverage is outside this server; view it in the gnomAD browser at https://gnomad.broadinstitute.org/, or query a target on chromosomes 1–22, X, or Y.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'gene_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'gnomAD holds no gene matching the symbol or Ensembl ID in this build.',
+      recovery:
+        'Check the symbol spelling, or resolve a stable Ensembl gene ID in this build via ensembl_lookup_gene, then retry.',
+      thrownBy: 'service',
+    },
+    {
+      reason: 'transcript_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'gnomAD holds no transcript matching transcript_id in this build.',
+      recovery:
+        'Pass an Ensembl transcript ID in this build in its unversioned ENST form (e.g. ENST00000302118), resolved via ensembl_lookup_gene; RefSeq IDs such as NM_174936.4 are not served.',
       thrownBy: 'service',
     },
     {

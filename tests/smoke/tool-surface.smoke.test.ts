@@ -6,7 +6,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { gnomadDataframeDescribe } from '@/mcp-server/tools/definitions/gnomad-dataframe-describe.tool.js';
 import { gnomadDataframeDrop } from '@/mcp-server/tools/definitions/gnomad-dataframe-drop.tool.js';
 import { gnomadDataframeQuery } from '@/mcp-server/tools/definitions/gnomad-dataframe-query.tool.js';
@@ -77,4 +77,53 @@ describe('eight-tool surface', () => {
     }
     expect(gnomadSearchClinvar.description).not.toContain('Data source: gnomAD');
   });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/72
+describe('row tool listings name the dataframe tools only while the canvas is on (#72)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  /** Both row tools as tools/list carries them, defined fresh under the stubbed environment. */
+  async function listings() {
+    vi.resetModules();
+    const { gnomadListGeneVariants: list } = await import(
+      '@/mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js'
+    );
+    const { gnomadSearchClinvar: clinvar } = await import(
+      '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js'
+    );
+    return [list, clinvar].map((definition) => ({
+      name: definition.name,
+      description: definition.description,
+      listing: JSON.stringify({
+        description: definition.description,
+        input: z.toJSONSchema(definition.input),
+        output: z.toJSONSchema(definition.output),
+        enrichment: Object.values(definition.enrichment ?? {}).map((field) =>
+          z.toJSONSchema(field as z.ZodType),
+        ),
+      }),
+    }));
+  }
+
+  it('names no gnomad_dataframe_ tool in either listing with CANVAS_PROVIDER_TYPE=none', async () => {
+    vi.stubEnv('CANVAS_PROVIDER_TYPE', 'none');
+    for (const { name, listing } of await listings()) {
+      expect(listing, name).not.toContain('gnomad_dataframe_');
+    }
+  });
+
+  it.each([undefined, '', `\${CANVAS_PROVIDER_TYPE}`, 'duckdb'])(
+    'names gnomad_dataframe_describe and gnomad_dataframe_query in both descriptions with CANVAS_PROVIDER_TYPE=%j',
+    async (value) => {
+      vi.stubEnv('CANVAS_PROVIDER_TYPE', value);
+      for (const { name, description } of await listings()) {
+        expect(description, name).toContain('gnomad_dataframe_describe');
+        expect(description, name).toContain('gnomad_dataframe_query');
+      }
+    },
+  );
 });

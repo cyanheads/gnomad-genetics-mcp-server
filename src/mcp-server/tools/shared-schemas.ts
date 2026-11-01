@@ -8,6 +8,7 @@
 
 import { z } from '@cyanheads/mcp-ts-core';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
+import { normalizeIdentifier } from '@/services/gnomad/identifier-normalization.js';
 import type { GenomeTarget } from '@/services/gnomad/types.js';
 
 /** Dataset selector — defaults applied in the service from server config. */
@@ -46,13 +47,31 @@ export const VARIANT_OR_RSID_REGEX = new RegExp(
   'i',
 );
 
-/** Parse and canonicalize one supported coordinate ID or rsID. */
+/**
+ * Parse and canonicalize one supported coordinate ID or rsID. Under
+ * GNOMAD_NORMALIZE_IDS an rsID is lowercased and a colon-separated ID
+ * (chr1:55039974:G:T) reads as its dashed form before validation.
+ */
 export function normalizeVariantIdentifier(
   value: string,
 ): { kind: 'variant' | 'rsid'; canonical: string } | null {
-  if (RSID_REGEX.test(value)) return { kind: 'rsid', canonical: value };
-  if (!VARIANT_ID_REGEX.test(value)) return null;
-  return { kind: 'variant', canonical: value.replace(/^chr/i, '').toUpperCase() };
+  if (RSID_REGEX.test(value))
+    return { kind: 'rsid', canonical: normalizeIdentifier('rsid', value) };
+  const id = normalizeIdentifier('variant', value, (dashed) => VARIANT_ID_REGEX.test(dashed));
+  if (!VARIANT_ID_REGEX.test(id)) return null;
+  return { kind: 'variant', canonical: id.replace(/^chr/i, '').toUpperCase() };
+}
+
+/**
+ * Wrap a tool's region union so a colon spelling (chr1:55,039,447-55,064,852)
+ * reaches it as chrom-start-stop under GNOMAD_NORMALIZE_IDS. The advertised
+ * schema stays the union's own: z.preprocess emits only its output side.
+ */
+export function normalizedRegion<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (typeof value === 'string' ? normalizeIdentifier('region', value) : value),
+    schema,
+  );
 }
 
 /**
@@ -102,7 +121,10 @@ export const optionalGeneField = z
 /**
  * Resolve the mutually-exclusive gene / transcript_id / region inputs (shared by
  * the list and coverage tools) into exactly one GenomeTarget. Throws via the
- * caller's `invalid_target` contract when not exactly one is present.
+ * caller's `invalid_target` contract when not exactly one is present. Under
+ * GNOMAD_NORMALIZE_IDS an Ensembl gene or transcript ID is upper-cased and
+ * loses its version (ENST00000302118.5 → ENST00000302118); a symbol is never
+ * case-folded. The region arrives already normalized by its schema.
  */
 export function resolveGenomeTarget(
   inputs: {
@@ -125,5 +147,8 @@ export function resolveGenomeTarget(
       `Supply exactly one of gene, transcript_id, or region — received ${provided.length}.`,
     );
   }
-  return provided[0] as GenomeTarget;
+  const target = provided[0] as GenomeTarget;
+  return target.kind === 'region'
+    ? target
+    : { kind: target.kind, value: normalizeIdentifier(target.kind, target.value) };
 }

@@ -232,6 +232,23 @@ const always =
   () =>
     outcome;
 
+/** The live liftover entry pairing GRCh37 1-55505647-G-T with GRCh38 1-55039974-G-T. */
+const PCSK9_LIFTOVER = {
+  source: { variant_id: '1-55505647-G-T' },
+  liftover: { variant_id: '1-55039974-G-T' },
+};
+
+/**
+ * gnomAD holding no variant for the ID: the variant documents answer not
+ * found, and the liftover document answers `lifted` for its one alias.
+ */
+const absentVariant =
+  (lifted: unknown[]): Route =>
+  (request) =>
+    request.query.includes('liftover(')
+      ? { status: 200, body: { data: { l0: lifted } } }
+      : graphqlErrors('Variant not found', { variant: null, clinvar_variant: null });
+
 /**
  * Transport and validation failures every gnomAD operation shares — the
  * sanitizer's classes, both deadlines, a mid-body reset, and each shape of
@@ -309,7 +326,13 @@ const getVariantScenarios: Scenario<VariantInput>[] = [
     label: 'a well-formed ID gnomAD does not hold',
     reason: 'variant_not_found',
     input: { variants: ['1-55051215-G-GA'] },
-    route: always(graphqlErrors('Variant not found', { variant: null, clinvar_variant: null })),
+    route: absentVariant([]),
+  },
+  {
+    label: 'an absent ID that lifts over from the other build',
+    reason: 'variant_not_found_other_build',
+    input: { variants: ['1-55505647-G-T'] },
+    route: absentVariant([PCSK9_LIFTOVER]),
   },
   {
     label: 'a mitochondrial coordinate ID',
@@ -368,7 +391,13 @@ const variantResourceScenarios: Scenario<string>[] = [
     label: 'a well-formed ID gnomAD does not hold',
     reason: 'variant_not_found',
     input: variantUri('1-55051215-G-GA'),
-    route: always(graphqlErrors('Variant not found', { variant: null, clinvar_variant: null })),
+    route: absentVariant([]),
+  },
+  {
+    label: 'an absent ID that lifts over from the other build',
+    reason: 'variant_not_found_other_build',
+    input: variantUri('1-55505647-G-T'),
+    route: absentVariant([PCSK9_LIFTOVER]),
   },
   {
     label: 'a mitochondrial coordinate ID',
@@ -503,6 +532,18 @@ function regionToolScenarios(featurePayload: (chrom: string) => unknown): Scenar
       reason: 'mitochondrial_unsupported',
       input: { gene: 'MT-ND1' },
       route: always({ status: 200, body: { data: { gene: featurePayload('MT') } } }),
+    },
+    {
+      label: 'a gene gnomAD does not hold',
+      reason: 'gene_not_found',
+      input: { gene: 'NOTAGENE123' },
+      route: always(graphqlErrors('Gene not found', { gene: null })),
+    },
+    {
+      label: 'a transcript gnomAD does not hold',
+      reason: 'transcript_not_found',
+      input: { transcript_id: 'NM_174936.4' },
+      route: always(graphqlErrors('Transcript not found', { transcript: null })),
     },
     {
       label: 'a GraphQL error gnomAD raises for the target',
@@ -643,6 +684,7 @@ function contractSuite<I>(surface: Surface<I>, scenarios: Scenario<I>[]): void {
       const handlerOwned = new Set([
         'invalid_variant_id',
         'variant_not_found',
+        'variant_not_found_other_build',
         'gene_not_found',
         'invalid_target',
       ]);
@@ -701,6 +743,27 @@ describe('gnomad://variant — ambiguous rsID on the wire', () => {
     expect(observed.reason).toBe('ambiguous_rsid');
     expect(observed.data?.candidates).toEqual(['1-55039974-G-T']);
     expect(observed.hint).toContain('candidates');
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+describe('gnomad://variant — other-build liftover on the wire', () => {
+  it('carries the lifted IDs its declared hint tells the reader to try', async () => {
+    const scenario = variantResourceScenarios.find(
+      (s) => s.reason === 'variant_not_found_other_build',
+    );
+    if (!scenario) throw new Error('no variant_not_found_other_build scenario');
+    fakeUpstream(scenario.route);
+
+    const observed = await readResource(variantResource, scenario.input);
+
+    expect(observed.reason).toBe('variant_not_found_other_build');
+    expect(observed.data?.candidates).toEqual(['1-55039974-G-T']);
+    expect(observed.hint).toContain('with a candidate');
+    expect(requests.map((request) => request.variables)).toEqual([
+      { variantId: '1-55505647-G-T', dataset: 'gnomad_r4', referenceGenome: 'GRCh38' },
+      { v0: '1-55505647-G-T', referenceGenome: 'GRCh37' },
+    ]);
   });
 });
 

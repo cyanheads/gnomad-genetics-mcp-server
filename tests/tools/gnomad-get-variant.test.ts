@@ -14,7 +14,7 @@ import {
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getServerConfig } from '@/config/server-config.js';
+import { getServerConfig, resetServerConfig } from '@/config/server-config.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
@@ -103,6 +103,7 @@ describe('gnomad_get_variant handler', () => {
           retryable: true,
         });
       }),
+      liftoverCandidates: vi.fn(async () => new Map<string, string[]>()),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
@@ -217,6 +218,7 @@ describe('gnomad_get_variant handler', () => {
         if (id === '1-200-A-T') return null; // absent in dataset → failed[]
         return record(id);
       }),
+      liftoverCandidates: vi.fn(async () => new Map<string, string[]>()),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
@@ -289,6 +291,7 @@ describe('gnomad_get_variant handler', () => {
         }
         return null;
       }),
+      liftoverCandidates: vi.fn(async () => new Map<string, string[]>()),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
 
@@ -433,6 +436,80 @@ describe('gnomad_get_variant handler', () => {
       startedAt: expect.any(Number),
     });
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('hands the absent IDs to one liftover lookup under the batch start and fails each lifted one as variant_not_found_other_build', async () => {
+    const getVariant = vi.fn(
+      async (id: string, _dsCtx: unknown, _ctx: unknown, _options: { startedAt: number }) =>
+        id === '2-100-C-G' ? record(id) : null,
+    );
+    const liftoverCandidates = vi.fn(async () => new Map([['1-55039974-G-T', ['1-55505647-G-T']]]));
+    const fake = {
+      resolveDatasetContext: realService.resolveDatasetContext.bind(realService),
+      getVariant,
+      liftoverCandidates,
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const result = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({
+        variants: ['chr1-55039974-g-t', 'rs999', '2-100-C-G', '1-55039975-A-C'],
+        dataset: 'gnomad_r2_1',
+      }),
+      createMockContext({ errors: gnomadGetVariant.errors }) as never,
+    );
+
+    expect(liftoverCandidates).toHaveBeenCalledOnce();
+    expect(liftoverCandidates).toHaveBeenCalledWith(
+      ['1-55039974-G-T', 'rs999', '1-55039975-A-C'],
+      { dataset: 'gnomad_r2_1', reference_genome: 'GRCh37' },
+      expect.anything(),
+      { startedAt: getVariant.mock.calls[0]?.[3]?.startedAt },
+    );
+    expect(result.found.map((v) => v.variant_id)).toEqual(['2-100-C-G']);
+    expect(result.failed).toEqual([
+      {
+        variant: 'chr1-55039974-g-t',
+        error:
+          'Not found in gnomad_r2_1. Read as an ID on the other reference build, the same string lifts over to the GRCh37 ID in candidates.',
+        reason: 'variant_not_found_other_build',
+        recovery: declared('variant_not_found_other_build'),
+        candidates: ['1-55505647-G-T'],
+      },
+      {
+        variant: 'rs999',
+        error: 'Not found in gnomad_r2_1.',
+        reason: 'variant_not_found',
+        recovery: declared('variant_not_found'),
+      },
+      {
+        variant: '1-55039975-A-C',
+        error: 'Not found in gnomad_r2_1.',
+        reason: 'variant_not_found',
+        recovery: declared('variant_not_found'),
+      },
+    ]);
+    expect(result).toEqual(expect.schemaMatching(gnomadGetVariant.output));
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+  it('sends no liftover lookup when every ID is found', async () => {
+    const liftoverCandidates = vi.fn(async () => new Map<string, string[]>());
+    const fake = {
+      resolveDatasetContext: realService.resolveDatasetContext.bind(realService),
+      getVariant: vi.fn(async (id: string) => record(id)),
+      liftoverCandidates,
+    };
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
+
+    const result = await gnomadGetVariant.handler(
+      gnomadGetVariant.input.parse({ variants: ['1-100-A-T', 'rs1', 'not-a-variant'] }),
+      createMockContext({ errors: gnomadGetVariant.errors }) as never,
+    );
+
+    expect(result.found).toHaveLength(2);
+    expect(liftoverCandidates).not.toHaveBeenCalled();
+  });
 });
 
 interface GraphqlRequest {
@@ -455,18 +532,37 @@ interface FailureCase {
   respond?: (request: GraphqlRequest, init: RequestInit | undefined) => Promise<Response>;
 }
 
+/** gnomAD's reply to the variant document for an ID it does not hold. */
+const VARIANT_NOT_FOUND = {
+  errors: [{ message: 'Variant not found' }],
+  data: { variant: null, clinvar_variant: null },
+};
+
+/** The live gnomAD liftover entry pairing GRCh37 1-55505647-G-T with GRCh38 1-55039974-G-T. */
+const PCSK9_LIFTOVER = {
+  source: { variant_id: '1-55505647-G-T' },
+  liftover: { variant_id: '1-55039974-G-T' },
+};
+
 /** One case per reason a failed[] item can carry, each driven through the real service. */
 const FAILURE_CASES: FailureCase[] = [
   { reason: 'invalid_variant_id', id: 'not-a-variant', fetches: 0 },
   {
     reason: 'variant_not_found',
     id: '1-1-A-T',
-    fetches: 1,
-    respond: async () =>
-      Response.json({
-        errors: [{ message: 'Variant not found' }],
-        data: { variant: null, clinvar_variant: null },
-      }),
+    fetches: 2,
+    respond: async ({ query }) =>
+      Response.json(query.includes('GnomadLiftover') ? { data: { l0: [] } } : VARIANT_NOT_FOUND),
+  },
+  {
+    reason: 'variant_not_found_other_build',
+    id: '1-55505647-G-T',
+    fetches: 2,
+    candidates: ['1-55039974-G-T'],
+    respond: async ({ query }) =>
+      Response.json(
+        query.includes('GnomadLiftover') ? { data: { l0: [PCSK9_LIFTOVER] } } : VARIANT_NOT_FOUND,
+      ),
   },
   { reason: 'mitochondrial_unsupported', id: 'M-3243-A-G', fetches: 0 },
   {
@@ -577,6 +673,7 @@ describe('gnomad_get_variant failed[] reasons and recovery hints', () => {
   it('keeps found[] and every failed[] reason in input order across a mixed batch', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       const { query, variables } = JSON.parse(String(init?.body)) as GraphqlRequest;
+      if (query.includes('GnomadLiftover')) return Response.json({ data: { l0: [] } });
       if (query.includes('GnomadVariantByRsid')) {
         return Response.json({
           errors: [{ message: 'Variant not found' }],
@@ -630,7 +727,9 @@ describe('gnomad_get_variant failed[] reasons and recovery hints', () => {
     expect([...failedItem.shape.reason.options].sort()).toEqual([...itemReasons].sort());
     for (const entry of gnomadGetVariant.errors ?? []) {
       const ownRejection =
-        entry.reason === 'invalid_variant_id' || entry.reason === 'variant_not_found';
+        entry.reason === 'invalid_variant_id' ||
+        entry.reason === 'variant_not_found' ||
+        entry.reason === 'variant_not_found_other_build';
       const thrownBy = 'thrownBy' in entry ? entry.thrownBy : undefined;
       expect(thrownBy).toBe(ownRejection ? undefined : 'service');
     }
@@ -734,6 +833,248 @@ describe('gnomad_get_variant ClinVar side lookups in a batch', () => {
         ...Array(4).fill('GnomadClinvar'),
       ].sort(),
     );
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/58
+describe('gnomad_get_variant liftover hint for an absent coordinate ID', () => {
+  /** Live gnomAD liftover entries (GRCh37 source → GRCh38 target), captured 2026-11-01. */
+  const LIVE_LIFTOVER = [
+    PCSK9_LIFTOVER,
+    { source: { variant_id: '11-2181023-T-C' }, liftover: { variant_id: '11-2159793-T-C' } },
+  ];
+  const operationOf = (query: string) => /query\s+(\w+)/.exec(query)?.[1] ?? 'anonymous';
+
+  /**
+   * Fake gnomAD: the variant documents hold only the GRCh38 IDs in `found`, and
+   * each liftover alias answers the live entries whose side named by the
+   * document's argument matches its ID, as gnomAD's resolver filters them —
+   * unless `liftover` answers the liftover request instead. Returns every
+   * request sent.
+   */
+  function serveGnomad({
+    found = [],
+    liftover,
+  }: {
+    found?: string[];
+    liftover?: (request: GraphqlRequest, init: RequestInit | undefined) => Promise<Response>;
+  } = {}): GraphqlRequest[] {
+    const requests: GraphqlRequest[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as GraphqlRequest;
+      requests.push(request);
+      const operation = operationOf(request.query);
+      if (operation === 'GnomadLiftover') {
+        if (liftover) return liftover(request, init);
+        const side = request.query.includes('source_variant_id:') ? 'source' : 'liftover';
+        const aliases = Object.entries(request.variables).filter(
+          ([name]) => name !== 'referenceGenome',
+        );
+        return Response.json({
+          data: Object.fromEntries(
+            aliases.map(([name, id]) => [
+              `l${name.slice(1)}`,
+              LIVE_LIFTOVER.filter((entry) => entry[side].variant_id === id),
+            ]),
+          ),
+        });
+      }
+      if (operation === 'GnomadVariantByRsid') {
+        return Response.json({
+          errors: [{ message: 'Variant not found' }],
+          data: { variant: null },
+        });
+      }
+      const id = String(request.variables.variantId);
+      if (found.includes(id)) {
+        return Response.json({ data: { variant: minimalVariant(id), clinvar_variant: null } });
+      }
+      return Response.json(VARIANT_NOT_FOUND);
+    });
+    initGnomadService({} as never, {} as never);
+    return requests;
+  }
+
+  const liftoverRequests = (requests: GraphqlRequest[]) =>
+    requests.filter((request) => operationOf(request.query) === 'GnomadLiftover');
+
+  it.each([
+    [
+      'gnomad_r2_1',
+      '1-55039974-G-T',
+      '1-55039974-G-T',
+      'liftover_variant_id',
+      'GRCh38',
+      '1-55505647-G-T',
+    ],
+    [
+      'gnomad_r4',
+      '1-55505647-G-T',
+      '1-55505647-G-T',
+      'source_variant_id',
+      'GRCh37',
+      '1-55039974-G-T',
+    ],
+    // A valid GRCh38 ID gnomAD lacks also lifts: the hint never asserts a build mismatch.
+    [
+      'gnomad_r4',
+      '11-2181023-T-C',
+      '11-2181023-T-C',
+      'source_variant_id',
+      'GRCh37',
+      '11-2159793-T-C',
+    ],
+    [
+      'gnomad_r2_1',
+      'chr1-55039974-g-t',
+      '1-55039974-G-T',
+      'liftover_variant_id',
+      'GRCh38',
+      '1-55505647-G-T',
+    ],
+  ] as const)(
+    'fails %s %s as variant_not_found_other_build with its lift onto the dataset build on both surfaces',
+    async (dataset, input, sent, argument, idBuild, candidate) => {
+      const requests = serveGnomad();
+
+      const result = await runToolContract(gnomadGetVariant, { variants: [input], dataset });
+
+      const out = result.structuredContent as { failed: { error: string; recovery: string }[] };
+      const hint = declared('variant_not_found_other_build');
+      expect(out.failed).toEqual([
+        {
+          variant: input,
+          error: expect.any(String),
+          reason: 'variant_not_found_other_build',
+          recovery: hint,
+          candidates: [candidate],
+        },
+      ]);
+      for (const text of [out.failed[0]?.error, out.failed[0]?.recovery]) {
+        expect(text).not.toMatch(/wrong|mismatch|incorrect/i);
+      }
+      const [lift] = liftoverRequests(requests);
+      expect(liftoverRequests(requests)).toHaveLength(1);
+      expect(lift?.query).toContain(
+        `l0: liftover(${argument}: $v0, reference_genome: $referenceGenome)`,
+      );
+      expect(lift?.variables).toEqual({ v0: sent, referenceGenome: idBuild });
+      const text = textOf(result.content);
+      expect(text).toContain(`Candidates: ${candidate}`);
+      expect(text).toContain('variant_not_found_other_build');
+      expect(text).toContain(hint);
+    },
+  );
+
+  it.each([
+    ['gnomad_r2_1', '1-55039975-A-C'],
+    ['gnomad_r4', '1-55505648-A-C'],
+  ] as const)(
+    'keeps %s %s variant_not_found, with the build check first, when nothing lifts',
+    async (dataset, id) => {
+      serveGnomad();
+
+      const result = await runToolContract(gnomadGetVariant, { variants: [id], dataset });
+
+      const recovery =
+        "A coordinate ID carries no build, so confirm it is on the dataset's reference build, then run gnomad_get_coverage to check the position is callable before concluding true absence.";
+      expect((result.structuredContent as { failed: unknown[] }).failed).toEqual([
+        { variant: id, error: `Not found in ${dataset}.`, reason: 'variant_not_found', recovery },
+      ]);
+      expect(textOf(result.content)).toContain(recovery);
+    },
+  );
+
+  it('sends one liftover request for every absent coordinate ID, never an rsID, and keeps input order', async () => {
+    const requests = serveGnomad({ found: ['2-100-C-G'] });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: [
+        '1-55505647-G-T',
+        'rs999999999999',
+        '2-100-C-G',
+        '1-55505648-A-C',
+        '11-2181023-T-C',
+      ],
+      dataset: 'gnomad_r4',
+    });
+
+    const out = result.structuredContent as {
+      found: { variant_id: string }[];
+      failed: { variant: string; reason: string; candidates?: string[] }[];
+    };
+    expect(out.found.map((record) => record.variant_id)).toEqual(['2-100-C-G']);
+    expect(out.failed.map((item) => [item.variant, item.reason, item.candidates])).toEqual([
+      ['1-55505647-G-T', 'variant_not_found_other_build', ['1-55039974-G-T']],
+      ['rs999999999999', 'variant_not_found', undefined],
+      ['1-55505648-A-C', 'variant_not_found', undefined],
+      ['11-2181023-T-C', 'variant_not_found_other_build', ['11-2159793-T-C']],
+    ]);
+    expect(liftoverRequests(requests).map((request) => request.variables)).toEqual([
+      {
+        v0: '1-55505647-G-T',
+        v1: '1-55505648-A-C',
+        v2: '11-2181023-T-C',
+        referenceGenome: 'GRCh37',
+      },
+    ]);
+  });
+
+  it.each([
+    ['every ID is found', ['1-100-A-T', '2-100-C-G'], ['GnomadVariant', 'GnomadVariant']],
+    ['the only absent ID is an rsID', ['rs999999999999'], ['GnomadVariantByRsid']],
+  ])('sends no liftover request when %s', async (_label, variants, operations) => {
+    const requests = serveGnomad({ found: ['1-100-A-T', '2-100-C-G'] });
+
+    await runToolContract(gnomadGetVariant, { variants, dataset: 'gnomad_r4' });
+
+    expect(requests.map((request) => operationOf(request.query))).toEqual(operations);
+  });
+
+  it('leaves plain variant_not_found and the rest of the batch when gnomAD rejects the liftover request', async () => {
+    const requests = serveGnomad({
+      found: ['2-100-C-G'],
+      liftover: async () =>
+        Response.json({ errors: [{ message: 'Unexpected liftover failure' }], data: null }),
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55505647-G-T', '2-100-C-G'],
+      dataset: 'gnomad_r4',
+    });
+
+    const out = result.structuredContent as {
+      found: { variant_id: string }[];
+      failed: { variant: string; reason: string; recovery: string }[];
+    };
+    expect(out.found.map((record) => record.variant_id)).toEqual(['2-100-C-G']);
+    expect(out.failed).toEqual([
+      {
+        variant: '1-55505647-G-T',
+        error: 'Not found in gnomad_r4.',
+        reason: 'variant_not_found',
+        recovery: declared('variant_not_found'),
+      },
+    ]);
+    expect(liftoverRequests(requests)).toHaveLength(1);
+  });
+
+  it("rejects with the caller's reason when cancelled while the liftover request is in flight", async () => {
+    const controller = new AbortController();
+    const requests = serveGnomad({
+      liftover: (_request, init) => {
+        queueMicrotask(() => controller.abort(new Error('client cancelled')));
+        return hang(init);
+      },
+    });
+
+    await expect(
+      gnomadGetVariant.handler(
+        gnomadGetVariant.input.parse({ variants: ['1-55505647-G-T'], dataset: 'gnomad_r4' }),
+        createMockContext({ errors: gnomadGetVariant.errors, signal: controller.signal }) as never,
+      ),
+    ).rejects.toThrow('client cancelled');
+    expect(liftoverRequests(requests)).toHaveLength(1);
   });
 });
 
@@ -1353,5 +1694,125 @@ describe('gnomad_get_variant primary transcript (#57)', () => {
       gnomadGetVariant.output.shape.found.element.shape.primary_transcript.unwrap().shape
         .is_mane_select.description,
     ).toMatch(/gene without a MANE Select/);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+describe('gnomad_get_variant identifier normalization (#62)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetServerConfig();
+  });
+
+  /** Answer every gnomAD request with a found variant for whatever ID it names; returns the requests. */
+  function serveFound(): { query: string; variables: Record<string, unknown> }[] {
+    const requests: { query: string; variables: Record<string, unknown> }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      requests.push(request);
+      if (request.query.includes('GnomadClinvar')) {
+        return Response.json({ data: { clinvar_variant: null } });
+      }
+      const id = String(request.variables.variantId ?? '1-55039974-G-T');
+      return Response.json({ data: { variant: minimalVariant(id), clinvar_variant: null } });
+    });
+    initGnomadService({} as never, {} as never);
+    return requests;
+  }
+
+  it('sends an uppercase rsID to gnomAD lowercased', async () => {
+    const requests = serveFound();
+
+    const result = await runToolContract(gnomadGetVariant, { variants: ['RS505151'] });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.variables).toEqual({ rsid: 'rs505151', dataset: 'gnomad_r4' });
+  });
+
+  it.each([
+    ['1:55039974:G:T', '1-55039974-G-T'],
+    ['chr1:55039974:G:T', '1-55039974-G-T'],
+    ['X:100:a:g', 'X-100-A-G'],
+  ])('sends colon form %s to gnomAD as %s', async (variant, canonical) => {
+    const requests = serveFound();
+
+    const result = await runToolContract(gnomadGetVariant, { variants: [variant] });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.variables).toMatchObject({ variantId: canonical });
+    expect((result.structuredContent as { found: VariantRecord[] }).found).toHaveLength(1);
+  });
+
+  it('keeps the caller’s colon spelling in failed[] when the variant is absent', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) =>
+      Response.json(
+        String(init?.body).includes('GnomadLiftover') ? { data: { l0: [] } } : VARIANT_NOT_FOUND,
+      ),
+    );
+    initGnomadService({} as never, {} as never);
+
+    const result = await runToolContract(gnomadGetVariant, { variants: ['1:55039974:G:T'] });
+
+    expect(result.structuredContent).toMatchObject({
+      found: [],
+      failed: [{ variant: '1:55039974:G:T', reason: 'variant_not_found' }],
+    });
+    expect(textOf(result.content)).toContain('1:55039974:G:T');
+  });
+
+  it('refuses MT:3243:A:G as mitochondrial_unsupported without a fetch', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    initGnomadService({} as never, {} as never);
+
+    const result = await runToolContract(gnomadGetVariant, { variants: ['MT:3243:A:G'] });
+
+    expect(result.structuredContent).toMatchObject({
+      failed: [{ variant: 'MT:3243:A:G', reason: 'mitochondrial_unsupported' }],
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['1_100_A_T', '1:100-A-T', ' 1:100:A:T', '1:100:A:T ', '1:100:A'])(
+    'keeps %j an invalid_variant_id with no fetch',
+    async (variant) => {
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      initGnomadService({} as never, {} as never);
+
+      const result = await runToolContract(gnomadGetVariant, { variants: [variant] });
+
+      expect(result.structuredContent).toMatchObject({
+        failed: [{ variant, reason: 'invalid_variant_id' }],
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  describe('with GNOMAD_NORMALIZE_IDS=false', () => {
+    it('fails a colon form as invalid_variant_id with no fetch', async () => {
+      vi.stubEnv('GNOMAD_NORMALIZE_IDS', 'false');
+      resetServerConfig();
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      initGnomadService({} as never, {} as never);
+
+      const result = await runToolContract(gnomadGetVariant, { variants: ['1:55039974:G:T'] });
+
+      expect(result.structuredContent).toMatchObject({
+        failed: [{ variant: '1:55039974:G:T', reason: 'invalid_variant_id' }],
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('sends an uppercase rsID to gnomAD as written', async () => {
+      vi.stubEnv('GNOMAD_NORMALIZE_IDS', 'false');
+      resetServerConfig();
+      const requests = serveFound();
+
+      await runToolContract(gnomadGetVariant, { variants: ['RS505151'] });
+
+      expect(requests[0]?.variables).toEqual({ rsid: 'RS505151', dataset: 'gnomad_r4' });
+    });
   });
 });

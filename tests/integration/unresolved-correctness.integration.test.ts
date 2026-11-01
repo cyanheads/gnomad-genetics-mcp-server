@@ -673,6 +673,7 @@ describe('coordinate-ID absence', () => {
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/25
   it('gives an absent coordinate ID the same failed[] item as an absent rsID, in input order', async () => {
     const { requests } = fakeGraphql(({ query, variables }) => {
+      if (query.includes('GnomadLiftover')) return { data: { l0: [], l1: [] } };
       if (query.includes('GnomadVariantByRsid')) {
         return { errors: [{ message: 'Variant not found' }], data: { variant: null } };
       }
@@ -705,6 +706,7 @@ describe('coordinate-ID absence', () => {
     expect(coordinate?.error).toMatch(/^Not found in gnomad_r4\./);
     expect(rsid?.error).toBe(coordinate?.error);
     expect(second?.error).toBe(coordinate?.error);
-    expect(requests).toHaveLength(4);
+    // Four lookups, then one liftover request for the two absent coordinate IDs (#58).
+    expect(requests).toHaveLength(5);
   });
 });

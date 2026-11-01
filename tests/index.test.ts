@@ -1,8 +1,9 @@
 /**
  * @fileoverview Tests for the createApp() wiring in src/index.ts. Pins the
  * session posture the server declares in code, so the resolved mode cannot
- * drift back to depending on how the process was launched, and the DataCanvas
- * default (duckdb unless CANVAS_PROVIDER_TYPE says otherwise).
+ * drift back to depending on how the process was launched, the DataCanvas
+ * default (duckdb unless CANVAS_PROVIDER_TYPE says otherwise), and server
+ * instructions that name the dataframe tools only when they are registered.
  * @module tests/index.test
  */
 
@@ -67,5 +68,29 @@ describe('createApp wiring', () => {
 
     expect(process.env.CANVAS_PROVIDER_TYPE).toBe('none');
     expect(config.canvas.providerType).toBe('none');
+  });
+
+  it('names the dataframe tools in the instructions when the canvas is on', {
+    timeout: 30_000,
+  }, async () => {
+    vi.stubEnv('CANVAS_PROVIDER_TYPE', undefined);
+
+    await import('@/index.js');
+
+    const instructions = String(createApp.mock.calls[0]?.[0]?.instructions);
+    expect(instructions).toContain('gnomad_dataframe_describe');
+    expect(instructions).toContain('gnomad_dataframe_query');
+  });
+
+  it('names no dataframe tool in the instructions with CANVAS_PROVIDER_TYPE=none', {
+    timeout: 30_000,
+  }, async () => {
+    vi.stubEnv('CANVAS_PROVIDER_TYPE', 'none');
+
+    await import('@/index.js');
+
+    const instructions = String(createApp.mock.calls[0]?.[0]?.instructions);
+    expect(instructions).toMatch(/gnomAD/);
+    expect(instructions).not.toContain('gnomad_dataframe_');
   });
 });

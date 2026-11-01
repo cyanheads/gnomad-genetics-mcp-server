@@ -263,6 +263,7 @@ src/
   services/
     gnomad/
       gnomad-service.ts                      # gnomAD GraphQL client (init/accessor pattern)
+      identifier-normalization.ts            # One-reading ID rewrites (GNOMAD_NORMALIZE_IDS)
       queries.ts                             # Parameterized GraphQL query documents
       types.ts                               # Domain types (VariantRecord, GeneConstraint, …)
     clinvar/
@@ -273,6 +274,7 @@ src/
     tools/
       shared-schemas.ts                      # Reused Zod field fragments + resolveGenomeTarget()
       canvas-staging.ts                      # stageRows() fit-vs-spill staging shared by the two row tools
+      count-limit.ts                         # limit input schema + clamp notice (GNOMAD_CLAMP_LIMITS)
       definitions/
         gnomad-get-variant.tool.ts           # 5 gnomAD tools + 3 canvas dataframe tools
         …
@@ -378,7 +380,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`: exclude development paths with root-anchored patterns, keeping published `skills/`. The subsequent `scripts/clean-mcpb.ts` prunes dev dependencies, dependency-shipped agent docs, platform-specific native bindings, node-gyp build output, and build-only package files. Inspect the completed archive, then run `lint:packaging`. DuckDB's bindings are removed, so `manifest.json` pins `CANVAS_PROVIDER_TYPE=none` and the bundle runs inline-only: list tools return capped previews. Everywhere else DataCanvas defaults on. MCPB is stdio-only.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`: exclude development paths with root-anchored patterns, keeping published `skills/`. The subsequent `scripts/clean-mcpb.ts` prunes dev dependencies, dependency-shipped agent docs, platform-specific native bindings, node-gyp build output, and build-only package files. Inspect the completed archive, then run `lint:packaging`. DuckDB's bindings are removed, so `manifest.json` pins `CANVAS_PROVIDER_TYPE=none` and the bundle runs inline-only: list tools return every row of each page or window, and the dataframe tools are not registered. Everywhere else DataCanvas defaults on. MCPB is stdio-only.
 
 Root `plugin.json` and `mcp.json` implement Agent Plugins 1.0.0. Keep their metadata aligned with `package.json`, the root stdio server's fixed `env` aligned with `.codex-plugin/mcp.json`, and the Codex overlay's `mcpServers` pointer intact so its `env_vars` reach that server. Claude Code uses the `.claude-plugin/plugin.json` overlay and its `userConfig`. User-supplied values never go into root `mcp.json`.
 

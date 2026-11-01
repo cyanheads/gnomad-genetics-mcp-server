@@ -172,4 +172,36 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
       expect(record).toEqual(tool.structuredContent);
     },
   );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
+  it('resolves a lowercase Ensembl gene segment by its canonical stable ID', async () => {
+    const sent: { query: string; variables: { gene: string } }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { gene: string };
+      };
+      sent.push(request);
+      if (request.variables.gene !== 'ENSG00000169174') {
+        return Response.json({ errors: [{ message: 'Gene not found' }], data: { gene: null } });
+      }
+      return Response.json({
+        data: {
+          gene: {
+            gene_id: 'ENSG00000169174',
+            symbol: 'PCSK9',
+            gnomad_constraint: null,
+            exac_constraint: null,
+          },
+        },
+      });
+    });
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const record = await readRecord('gnomad://gene/gnomad_r4/ensg00000169174/constraint');
+
+    expect(record).toMatchObject({ gene_id: 'ENSG00000169174', symbol: 'PCSK9' });
+    expect(sent[0]?.variables.gene).toBe('ENSG00000169174');
+    expect(sent[0]?.query).toContain('gene_id: $gene');
+  });
 });

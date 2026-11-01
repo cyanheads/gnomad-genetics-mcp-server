@@ -3,7 +3,8 @@
  * workflow: resolve the variant → pull its population record → check gene
  * constraint → confirm the position is well-covered before calling it "absent."
  * Emits the tool chain a clinical analyst runs, in order. The coverage step is
- * the one analysts most often skip, so the template makes it explicit.
+ * the one analysts most often skip, so the template makes it explicit, and it
+ * opens by settling the build when step 1 reports variant_not_found_other_build.
  * @module mcp-server/prompts/definitions/variant-triage.prompt
  */
 
@@ -21,11 +22,20 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
     'Guided rare-disease variant-triage workflow over gnomAD: pull the variant population record, weigh it against gene loss-of-function constraint, and — critically — confirm the position is well-covered before concluding a variant is absent. Emits the exact tool chain in order.',
   title: 'gnomAD variant triage',
   args: z.object({
+    // Canonicalized before the regex runs, so a spelling the tools normalize
+    // (chr1:55039974:G:T, RS505151) is accepted here too, as its canonical form.
     variant: z
-      .string()
-      .regex(
-        VARIANT_OR_RSID_REGEX,
-        'Expected chrom-pos-ref-alt on chromosome 1–22, X, or Y with a positive position and A/C/G/T alleles, or an rsID.',
+      .preprocess(
+        (value) =>
+          typeof value === 'string'
+            ? (normalizeVariantIdentifier(value)?.canonical ?? value)
+            : value,
+        z
+          .string()
+          .regex(
+            VARIANT_OR_RSID_REGEX,
+            'Expected chrom-pos-ref-alt on chromosome 1–22, X, or Y with a positive position and A/C/G/T alleles, or an rsID.',
+          ),
       )
       .describe(
         'Variant to triage — a chrom-pos-ref-alt variantId (e.g. 1-55051215-G-GA) or an rsID (rs11591147).',
@@ -70,7 +80,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
     // rsID the coordinates are unknown until step 1 resolves the variant_id.
     const coverageStep = (() => {
       const intro =
-        '3. **Callability check (do not skip).** If step 1 returned the variant as absent or ultra-rare, confirm the *exact position* is well-covered before trusting the absence — gene-level coverage averages across the gene and can hide a poorly-covered base.';
+        "3. **Callability check (do not skip).** Settle the build first: if step 1 failed the ID as `variant_not_found_other_build`, the same string also lifts over from the other reference build. If the ID was written for that build, rerun step 1 with an ID from its `candidates` and run this check at that ID's position; if it was not, treat it as absent and run this check as written. If step 1 returned the variant as absent or ultra-rare, confirm the *exact position* is well-covered before trusting the absence — gene-level coverage averages across the gene and can hide a poorly-covered base.";
       const tail =
         'An absent variant at a well-covered position is informative; one at a poorly-covered position is uninterpretable — the absence may just be uncallable sequence. Missing coverage buckets or an unavailable track leave callability unknown, not zero depth; inspect missing_positions and notices before drawing a conclusion. This step is the one analysts most often skip.';
       if (normalizedVariant.kind === 'variant') {

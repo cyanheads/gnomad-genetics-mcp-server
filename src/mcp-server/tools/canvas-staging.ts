@@ -3,10 +3,12 @@
  * (gnomad_list_gene_variants, gnomad_search_clinvar): decide fit-vs-spill on
  * the materialized rows before touching the canvas, so a result that fits
  * inline without a canvas_id never mints a canvas, and a supplied canvas_id
- * always leaves the named table holding exactly this call's rows. Tables are
- * registered with a column schema declared from the row type, never sniffed
- * from a preview sample. previewLength() is the row-JSON character measure the
- * preview and gnomad_dataframe_query's page budget share.
+ * always leaves the named table holding exactly this call's rows. With the
+ * canvas disabled every row comes back inline, so the caller's own page size
+ * is the only bound. Tables are registered with a column schema declared from
+ * the row type, never sniffed from a preview sample. previewLength() is the
+ * row-JSON character measure the preview and gnomad_dataframe_query's page
+ * ceiling share.
  * @module mcp-server/tools/canvas-staging
  */
 
@@ -56,27 +58,21 @@ export interface StagedRows<Row> {
   /** Canvas holding table_name, or the supplied canvas_id; '' when no canvas was used. */
   canvas_id: string;
   preview: Row[];
-  /** True when the rows exceeded the preview budget and the preview is a prefix. */
+  /** True when the rows exceeded the preview budget, so they were spilled to table_name and the preview is a prefix. */
   spilled: boolean;
   /** Table this call wrote; '' when it wrote none. */
   table_name: string;
   total: number;
 }
 
-export interface StagingOutcome<Row> {
-  /** Canvas disabled and rows exceeded the preview budget — the preview is a prefix with no table behind it. */
-  capped: boolean;
-  staged: StagedRows<Row>;
-}
-
 /**
- * Stage `rows` for one call. The preview is always the longest prefix of rows
- * whose summed JSON length fits `previewChars` (spillover's own measure).
+ * Stage `rows` for one call.
  *
- * - Canvas disabled: that prefix inline; `canvas_id` ignored.
- * - Rows fit and no `canvasId`: inline only, no canvas acquired.
+ * - Canvas disabled: every row inline; `canvas_id` ignored.
+ * - Rows fit `previewChars` (their summed JSON length, spillover's own
+ *   measure) and no `canvasId`: every row inline, no canvas acquired.
  * - Rows exceed the budget: spill to `tableName`, replacing any table of that
- *   name on the supplied canvas.
+ *   name on the supplied canvas; the preview is the longest prefix within it.
  * - `canvasId` supplied and rows fit: write them to `tableName` anyway so the
  *   table never holds a previous call's rows; zero rows drop it instead.
  *
@@ -90,26 +86,14 @@ export async function stageRows<Row extends Record<string, unknown>>(opts: {
   rows: Row[];
   schema: ColumnSchema[];
   tableName: string;
-}): Promise<StagingOutcome<Row>> {
+}): Promise<StagedRows<Row>> {
   const { rows, canvasId, tableName, previewChars, schema, ctx } = opts;
-  const fitting = previewLength(rows, previewChars);
-  const fits = fitting === rows.length;
-  const canvas = getCanvas();
-  if (!canvas) {
-    return {
-      capped: !fits,
-      staged: {
-        preview: rows.slice(0, fitting),
-        canvas_id: '',
-        table_name: '',
-        spilled: false,
-        total: rows.length,
-      },
-    };
-  }
-
   const inline = { preview: rows, table_name: '', spilled: false, total: rows.length };
-  if (fits && !canvasId) return { capped: false, staged: { ...inline, canvas_id: '' } };
+  const canvas = getCanvas();
+  if (!canvas) return { ...inline, canvas_id: '' };
+
+  const fits = previewLength(rows, previewChars) === rows.length;
+  if (fits && !canvasId) return { ...inline, canvas_id: '' };
 
   const instance = await canvas.acquire(canvasId, ctx);
   if (!fits) {
@@ -122,35 +106,29 @@ export async function stageRows<Row extends Record<string, unknown>>(opts: {
       signal: ctx.signal,
     });
     return {
-      capped: false,
-      staged: {
-        preview: result.previewRows,
-        canvas_id: instance.canvasId,
-        table_name: result.spilled ? result.handle.tableName : '',
-        spilled: result.spilled,
-        total: result.spilled ? result.handle.rowCount : rows.length,
-      },
+      preview: result.previewRows,
+      canvas_id: instance.canvasId,
+      table_name: result.spilled ? result.handle.tableName : '',
+      spilled: result.spilled,
+      total: result.spilled ? result.handle.rowCount : rows.length,
     };
   }
   if (rows.length === 0) {
     await instance.drop(tableName);
-    return { capped: false, staged: { ...inline, canvas_id: instance.canvasId } };
+    return { ...inline, canvas_id: instance.canvasId };
   }
   const handle = await instance.registerTable(tableName, rows, { schema, signal: ctx.signal });
   return {
-    capped: false,
-    staged: {
-      ...inline,
-      canvas_id: instance.canvasId,
-      table_name: handle.tableName,
-      total: handle.rowCount,
-    },
+    ...inline,
+    canvas_id: instance.canvasId,
+    table_name: handle.tableName,
+    total: handle.rowCount,
   };
 }
 
 /**
  * Rows in the longest prefix whose summed JSON length stays within `previewChars`.
- * Also sizes gnomad_dataframe_query pages, so a preview and a page measure rows alike.
+ * Also holds a gnomad_dataframe_query page to its ceiling, so a preview and a page measure rows alike.
  */
 export function previewLength(rows: Record<string, unknown>[], previewChars: number): number {
   let chars = 0;
