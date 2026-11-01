@@ -6,8 +6,8 @@
  * canvas gate exactly as sent, and the page reads that view under LIMIT/OFFSET,
  * where a running sum of each row's JSON width ends it before the row that
  * would take it past 4,000,000 characters. A page reads at most `limit` rows
- * from the engine, plus one count capped at the canvas row cap, which is still
- * where paging stops. Registered only while DataCanvas is on. Mandatory
+ * from the engine, plus one count capped at the canvas row cap, which is where
+ * paging stops. Registered only while DataCanvas is on. Mandatory
  * companion to any tool that emits a canvas_id.
  * @module mcp-server/tools/definitions/gnomad-dataframe-query.tool
  */

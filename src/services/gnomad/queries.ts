@@ -6,9 +6,9 @@
  * service reads `chrom` to refuse them rather than report absence. The gene and
  * transcript coverage documents also carry `exons`, which bound the summarized
  * coverage buckets, and the gene list documents the gene's MANE Select and
- * canonical transcript IDs. The liftover document is built per batch, one alias
- * per absent coordinate ID. Field names are grounded against the live schema
- * (gnomad.broadinstitute.org/api).
+ * canonical transcript IDs. The liftover document is built per request, one
+ * alias per absent coordinate ID, at most 25 of them. Field names are grounded
+ * against the live schema (gnomad.broadinstitute.org/api).
  * @module services/gnomad/queries
  */
 
