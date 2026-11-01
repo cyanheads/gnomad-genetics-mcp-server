@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.2](changelog/0.5.x/0.5.2.md) — 2026-11-01 · 🛡️ Security
+
+An unknown gene or transcript fails instead of returning an empty success, wrong-build variant IDs name their other-build candidates, gnomad_list_gene_variants pages by offset, common ID spellings normalize, over-cap limits clamp, ClinVar significance filters narrow server-side, and gnomad_dataframe_query pages are bounded.
+
 ## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-11-01
 
 Variant records and gene-variant rows carry gnomAD's QC status and per-callset counts, gnomad_r4 overall counts read gnomAD's joint data, consequences name their transcript, consequence_class follows gnomAD's categories, and ClinVar's placeholder dates read as null.
