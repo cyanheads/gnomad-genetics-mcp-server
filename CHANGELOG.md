@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-11-01
+
+Variant records and gene-variant rows carry gnomAD's QC status and per-callset counts, gnomad_r4 overall counts read gnomAD's joint data, consequences name their transcript, consequence_class follows gnomAD's categories, and ClinVar's placeholder dates read as null.
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-28
 
 Publish a ClinVar-to-gnomAD workflow guide over MCP and preserve SDK skill modules in desktop bundles.
