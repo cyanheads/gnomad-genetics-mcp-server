@@ -8,10 +8,11 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { variantResource } from '@/mcp-server/resources/definitions/variant.resource.js';
+import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import type { VariantRecord } from '@/services/gnomad/types.js';
 import { readResourceBody, resourceRecordOf, rpcErrorOf } from '../helpers/worker-resource-read.js';
@@ -32,10 +33,24 @@ function record(variantId: string): VariantRecord {
     homozygote_count: 0,
     hemizygote_count: null,
     populations: [],
+    joint_populations: [],
+    callsets: {
+      exome: {
+        ac: 1,
+        an: 1000,
+        af: 0.001,
+        homozygote_count: 0,
+        hemizygote_count: null,
+        filters: [],
+      },
+      genome: null,
+    },
     source: ['exome'],
     flags: [],
+    qc_status: 'pass',
     consequence: null,
     transcript_id: null,
+    primary_transcript: null,
     gene_symbol: null,
     in_silico: [],
     clinvar: null,
@@ -271,5 +286,60 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
       clinvar_unavailable: true,
     });
     expect(operations).toEqual(['GnomadVariant', 'GnomadVariantOnly', 'GnomadClinvar']);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/53
+  it('returns the joint an and joint groups gnomad_get_variant returns', async () => {
+    // Rows of the live gnomad_r4 1-55039784-C-G record, captured 2026-11-01 (UTC).
+    const populations = (rows: [string, number, number][]) =>
+      rows.map(([id, ac, an]) => ({ id, ac, an, homozygote_count: 0, hemizygote_count: 0 }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({
+        data: {
+          variant: {
+            variant_id: '1-55039784-C-G',
+            reference_genome: 'GRCh38',
+            rsids: [],
+            flags: [],
+            exome: null,
+            genome: {
+              ac: 3,
+              an: 152_386,
+              af: 3 / 152_386,
+              homozygote_count: 0,
+              hemizygote_count: 0,
+              populations: populations([['afr', 3, 41_594]]),
+            },
+            joint: {
+              ac: 3,
+              an: 1_558_598,
+              homozygote_count: 0,
+              hemizygote_count: 0,
+              populations: populations([
+                ['afr', 3, 74_272],
+                ['afr_XY', 2, 33_252],
+                ['', 3, 1_558_598],
+                ['XY', 2, 769_786],
+              ]),
+            },
+            transcript_consequences: null,
+            in_silico_predictors: null,
+          },
+          clinvar_variant: null,
+        },
+      }),
+    );
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const record = await readRecord('gnomad://variant/gnomad_r4/1-55039784-C-G');
+    const tool = await runToolContract(gnomadGetVariant, { variants: ['1-55039784-C-G'] });
+
+    expect(record).toMatchObject({ an: 1_558_598, af: 3 / 1_558_598 });
+    expect(record.joint_populations).toEqual([
+      { id: 'afr', ac: 3, an: 74_272, af: 3 / 74_272, homozygote_count: 0, hemizygote_count: 0 },
+    ]);
+    const [found] = (tool.structuredContent as { found: VariantRecord[] }).found;
+    expect(found?.an).toBe(record.an);
+    expect(found?.joint_populations).toEqual(record.joint_populations);
   });
 });

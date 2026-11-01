@@ -15,9 +15,12 @@ export type Dataset = (typeof GNOMAD_DATASETS)[number];
 
 /**
  * Canonical genetic-ancestry group codes. The live schema returns these PLUS
- * sex-split (`_XX`/`_XY`), aggregate (`XX`/`XY`), and v4-genome 1000G/HGDP
- * subpopulation (`1kg:*`, `hgdp:*`) rows — the service filters to this set.
- * Exomes carry all except `ami`; genomes add `ami` (Amish).
+ * sex-split (`_XX`/`_XY`), aggregate (`XX`/`XY`), gnomad_r2_1 subgroup
+ * (`eas_jpn`, `nfe_bgr`, …), and 1000G/HGDP subpopulation (`1kg:*`, `hgdp:*`)
+ * rows — the service keeps exact matches to this set only. gnomad_r4 calls the
+ * catch-all group `remaining`; gnomad_r3, gnomad_r2_1, and exac call it `oth`,
+ * kept under that ID because the releases compose it differently. v4 exomes
+ * carry all but `ami` and `oth`; v4 and v3 genomes carry `ami` (Amish).
  */
 export const ANCESTRY_GROUPS = [
   'afr',
@@ -29,6 +32,7 @@ export const ANCESTRY_GROUPS = [
   'nfe',
   'sas',
   'remaining',
+  'oth',
   'ami',
 ] as const;
 
@@ -42,7 +46,7 @@ export const isCanonicalAncestry = (id: string): id is AncestryGroup => ANCESTRY
 /** Callset source carrying a variant or coverage track. */
 export type CallsetSource = 'exome' | 'genome';
 
-/** One genetic-ancestry group's counts. AF = ac / an (null when an == 0). */
+/** One genetic-ancestry group's counts in one callset. AF = ac / an (null when an == 0). */
 export interface PopulationFreq {
   ac: number;
   af: number | null;
@@ -51,6 +55,29 @@ export interface PopulationFreq {
   homozygote_count: number;
   id: AncestryGroup;
   source: CallsetSource;
+}
+
+/** One genetic-ancestry group's counts in gnomAD's joint exome + genome record. */
+export type JointPopulationFreq = Omit<PopulationFreq, 'source'>;
+
+/**
+ * gnomAD browser's QC verdict for a variant: `pass` when any callset carrying
+ * it has an empty filter list, else `filtered`.
+ */
+export type QcStatus = 'pass' | 'filtered';
+
+/** One callset's own counts and QC filters for a variant. AF = ac / an (null when an is 0). */
+export interface CallsetRecord {
+  ac: number;
+  af: number | null;
+  an: number;
+  /**
+   * gnomAD's QC filters for this callset (vocabulary varies by dataset); empty
+   * when it passed. Null when gnomAD returned no filter list, which proves no pass.
+   */
+  filters: string[] | null;
+  hemizygote_count: number | null;
+  homozygote_count: number;
 }
 
 /**
@@ -73,12 +100,33 @@ export interface ClinVarAnnotation {
   review_status: string | null;
 }
 
+/**
+ * A variant's consequence on its gene's primary transcript: the MANE Select
+ * entry of the reported consequence's gene, else that gene's canonical entry.
+ */
+export interface PrimaryTranscriptConsequence {
+  consequence: string | null;
+  hgvsc: string | null;
+  hgvsp: string | null;
+  /** True for a MANE Select entry; null where gnomAD reports no MANE status (a gene without a MANE Select; every gene on GRCh37). */
+  is_mane_select: boolean | null;
+  /** LOFTEE's loss-of-function call on this transcript (e.g. HC, LC); null when it made none. */
+  lof: string | null;
+  transcript_id: string;
+}
+
 /** The full population record gnomad_get_variant returns per variant. */
 export interface VariantRecord {
-  /** Overall (joint of carried callsets) counts. */
+  /**
+   * Overall counts: gnomAD's joint record where it publishes one (gnomad_r4),
+   * otherwise the sum across the carried callsets. ac, an, af, and the zygosity
+   * counts always share one source.
+   */
   ac: number;
   af: number | null;
   an: number;
+  /** Each callset's own counts and QC filters; null for a callset that does not carry the variant. */
+  callsets: Record<CallsetSource, CallsetRecord | null>;
   clinvar: ClinVarAnnotation | null;
   /** True when the ClinVar lookup failed; false when it succeeded, with or without an entry. */
   clinvar_unavailable: boolean;
@@ -89,8 +137,13 @@ export interface VariantRecord {
   hemizygote_count: number | null;
   homozygote_count: number;
   in_silico: InSilicoPredictor[];
+  /** Per-ancestry groups of gnomAD's joint record; empty where the dataset publishes none. */
+  joint_populations: JointPopulationFreq[];
   /** Per-ancestry vector across whichever callset(s) carry the variant — never collapsed. */
   populations: PopulationFreq[];
+  /** The consequence on the gene's MANE Select (else canonical) transcript; null when gnomAD lists neither entry (the variant lies outside both). */
+  primary_transcript: PrimaryTranscriptConsequence | null;
+  qc_status: QcStatus;
   reference_genome: ReferenceGenome;
   rsids: string[];
   source: CallsetSource[];
@@ -132,8 +185,15 @@ export interface GeneConstraint {
   syn_z: number | null;
 }
 
-/** VEP consequence class buckets used to filter gnomad_list_gene_variants. */
+/** gnomAD's consequence categories (pLoF, missense / inframe indel, synonymous, other), used to filter gnomad_list_gene_variants. */
 export type ConsequenceClass = 'lof' | 'missense' | 'synonymous' | 'other';
+
+/**
+ * Where a gene-variant row's consequence sits relative to the gene's primary
+ * transcript, as gnomAD's gene table marks it: on the MANE Select transcript, on
+ * the canonical transcript of a gene without one, or on another transcript.
+ */
+export type ConsequenceTranscript = 'mane_select' | 'canonical' | 'other';
 
 /**
  * One row of the gnomad_list_gene_variants canvas table. Index signature lets it
@@ -145,9 +205,18 @@ export interface GeneVariantRow {
   an: number;
   consequence: string | null;
   consequence_class: ConsequenceClass;
+  /** Null off a gene target, and for a gene with neither a MANE Select nor a canonical transcript. */
+  consequence_transcript: ConsequenceTranscript | null;
+  /** The exome callset's QC filters, pipe-joined: '' when it passed, null when it does not carry the variant. */
+  exome_filters: string | null;
   flags: string;
+  /** The genome callset's QC filters, pipe-joined, as exome_filters. */
+  genome_filters: string | null;
   homozygote_count: number;
+  qc_status: QcStatus;
   source: string;
+  /** The transcript consequence is on; null when gnomAD names none (an intergenic variant). */
+  transcript_id: string | null;
   variant_id: string;
   [key: string]: string | number | null;
 }

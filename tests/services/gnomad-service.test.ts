@@ -12,10 +12,91 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
-import { CLINVAR_LOOKUP_BUDGET_MS, GnomadService } from '@/services/gnomad/gnomad-service.js';
+import {
+  CLINVAR_LOOKUP_BUDGET_MS,
+  classifyConsequence,
+  GnomadService,
+} from '@/services/gnomad/gnomad-service.js';
 import { fakeCoverage, LIVE_COVERAGE } from '../helpers/fake-gnomad-coverage.js';
+import {
+  CDKN2A_R2_1_GENE,
+  CDKN2A_STOP_GAINED_R4,
+  INTERGENIC_R4_ROW,
+  PCSK9_FRAMESHIFT_R2_1,
+  PCSK9_R4_GENE,
+} from '../helpers/live-consequences.js';
+import { minimalVariant } from '../helpers/minimal-variant.js';
 
 const svc = new GnomadService(getServerConfig());
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/74
+describe('classifyConsequence — gnomAD consequence categories', () => {
+  /** Every term of gnomad-browser's browser/src/vepConsequences.ts, in its rank order, with its category. */
+  const GNOMAD_TABLE = [
+    ['transcript_ablation', 'lof'],
+    ['splice_acceptor_variant', 'lof'],
+    ['splice_donor_variant', 'lof'],
+    ['stop_gained', 'lof'],
+    ['frameshift_variant', 'lof'],
+    ['stop_lost', 'missense'],
+    ['start_lost', 'missense'],
+    ['feature_elongation', 'other'],
+    ['feature_truncation', 'other'],
+    ['inframe_insertion', 'missense'],
+    ['inframe_deletion', 'missense'],
+    ['missense_variant', 'missense'],
+    ['protein_altering_variant', 'other'],
+    ['splice_region_variant', 'other'],
+    ['incomplete_terminal_codon_variant', 'other'],
+    ['stop_retained_variant', 'other'],
+    ['synonymous_variant', 'synonymous'],
+    ['coding_sequence_variant', 'other'],
+    ['mature_miRNA_variant', 'other'],
+    ['5_prime_UTR_variant', 'other'],
+    ['3_prime_UTR_variant', 'other'],
+    ['non_coding_transcript_exon_variant', 'other'],
+    ['non_coding_exon_variant', 'other'],
+    ['intron_variant', 'other'],
+    ['NMD_transcript_variant', 'other'],
+    ['non_coding_transcript_variant', 'other'],
+    ['nc_transcript_variant', 'other'],
+    ['upstream_gene_variant', 'other'],
+    ['downstream_gene_variant', 'other'],
+    ['TFBS_ablation', 'other'],
+    ['TFBS_amplification', 'other'],
+    ['TF_binding_site_variant', 'other'],
+    ['regulatory_region_ablation', 'other'],
+    ['regulatory_region_amplification', 'other'],
+    ['regulatory_region_variant', 'other'],
+    ['intergenic_variant', 'other'],
+  ] as const;
+
+  /**
+   * Terms gnomAD's data pipeline ranks (vep.py CONSEQUENCE_TERMS) but its
+   * browser lists in no category, an unknown term, a prototype key, and null:
+   * the browser's filter reads every one as Other.
+   */
+  const OFF_TABLE = [
+    'transcript_amplification',
+    'initiator_codon_variant',
+    'start_retained_variant',
+    'not_a_vep_term',
+    'constructor',
+    null,
+  ] as const;
+
+  it('covers all 36 terms of gnomAD’s table', () => {
+    expect(new Set(GNOMAD_TABLE.map(([term]) => term)).size).toBe(36);
+  });
+
+  it.each(GNOMAD_TABLE)('classes %s as %s', (term, category) => {
+    expect(classifyConsequence(term)).toBe(category);
+  });
+
+  it.each(OFF_TABLE)('classes %s as other', (term) => {
+    expect(classifyConsequence(term)).toBe('other');
+  });
+});
 
 describe('GnomadService.resolveDatasetContext', () => {
   it('defaults to gnomad_r4 / GRCh38 when nothing supplied', () => {
@@ -69,13 +150,14 @@ describe('GnomadService.resolveDatasetContext', () => {
   });
 });
 
-describe('GnomadService.listGeneVariants — dual-callset joint frequency', () => {
+describe('GnomadService.listGeneVariants — carried-callset sum where a row has no joint record', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('sums an across callsets and recomputes joint af (not exome-only)', async () => {
-    // Live gnomad_r4 / GRCh38 values for 1-55051215-G-GA: the variant is carried
-    // by both callsets, so the row must report joint counts matching
-    // gnomad_get_variant (AC 919 / AN 456260 / AF 0.002014…).
+  it('sums an across callsets and recomputes af (not exome-only)', async () => {
+    // Live gnomad_r4 / GRCh38 callset values for 1-55051215-G-GA, with the joint
+    // record left off the row so the fallback path runs: the variant is carried
+    // by both callsets, so the row reports the callset sums (AC 919 / AN 456260 /
+    // AF 0.002014…), the path every dataset without joint data takes.
     const raw = {
       variant_id: '1-55051215-G-GA',
       consequence: 'frameshift_variant',
@@ -96,10 +178,10 @@ describe('GnomadService.listGeneVariants — dual-callset joint frequency', () =
     expect(rows).toHaveLength(1);
     const [r] = rows;
     expect(r?.ac).toBe(919);
-    // Joint AN is the sum (456260), NOT max-across-callsets (303936 = exome only).
+    // AN is the callset sum (456260), NOT max-across-callsets (303936 = exome only).
     expect(r?.an).toBe(456260);
-    // Joint AF recomputed from joint counts — NOT the single-callset exome af
-    // (0.000632) the old code returned.
+    // AF recomputed from the summed counts — NOT the single-callset exome af
+    // (0.000632).
     expect(r?.af).toBe(919 / 456260);
     expect(r?.af).toBeCloseTo(0.0020142, 6);
     expect(r?.source).toBe('exome|genome');
@@ -128,6 +210,291 @@ describe('GnomadService.listGeneVariants — dual-callset joint frequency', () =
     expect(r?.an).toBe(1000);
     expect(r?.af).toBe(0.01);
     expect(r?.source).toBe('genome');
+  });
+});
+
+describe("GnomadService.listGeneVariants — gnomAD's joint record (#53)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** List one region's raw rows through the real normalizer and filters. */
+  async function listRows(raw: unknown[], filters: { maxAf?: number } = {}) {
+    vi.spyOn(svc as any, 'graphql').mockResolvedValue({ region: { variants: raw } });
+    return svc.listGeneVariants(
+      { kind: 'region', value: '1-55039784-55039974' },
+      filters,
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+  }
+
+  // Live gnomad_r4 PCSK9 rows, captured 2026-11-01 (UTC).
+  const GENOME_ONLY = {
+    variant_id: '1-55039784-C-G',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: null,
+    genome: { ac: 3, an: 152386, af: 0.000019686847873164203, homozygote_count: 0 },
+    joint: { ac: 3, an: 1558598, homozygote_count: 0 },
+  };
+  const DUAL_CALLSET = {
+    variant_id: '1-55039974-G-T',
+    consequence: 'missense_variant',
+    flags: [],
+    exome: { ac: 21634, an: 1428186, af: 0.015147886899885589, homozygote_count: 209 },
+    genome: { ac: 1866, an: 152404, af: 0.01224377312931419, homozygote_count: 17 },
+    joint: { ac: 23500, an: 1580590, homozygote_count: 226 },
+  };
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/53
+  it('reads ac, an, and homozygote_count from joint and computes af from them', async () => {
+    const [genomeOnly, dual] = await listRows([GENOME_ONLY, DUAL_CALLSET]);
+
+    expect(genomeOnly).toMatchObject({
+      ac: 3,
+      an: 1558598,
+      af: 3 / 1558598,
+      homozygote_count: 0,
+      source: 'genome',
+    });
+    expect(dual).toMatchObject({
+      ac: 23500,
+      an: 1580590,
+      af: 23500 / 1580590,
+      homozygote_count: 226,
+      source: 'exome|genome',
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/53
+  it('filters max_af on the joint af the row shows, not the single-callset frequency', async () => {
+    // Genome alone: 3 / 152386 ≈ 1.97e-5, above the threshold; joint: ≈ 1.92e-6, below it.
+    const rows = await listRows([GENOME_ONLY, DUAL_CALLSET], { maxAf: 0.00001 });
+
+    expect(rows.map((row) => row.variant_id)).toEqual(['1-55039784-C-G']);
+    expect(rows[0]?.af).toBe(3 / 1558598);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/53
+  it('gives an AC0 row whose carrying callset has AN 0 the joint af of 0, not null', async () => {
+    // Live gnomad_r4 TTN row, captured 2026-11-01 (UTC): the exome record is AC0 with AN 0.
+    const [row] = await listRows([
+      {
+        variant_id: '2-178753895-G-A',
+        consequence: 'missense_variant',
+        flags: [],
+        exome: { ac: 0, an: 0, af: 0, homozygote_count: 0 },
+        genome: null,
+        joint: { ac: 0, an: 152156, homozygote_count: 0 },
+      },
+    ]);
+
+    expect(row).toMatchObject({ ac: 0, an: 152156, af: 0, source: 'exome' });
+  });
+});
+
+/**
+ * Serve one GraphQL `data` payload for every request through the real fetch
+ * seam, so the query document, response validation, and normalizer all run.
+ * Returns the documents sent.
+ */
+function serveData(data: unknown): string[] {
+  const sent: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+    sent.push(String((JSON.parse(String(init?.body)) as { query: string }).query));
+    return Response.json({ data });
+  });
+  return sent;
+}
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/57
+describe("GnomadService.listGeneVariants — the consequence's transcript", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const list = (
+    kind: 'gene' | 'transcript' | 'region',
+    value: string,
+    dataset: 'gnomad_r4' | 'gnomad_r2_1' = 'gnomad_r4',
+  ) =>
+    svc.listGeneVariants(
+      { kind, value },
+      {},
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+  const marks = (
+    rows: { variant_id: string; transcript_id: unknown; consequence_transcript: unknown }[],
+  ) => rows.map((row) => [row.variant_id, row.transcript_id, row.consequence_transcript]);
+
+  it('marks a gene row on the MANE Select transcript mane_select and one elsewhere other', async () => {
+    const sent = serveData({ gene: PCSK9_R4_GENE });
+
+    const rows = await list('gene', 'PCSK9');
+
+    expect(marks(rows)).toEqual([
+      ['1-55039838-A-G', 'ENST00000302118', 'mane_select'],
+      ['1-55044012-T-A', 'ENST00000673903', 'other'],
+    ]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('canonical_transcript_id mane_select_transcript { ensembl_id }');
+    expect(sent[0]).toMatch(/consequence\s+transcript_id\s+flags/);
+  });
+
+  it('measures against the MANE Select transcript, not the canonical one, when they differ', async () => {
+    serveData({
+      gene: {
+        ...PCSK9_R4_GENE,
+        canonical_transcript_id: 'ENST00000673903',
+        mane_select_transcript: { ensembl_id: 'ENST00000302118' },
+      },
+    });
+
+    expect(marks(await list('gene', 'PCSK9'))).toEqual([
+      ['1-55039838-A-G', 'ENST00000302118', 'mane_select'],
+      ['1-55044012-T-A', 'ENST00000673903', 'other'],
+    ]);
+  });
+
+  it('falls back to the canonical transcript on a gene without a MANE Select (GRCh37)', async () => {
+    serveData({ gene: CDKN2A_R2_1_GENE });
+
+    expect(marks(await list('gene', 'CDKN2A', 'gnomad_r2_1'))).toEqual([
+      ['9-21968154-G-T', 'ENST00000498124', 'canonical'],
+      ['9-21968212-A-G', 'ENST00000579122', 'other'],
+    ]);
+  });
+
+  it('marks nothing on a gene with neither a MANE Select nor a canonical transcript', async () => {
+    serveData({
+      gene: { ...PCSK9_R4_GENE, canonical_transcript_id: null, mane_select_transcript: null },
+    });
+
+    expect(marks(await list('gene', 'PCSK9'))).toEqual([
+      ['1-55039838-A-G', 'ENST00000302118', null],
+      ['1-55044012-T-A', 'ENST00000673903', null],
+    ]);
+  });
+
+  it('marks a gene row whose consequence names no transcript other, as the browser marks it', async () => {
+    serveData({ gene: { ...PCSK9_R4_GENE, variants: [INTERGENIC_R4_ROW] } });
+
+    expect(marks(await list('gene', 'PCSK9'))).toEqual([['4-45000004-T-C', null, 'other']]);
+  });
+
+  it.each([
+    [
+      'transcript',
+      'ENST00000302118',
+      { transcript: { chrom: '1', variants: PCSK9_R4_GENE.variants } },
+    ],
+    ['region', '1-55039838-55044012', { region: { variants: PCSK9_R4_GENE.variants } }],
+  ] as const)('keeps transcript_id and marks nothing on a %s target', async (kind, value, data) => {
+    serveData(data);
+
+    expect(marks(await list(kind, value))).toEqual([
+      ['1-55039838-A-G', 'ENST00000302118', null],
+      ['1-55044012-T-A', 'ENST00000673903', null],
+    ]);
+  });
+
+  it('returns a null transcript_id for an intergenic region row', async () => {
+    serveData({ region: { variants: [INTERGENIC_R4_ROW] } });
+
+    expect(marks(await list('region', '4-45000004-45000004'))).toEqual([
+      ['4-45000004-T-C', null, null],
+    ]);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/57
+describe('GnomadService.getVariant — primary_transcript', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const lookup = (
+    consequences: unknown,
+    dataset: 'gnomad_r4' | 'gnomad_r2_1' = 'gnomad_r4',
+    variantId = '9-21968220-C-A',
+  ) => {
+    const sent = serveData({
+      variant: {
+        ...minimalVariant(variantId, dataset === 'gnomad_r4' ? 'GRCh38' : 'GRCh37'),
+        transcript_consequences: consequences,
+      },
+      clinvar_variant: null,
+    });
+    const record = svc.getVariant(
+      variantId,
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+    return { sent, record };
+  };
+  /** A live entry with fields replaced, for a shape the sampled genes never showed. */
+  const entry = (i: number, patch: Record<string, unknown>) => ({
+    ...(CDKN2A_STOP_GAINED_R4[i] as object),
+    ...patch,
+  });
+
+  it('takes the MANE Select entry beside the most severe consequence, which stays as reported', async () => {
+    const { sent, record } = lookup(CDKN2A_STOP_GAINED_R4);
+
+    expect(await record).toMatchObject({
+      consequence: 'stop_gained',
+      transcript_id: 'ENST00000579122',
+      gene_symbol: 'CDKN2A',
+      primary_transcript: {
+        transcript_id: 'ENST00000304494',
+        is_mane_select: true,
+        consequence: '3_prime_UTR_variant',
+        hgvsc: 'c.*9G>T',
+        hgvsp: null,
+        lof: null,
+      },
+    });
+    expect(sent[0]).toMatch(
+      /gene_id\s+gene_symbol\s+transcript_id\s+major_consequence\s+is_mane_select\s+is_canonical\s+hgvsc\s+hgvsp\s+lof/,
+    );
+  });
+
+  it('takes the canonical entry where gnomAD reports no MANE status (gnomad_r2_1)', async () => {
+    const { record } = lookup(PCSK9_FRAMESHIFT_R2_1, 'gnomad_r2_1', '1-55516888-G-GA');
+
+    const result = await record;
+    expect(result?.transcript_id).toBe('ENST00000452118');
+    expect(result?.primary_transcript).toEqual({
+      transcript_id: 'ENST00000302118',
+      is_mane_select: null,
+      consequence: 'intron_variant',
+      hgvsc: 'c.524-1063_524-1062insA',
+      hgvsp: null,
+      lof: null,
+    });
+  });
+
+  it('prefers the MANE Select entry over a different canonical entry of the same gene', async () => {
+    const { record } = lookup([
+      entry(0, {}),
+      entry(2, { is_canonical: true }),
+      entry(1, { is_canonical: null }),
+    ]);
+
+    expect((await record)?.primary_transcript?.transcript_id).toBe('ENST00000304494');
+  });
+
+  it("never takes another gene's canonical entry, even one listed before the first gene's own", async () => {
+    const otherGeneCanonical = CDKN2A_STOP_GAINED_R4[8];
+    const ownCanonical = entry(3, { is_canonical: true });
+    const withOwn = lookup([entry(0, {}), otherGeneCanonical, ownCanonical]);
+    expect((await withOwn.record)?.primary_transcript?.transcript_id).toBe('ENST00000498124');
+    vi.restoreAllMocks();
+
+    const withoutOwn = lookup([entry(0, {}), otherGeneCanonical, entry(3, {})]);
+    expect((await withoutOwn.record)?.primary_transcript).toBeNull();
+  });
+
+  it('is null for a variant with no transcript consequences', async () => {
+    const { record } = lookup(null);
+
+    expect((await record)?.primary_transcript).toBeNull();
   });
 });
 

@@ -1,7 +1,8 @@
 /**
  * @fileoverview The smallest gnomAD VariantDetails payload the service parses
  * into a record — one genome callset with no populations, consequences,
- * predictors, or flags — for tests that fake gnomAD's GraphQL API.
+ * predictors, flags, or joint record (null, as outside gnomad_r4) — for tests
+ * that fake gnomAD's GraphQL API.
  * @module tests/helpers/minimal-variant
  */
 
@@ -21,6 +22,7 @@ export function minimalVariant(variantId: string, referenceGenome = 'GRCh38') {
       hemizygote_count: null,
       populations: [],
     },
+    joint: null,
     transcript_consequences: null,
     in_silico_predictors: null,
   };

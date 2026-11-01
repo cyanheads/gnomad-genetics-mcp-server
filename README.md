@@ -35,9 +35,9 @@ Population genetics over gnomAD (Broad Institute), with ClinVar clinical signifi
 
 | Tool | Description |
 |:---|:---|
-| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per genetic-ancestry group, homozygote/hemizygote counts, quality flags, transcript consequence, in-silico predictors, and joined ClinVar significance. |
+| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per genetic-ancestry group, homozygote/hemizygote counts, quality flags, per-callset counts and QC status, transcript consequence, in-silico predictors, and joined ClinVar significance. |
 | `gnomad_get_gene_constraint` | Gene loss-of-function constraint — pLI, LOEUF (`oe_lof_upper`) with confidence interval, observed/expected ratios, and Z-scores. By HGNC symbol or Ensembl gene ID. |
-| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies and predicted consequences, filterable by consequence class and max allele frequency. |
+| `gnomad_list_gene_variants` | Every variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, filterable by consequence class, max allele frequency, and QC pass. |
 | `gnomad_get_coverage` | Sequencing coverage across a gene, transcript, or region — mean/median depth and the fraction of samples over depth thresholds, per callset track. |
 | `gnomad_search_clinvar` | Gene-level ClinVar detail via NCBI E-utilities — classified variants, review status, conditions, submission counts, and gnomAD-compatible variant IDs, paged by offset. |
 | `gnomad_dataframe_query` | Run a read-only SQL `SELECT` across canvas tables staged by the list tools. |
@@ -68,6 +68,9 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 - Up to 25 IDs per call (raise via `GNOMAD_MAX_VARIANT_BATCH`), each a `chrom-pos-ref-alt` variantId on chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix (e.g. `1-55051215-G-GA`) or an rsID (e.g. `rs11591147`)
 - A bad or absent ID lands in `failed[]` as `{ variant, error, reason, recovery }` without failing the rest; mitochondrial IDs (`M`, `MT`, `chrM`) fail as `mitochondrial_unsupported`, and an ambiguous rsID adds `candidates`
 - Returns the full per-ancestry frequency vector, the callset(s) carrying the variant, quality flags, consequence, predictor scores, and ClinVar significance. A validated population record survives ClinVar-only failure or expiry with `clinvar: null` and `clinvar_unavailable: true`
+- On `gnomad_r4`, overall `ac`, `an`, `af`, and zygosity counts come from gnomAD's joint exome + genome data, whose `an` spans every callable sample in both callsets, even for a variant only one callset carries; `joint_populations` holds the same view per ancestry group. Datasets without joint data (`gnomad_r3`, `gnomad_r2_1`, `exac`) sum the carried callsets and return an empty `joint_populations`. `populations` stays per callset, tagged by `source`
+- `callsets.exome` and `callsets.genome` give each callset's own `ac`, `an`, `af`, zygosity counts, and QC `filters` (empty when that callset passed; the callset is null when it does not carry the variant). `qc_status` is `pass` when any callset carrying the variant passed, else `filtered` — gnomAD's browser rule. A filtered variant stays in `found[]`; its counts are low-confidence (`AC0`: no high-quality carrier)
+- `consequence` is the most severe term across transcripts, as gnomAD shows it, and `transcript_id` the isoform it sits on. `primary_transcript` gives the term on that gene's MANE Select transcript (its canonical one where there is none, as on GRCh37), with `is_mane_select`, `hgvsc`, `hgvsp`, and LOFTEE's `lof` call: a `stop_gained` on a minor isoform can be a 3′ UTR change on the MANE transcript. It is null when the variant lies outside both transcripts, as on an exon only minor isoforms carry. It is read from the same reply, at no extra request
 - Inspect each `failed[].reason`: only `variant_not_found` reports absence from the chosen dataset; timeouts and other failures leave presence unknown. Check `gnomad_get_coverage` before interpreting an absent variant
 
 ---
@@ -93,7 +96,9 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 
 - Supply exactly one of `gene`, `transcript_id`, or `region` (`chrom-start-stop`, 1-based inclusive, chromosome `1`–`22`, `X`, or `Y` with an optional `chr` prefix); a blank `gene` or `transcript_id` counts as omitted
 - A region must span less than 2,500,000 bp and hold at most ~30,000 variants, otherwise it fails as `invalid_region` or `region_too_large`; mitochondrial targets fail as `mitochondrial_unsupported`
-- Optional filters: one `consequence_class` (`lof` / `missense` / `synonymous` / `other`) and/or a maximum allele frequency
+- Optional filters: one `consequence_class` and/or a maximum allele frequency. The classes are gnomAD's own categories: `lof` (pLoF: transcript ablation, splice acceptor/donor, stop gained, frameshift), `missense` (missense, inframe insertion/deletion, start lost, stop lost), `synonymous`, and `other` (every other term, and a null consequence)
+- Each row names the `transcript_id` its `consequence` is on. On a gene target, `consequence_transcript` marks it as gnomAD's gene table does (†): `mane_select`, `canonical` (a gene without a MANE Select, as on GRCh37), or `other` when the consequence is on another isoform — check `primary_transcript` on `gnomad_get_variant` before reading such a row as truncating. It is null on transcript and region targets
+- Each row carries `exome_filters` and `genome_filters` (pipe-joined QC filters; `""` when that callset passed, null when it does not carry the variant) and `qc_status` (`pass` / `filtered`, gnomAD's browser rule). `qc_filtered` counts the matching rows that failed QC in every callset carrying them — in PCSK9 on `gnomad_r4`, 1,499 of 4,544 as of November 2026. Rows stay listed by default; `pass_only: true` drops them after the count, as gnomAD's browser does
 - A result too large to inline is staged on the `gene_variants` canvas table, returned as `canvas_id` and `table_name` beside a preview; inspect it with `gnomad_dataframe_describe` and query it with `gnomad_dataframe_query`. Passing a `canvas_id` always writes `gene_variants` there, replacing the previous table. With the canvas disabled (`CANVAS_PROVIDER_TYPE=none`), only the capped preview is returned
 
 ---
@@ -157,7 +162,7 @@ Upstream-backed tools and resource reads share one fixed 45 s deadline across qu
 ### `gnomad_variant_triage` <sub>prompt</sub>
 
 - Arguments: `variant` required (chrom-pos-ref-alt or rsID; a malformed one is rejected); `gene` and `dataset` optional. `dataset` is one of `gnomad_r4`, `gnomad_r3`, `gnomad_r2_1`, `exac`, and the server default applies when omitted
-- Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`) → gene constraint (`gnomad_get_gene_constraint`) → callability check (`gnomad_get_coverage` on the exact position)
+- Emits a three-step chain as one user message: population frequency (`gnomad_get_variant`, checking `qc_status` and each callset's `filters` first) → gene constraint (`gnomad_get_gene_constraint`) → callability check (`gnomad_get_coverage` on the exact position)
 
 ## Features
 
@@ -173,6 +178,7 @@ gnomAD-specific:
 Agent-friendly output:
 
 - Per-ancestry allele-frequency vector returned in full, never collapsed to a single global AF
+- gnomAD's per-callset QC filters and a `qc_status` on every variant record and list row, with QC-failed rows kept and counted rather than hidden
 - `gnomad_get_variant` returns per-item `failed[]` rows instead of failing the whole batch
 - Effective `dataset` and `reference_genome` echoed on every response; null upstream fields stay null
 - Every error carries a typed `reason` (e.g. `incoherent_build`, `invalid_target`, `variant_not_found`, `upstream_timeout`, `canvas_disabled`) and a recovery hint

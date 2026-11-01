@@ -5,7 +5,8 @@
  * answers their nuclear `variants`/`coverage` fields with nothing, so the
  * service reads `chrom` to refuse them rather than report absence. The gene and
  * transcript coverage documents also carry `exons`, which bound the summarized
- * coverage buckets. Field names are grounded against the live schema
+ * coverage buckets, and the gene list documents the gene's MANE Select and
+ * canonical transcript IDs. Field names are grounded against the live schema
  * (gnomad.broadinstitute.org/api).
  * @module services/gnomad/queries
  */
@@ -14,7 +15,14 @@
  * Shared variant field selection — reused by the variantId and rsid documents.
  * Type is `VariantDetails`, which has NO top-level gene_symbol/transcript_id/
  * consequence (those live on the flattened gene-variant `Variant` type only);
- * the consequence is derived from transcript_consequences[0].
+ * the consequence is derived from transcript_consequences[0], and the primary
+ * transcript from the MANE Select or canonical entry of that entry's gene. `joint` is
+ * gnomAD's combined exome + genome record, published on gnomad_r4 only (null
+ * elsewhere); it has no `af` field. Each callset's `filters` is its QC verdict.
+ * `joint.filters` is not selected: it carries joint-level flags
+ * (`discrepant_frequencies`, `not_called_in_*`) and disagrees between the detail
+ * and list documents for the same variant (1-55039866-G-A: `[]` here, `["AC0"]`
+ * in the list), so it never decides QC status.
  */
 const VARIANT_SELECTION = `
 variant_id
@@ -27,6 +35,7 @@ exome {
   af
   homozygote_count
   hemizygote_count
+  filters
   populations { id ac an homozygote_count hemizygote_count }
 }
 genome {
@@ -35,12 +44,26 @@ genome {
   af
   homozygote_count
   hemizygote_count
+  filters
+  populations { id ac an homozygote_count hemizygote_count }
+}
+joint {
+  ac
+  an
+  homozygote_count
+  hemizygote_count
   populations { id ac an homozygote_count hemizygote_count }
 }
 transcript_consequences {
+  gene_id
   gene_symbol
   transcript_id
   major_consequence
+  is_mane_select
+  is_canonical
+  hgvsc
+  hgvsp
+  lof
 }
 in_silico_predictors { id value }`;
 
@@ -137,24 +160,39 @@ query GnomadGeneConstraintById($gene: String!, $referenceGenome: ReferenceGenome
   gene(gene_id: $gene, reference_genome: $referenceGenome) { ${GENE_CONSTRAINT_SELECTION} }
 }` as const;
 
-/** Shared selection for a flattened gene/region/transcript variant list element. */
+/**
+ * Shared selection for a flattened gene/region/transcript variant list element.
+ * `joint` carries the totals alone: its `populations` feed no list column and
+ * would multiply the response about 3.6× (PCSK9 on gnomad_r4, as of November 2026).
+ * Each callset carries its QC `filters`; joint's are not selected (see
+ * VARIANT_SELECTION). `transcript_id` names the transcript `consequence` is on.
+ */
 const VARIANT_LIST_SELECTION = `
 variants(dataset: $dataset) {
   variant_id
   consequence
+  transcript_id
   flags
-  exome { ac an af homozygote_count }
-  genome { ac an af homozygote_count }
+  exome { ac an af homozygote_count filters }
+  genome { ac an af homozygote_count filters }
+  joint { ac an homozygote_count }
 }`;
+
+/**
+ * The gene list documents also select the gene's MANE Select and canonical
+ * transcript IDs, which mark each row's consequence transcript as gnomAD's gene
+ * table does.
+ */
+const GENE_VARIANTS_SELECTION = `chrom canonical_transcript_id mane_select_transcript { ensembl_id } ${VARIANT_LIST_SELECTION}`;
 
 export const GENE_VARIANTS_BY_SYMBOL_QUERY = `
 query GnomadGeneVariantsBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${GENE_VARIANTS_SELECTION} }
 }` as const;
 
 export const GENE_VARIANTS_BY_ID_QUERY = `
 query GnomadGeneVariantsById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${GENE_VARIANTS_SELECTION} }
 }` as const;
 
 export const TRANSCRIPT_VARIANTS_QUERY = `

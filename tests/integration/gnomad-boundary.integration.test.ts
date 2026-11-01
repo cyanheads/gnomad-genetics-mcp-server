@@ -238,6 +238,1000 @@ describe('GnomadService variant boundary', () => {
   });
 });
 
+/** One population row as gnomAD sends it: [id, ac, an, homozygote_count, hemizygote_count]. */
+type PopulationRow = readonly [string, number, number, number, number | null];
+
+/** A callset (or joint) record as gnomAD sends it, from its totals and population rows. */
+function frequencyRecord(
+  ac: number,
+  an: number,
+  homozygoteCount: number,
+  rows: readonly PopulationRow[],
+) {
+  return {
+    ac,
+    an,
+    homozygote_count: homozygoteCount,
+    hemizygote_count: 0,
+    populations: rows.map(([id, popAc, popAn, hom, hemi]) => ({
+      id,
+      ac: popAc,
+      an: popAn,
+      homozygote_count: hom,
+      hemizygote_count: hemi,
+    })),
+  };
+}
+
+/**
+ * Live gnomAD records captured 2026-11-01 (UTC): each callset's totals and every
+ * population row except the 1000 Genomes/HGDP subpopulations, of which two real
+ * gnomad_r3 rows are kept. The upstream `af` is ac/an and is filled in below.
+ */
+const LIVE = {
+  r3_974: {
+    variant_id: '1-55039974-G-T',
+    reference_genome: 'GRCh38',
+    exome: null,
+    genome: frequencyRecord(1866, 152286, 17, [
+      ['oth', 27, 2094, 0, 0],
+      ['oth_XX', 13, 1034, 0, 0],
+      ['oth_XY', 14, 1060, 0, 0],
+      ['amr', 133, 15292, 1, 0],
+      ['amr_XX', 61, 6790, 0, 0],
+      ['amr_XY', 72, 8502, 1, 0],
+      ['fin', 467, 10630, 11, 0],
+      ['fin_XX', 103, 2574, 3, 0],
+      ['fin_XY', 364, 8056, 8, 0],
+      ['ami', 6, 912, 0, 0],
+      ['ami_XX', 2, 470, 0, 0],
+      ['ami_XY', 4, 442, 0, 0],
+      ['eas', 0, 5200, 0, 0],
+      ['eas_XX', 0, 2282, 0, 0],
+      ['eas_XY', 0, 2918, 0, 0],
+      ['mid', 0, 316, 0, 0],
+      ['mid_XX', 0, 164, 0, 0],
+      ['mid_XY', 0, 152, 0, 0],
+      ['afr', 109, 41480, 1, 0],
+      ['afr_XX', 50, 22170, 0, 0],
+      ['afr_XY', 59, 19310, 1, 0],
+      ['sas', 4, 4836, 0, 0],
+      ['sas_XX', 1, 1166, 0, 0],
+      ['sas_XY', 3, 3670, 0, 0],
+      ['asj', 16, 3472, 0, 0],
+      ['asj_XX', 7, 1868, 0, 0],
+      ['asj_XY', 9, 1604, 0, 0],
+      ['nfe', 1104, 68054, 4, 0],
+      ['nfe_XX', 627, 39370, 1, 0],
+      ['nfe_XY', 477, 28684, 3, 0],
+      ['XX', 864, 77888, 4, 0],
+      ['XY', 1002, 74398, 13, 0],
+      ['hgdp:balochi', 1, 42, 0, 0],
+      ['hgdp:russian', 1, 50, 0, 0],
+    ]),
+    joint: null,
+  },
+  r2_1_647: {
+    variant_id: '1-55505647-G-T',
+    reference_genome: 'GRCh37',
+    exome: frequencyRecord(2341, 196220, 29, [
+      ['afr', 28, 11560, 0, 0],
+      ['afr_XX', 17, 7170, 0, 0],
+      ['afr_XY', 11, 4390, 0, 0],
+      ['amr', 189, 29350, 1, 0],
+      ['amr_XX', 99, 16978, 0, 0],
+      ['amr_XY', 90, 12372, 1, 0],
+      ['asj', 42, 9042, 0, 0],
+      ['asj_XX', 18, 4290, 0, 0],
+      ['asj_XY', 24, 4752, 0, 0],
+      ['eas', 0, 14742, 0, 0],
+      ['eas_jpn', 0, 80, 0, null],
+      ['eas_kor', 0, 3122, 0, null],
+      ['eas_oea', 0, 11540, 0, null],
+      ['eas_XX', 0, 7330, 0, 0],
+      ['eas_XY', 0, 7412, 0, 0],
+      ['fin', 717, 17188, 19, 0],
+      ['fin_XX', 367, 8724, 11, 0],
+      ['fin_XY', 350, 8464, 8, 0],
+      ['nfe', 1270, 84162, 9, 0],
+      ['nfe_bgr', 10, 1564, 0, null],
+      ['nfe_est', 1, 214, 0, null],
+      ['nfe_nwe', 608, 37854, 6, null],
+      ['nfe_onf', 326, 24052, 0, null],
+      ['nfe_seu', 89, 5846, 2, null],
+      ['nfe_swe', 236, 14632, 1, null],
+      ['nfe_XX', 552, 37496, 4, 0],
+      ['nfe_XY', 718, 46666, 5, 0],
+      ['oth', 66, 5142, 0, 0],
+      ['oth_XX', 31, 2488, 0, 0],
+      ['oth_XY', 35, 2654, 0, 0],
+      ['sas', 29, 25034, 0, 0],
+      ['sas_XX', 7, 6348, 0, 0],
+      ['sas_XY', 22, 18686, 0, 0],
+      ['XX', 1091, 90824, 15, 0],
+      ['XY', 1250, 105396, 14, 0],
+    ]),
+    genome: frequencyRecord(441, 31400, 8, [
+      ['afr', 25, 8710, 1, 0],
+      ['afr_XX', 7, 3680, 0, 0],
+      ['afr_XY', 18, 5030, 1, 0],
+      ['amr', 4, 848, 0, 0],
+      ['amr_XX', 2, 414, 0, 0],
+      ['amr_XY', 2, 434, 0, 0],
+      ['asj', 2, 290, 0, 0],
+      ['asj_XX', 1, 80, 0, 0],
+      ['asj_XY', 1, 210, 0, 0],
+      ['eas', 0, 1560, 0, 0],
+      ['eas_XX', 0, 538, 0, 0],
+      ['eas_XY', 0, 1022, 0, 0],
+      ['fin', 163, 3476, 6, 0],
+      ['fin_XX', 81, 1846, 2, 0],
+      ['fin_XY', 82, 1630, 4, 0],
+      ['nfe', 231, 15430, 1, 0],
+      ['nfe_est', 67, 4592, 0, null],
+      ['nfe_nwe', 137, 8594, 1, null],
+      ['nfe_onf', 27, 2138, 0, null],
+      ['nfe_seu', 0, 106, 0, null],
+      ['nfe_XX', 94, 6810, 0, 0],
+      ['nfe_XY', 137, 8620, 1, 0],
+      ['oth', 16, 1086, 0, 0],
+      ['oth_XX', 12, 560, 0, 0],
+      ['oth_XY', 4, 526, 0, 0],
+      ['sas', 0, 0, 0, 0],
+      ['sas_XX', 0, 0, 0, 0],
+      ['sas_XY', 0, 0, 0, 0],
+      ['XX', 197, 13928, 2, 0],
+      ['XY', 244, 17472, 6, 0],
+    ]),
+    joint: null,
+  },
+  exac_647: {
+    variant_id: '1-55505647-G-T',
+    reference_genome: 'GRCh37',
+    exome: frequencyRecord(689, 31082, 5, [
+      ['afr', 14, 3388, 0, 0],
+      ['amr', 29, 1308, 0, 0],
+      ['eas', 0, 1548, 0, 0],
+      ['fin', 81, 452, 3, 0],
+      ['nfe', 549, 15734, 2, 0],
+      ['oth', 3, 248, 0, 0],
+      ['sas', 13, 8404, 0, 0],
+    ]),
+    genome: null,
+    joint: null,
+  },
+  r4_974: {
+    variant_id: '1-55039974-G-T',
+    reference_genome: 'GRCh38',
+    exome: frequencyRecord(21634, 1428186, 209, [
+      ['remaining', 786, 59126, 12, 0],
+      ['remaining_XX', 439, 31272, 6, 0],
+      ['remaining_XY', 347, 27854, 6, 0],
+      ['amr', 273, 40196, 2, 0],
+      ['amr_XX', 138, 22768, 0, 0],
+      ['amr_XY', 135, 17428, 2, 0],
+      ['fin', 1927, 50394, 37, 0],
+      ['fin_XX', 989, 26402, 21, 0],
+      ['fin_XY', 938, 23992, 16, 0],
+      ['mid', 26, 4844, 1, 0],
+      ['mid_XX', 16, 2036, 0, 0],
+      ['mid_XY', 10, 2808, 1, 0],
+      ['nfe', 18328, 1096136, 155, 0],
+      ['nfe_XX', 9655, 566440, 74, 0],
+      ['nfe_XY', 8673, 529696, 81, 0],
+      ['sas', 88, 81336, 1, 0],
+      ['sas_XX', 19, 21094, 0, 0],
+      ['sas_XY', 69, 60242, 1, 0],
+      ['asj', 131, 25476, 0, 0],
+      ['asj_XX', 72, 12272, 0, 0],
+      ['asj_XY', 59, 13204, 0, 0],
+      ['eas', 0, 37878, 0, 0],
+      ['eas_XX', 0, 19656, 0, 0],
+      ['eas_XY', 0, 18222, 0, 0],
+      ['afr', 75, 32800, 1, 0],
+      ['afr_XX', 45, 18908, 1, 0],
+      ['afr_XY', 30, 13892, 0, 0],
+      ['XX', 11373, 720848, 102, 0],
+      ['XY', 10261, 707338, 107, 0],
+    ]),
+    genome: frequencyRecord(1866, 152404, 17, [
+      ['remaining', 27, 2116, 0, 0],
+      ['remaining_XX', 13, 1050, 0, 0],
+      ['remaining_XY', 14, 1066, 0, 0],
+      ['amr', 133, 15312, 1, 0],
+      ['amr_XX', 61, 6796, 0, 0],
+      ['amr_XY', 72, 8516, 1, 0],
+      ['fin', 467, 10630, 11, 0],
+      ['fin_XX', 103, 2574, 3, 0],
+      ['fin_XY', 364, 8056, 8, 0],
+      ['ami', 6, 912, 0, 0],
+      ['ami_XX', 2, 470, 0, 0],
+      ['ami_XY', 4, 442, 0, 0],
+      ['eas', 0, 5188, 0, 0],
+      ['eas_XX', 0, 2272, 0, 0],
+      ['eas_XY', 0, 2916, 0, 0],
+      ['mid', 0, 294, 0, 0],
+      ['mid_XX', 0, 144, 0, 0],
+      ['mid_XY', 0, 150, 0, 0],
+      ['sas', 4, 4832, 0, 0],
+      ['sas_XX', 1, 1154, 0, 0],
+      ['sas_XY', 3, 3678, 0, 0],
+      ['asj', 16, 3472, 0, 0],
+      ['asj_XX', 7, 1868, 0, 0],
+      ['asj_XY', 9, 1604, 0, 0],
+      ['afr', 109, 41602, 1, 0],
+      ['afr_XX', 50, 22186, 0, 0],
+      ['afr_XY', 59, 19416, 1, 0],
+      ['nfe', 1104, 68046, 4, 0],
+      ['nfe_XX', 627, 39364, 1, 0],
+      ['nfe_XY', 477, 28682, 3, 0],
+      ['XX', 864, 77878, 4, 0],
+      ['XY', 1002, 74526, 13, 0],
+    ]),
+    joint: frequencyRecord(23500, 1580590, 226, [
+      ['remaining', 813, 61242, 12, 0],
+      ['remaining_XX', 452, 32322, 6, 0],
+      ['remaining_XY', 361, 28920, 6, 0],
+      ['amr', 406, 55508, 3, 0],
+      ['amr_XX', 199, 29564, 0, 0],
+      ['amr_XY', 207, 25944, 3, 0],
+      ['fin', 2394, 61024, 48, 0],
+      ['fin_XX', 1092, 28976, 24, 0],
+      ['fin_XY', 1302, 32048, 24, 0],
+      ['ami', 6, 912, 0, 0],
+      ['ami_XX', 2, 470, 0, 0],
+      ['ami_XY', 4, 442, 0, 0],
+      ['eas', 0, 43066, 0, 0],
+      ['eas_XX', 0, 21928, 0, 0],
+      ['eas_XY', 0, 21138, 0, 0],
+      ['mid', 26, 5138, 1, 0],
+      ['mid_XX', 16, 2180, 0, 0],
+      ['mid_XY', 10, 2958, 1, 0],
+      ['sas', 92, 86168, 1, 0],
+      ['sas_XX', 20, 22248, 0, 0],
+      ['sas_XY', 72, 63920, 1, 0],
+      ['asj', 147, 28948, 0, 0],
+      ['asj_XX', 79, 14140, 0, 0],
+      ['asj_XY', 68, 14808, 0, 0],
+      ['afr', 184, 74402, 2, 0],
+      ['afr_XX', 95, 41094, 1, 0],
+      ['afr_XY', 89, 33308, 1, 0],
+      ['nfe', 19432, 1164182, 159, 0],
+      ['nfe_XX', 10282, 605804, 75, 0],
+      ['nfe_XY', 9150, 558378, 84, 0],
+      ['', 23500, 1580590, 226, 0],
+      ['XX', 12237, 798726, 106, 0],
+      ['XY', 11263, 781864, 120, 0],
+      ['XX', 12237, 798726, 106, 0],
+      ['XY', 11263, 781864, 120, 0],
+    ]),
+  },
+  r4_784: {
+    variant_id: '1-55039784-C-G',
+    reference_genome: 'GRCh38',
+    exome: null,
+    genome: frequencyRecord(3, 152386, 0, [
+      ['remaining', 0, 2116, 0, 0],
+      ['remaining_XX', 0, 1050, 0, 0],
+      ['remaining_XY', 0, 1066, 0, 0],
+      ['amr', 0, 15312, 0, 0],
+      ['amr_XX', 0, 6798, 0, 0],
+      ['amr_XY', 0, 8514, 0, 0],
+      ['fin', 0, 10632, 0, 0],
+      ['fin_XX', 0, 2574, 0, 0],
+      ['fin_XY', 0, 8058, 0, 0],
+      ['ami', 0, 912, 0, 0],
+      ['ami_XX', 0, 470, 0, 0],
+      ['ami_XY', 0, 442, 0, 0],
+      ['eas', 0, 5178, 0, 0],
+      ['eas_XX', 0, 2264, 0, 0],
+      ['eas_XY', 0, 2914, 0, 0],
+      ['mid', 0, 294, 0, 0],
+      ['mid_XX', 0, 144, 0, 0],
+      ['mid_XY', 0, 150, 0, 0],
+      ['sas', 0, 4834, 0, 0],
+      ['sas_XX', 0, 1154, 0, 0],
+      ['sas_XY', 0, 3680, 0, 0],
+      ['asj', 0, 3472, 0, 0],
+      ['asj_XX', 0, 1868, 0, 0],
+      ['asj_XY', 0, 1604, 0, 0],
+      ['afr', 3, 41594, 0, 0],
+      ['afr_XX', 1, 22180, 0, 0],
+      ['afr_XY', 2, 19414, 0, 0],
+      ['nfe', 0, 68042, 0, 0],
+      ['nfe_XX', 0, 39364, 0, 0],
+      ['nfe_XY', 0, 28678, 0, 0],
+      ['XX', 1, 77866, 0, 0],
+      ['XY', 2, 74520, 0, 0],
+    ]),
+    joint: frequencyRecord(3, 1558598, 0, [
+      ['remaining', 0, 60316, 0, 0],
+      ['remaining_XX', 0, 31884, 0, 0],
+      ['remaining_XY', 0, 28432, 0, 0],
+      ['amr', 0, 52708, 0, 0],
+      ['amr_XX', 0, 27876, 0, 0],
+      ['amr_XY', 0, 24832, 0, 0],
+      ['fin', 0, 59748, 0, 0],
+      ['fin_XX', 0, 28452, 0, 0],
+      ['fin_XY', 0, 31296, 0, 0],
+      ['ami', 0, 912, 0, 0],
+      ['ami_XX', 0, 470, 0, 0],
+      ['ami_XY', 0, 442, 0, 0],
+      ['eas', 0, 42946, 0, 0],
+      ['eas_XX', 0, 21874, 0, 0],
+      ['eas_XY', 0, 21072, 0, 0],
+      ['mid', 0, 4372, 0, 0],
+      ['mid_XX', 0, 1782, 0, 0],
+      ['mid_XY', 0, 2590, 0, 0],
+      ['sas', 0, 84986, 0, 0],
+      ['sas_XX', 0, 21996, 0, 0],
+      ['sas_XY', 0, 62990, 0, 0],
+      ['asj', 0, 28620, 0, 0],
+      ['asj_XX', 0, 13958, 0, 0],
+      ['asj_XY', 0, 14662, 0, 0],
+      ['afr', 3, 74272, 0, 0],
+      ['afr_XX', 1, 41020, 0, 0],
+      ['afr_XY', 2, 33252, 0, 0],
+      ['nfe', 0, 1149718, 0, 0],
+      ['nfe_XX', 0, 599500, 0, 0],
+      ['nfe_XY', 0, 550218, 0, 0],
+      ['', 3, 1558598, 0, 0],
+      ['XX', 1, 788812, 0, 0],
+      ['XY', 2, 769786, 0, 0],
+      ['XX', 1, 788812, 0, 0],
+      ['XY', 2, 769786, 0, 0],
+    ]),
+  },
+} as const;
+
+type LiveKey = keyof typeof LIVE;
+
+/** The VariantDetails payload gnomAD returns for a live record (`af` = ac/an on each callset). */
+function liveVariant(key: LiveKey) {
+  const { exome, genome, joint, ...identity } = LIVE[key];
+  const withAf = (callset: typeof exome | typeof genome) =>
+    callset && { ...callset, af: callset.ac / callset.an };
+  return {
+    ...identity,
+    rsids: [],
+    flags: [],
+    exome: withAf(exome),
+    genome: withAf(genome),
+    joint,
+    transcript_consequences: null,
+    in_silico_predictors: null,
+  };
+}
+
+const LIVE_DATASET: Record<LiveKey, 'gnomad_r4' | 'gnomad_r3' | 'gnomad_r2_1' | 'exac'> = {
+  r3_974: 'gnomad_r3',
+  r2_1_647: 'gnomad_r2_1',
+  exac_647: 'exac',
+  r4_974: 'gnomad_r4',
+  r4_784: 'gnomad_r4',
+};
+
+/** Resolve a live record through the real service, faking only fetch. */
+async function liveRecord(key: LiveKey) {
+  const requests = fakeGraphql(() => ({
+    data: { variant: liveVariant(key), clinvar_variant: null },
+  }));
+  const svc = new GnomadService(getServerConfig());
+  const result = await svc.getVariant(
+    LIVE[key].variant_id,
+    svc.resolveDatasetContext(LIVE_DATASET[key]),
+    createMockContext(),
+  );
+  return { result, requests };
+}
+
+describe('GnomadService ancestry groups across datasets (#55)', () => {
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/55
+  it.each<[LiveKey, 'exome' | 'genome', number, number, string[]]>([
+    [
+      'r3_974',
+      'genome',
+      1866,
+      152286,
+      ['oth', 'amr', 'fin', 'ami', 'eas', 'mid', 'afr', 'sas', 'asj', 'nfe'],
+    ],
+    ['r2_1_647', 'exome', 2341, 196220, ['afr', 'amr', 'asj', 'eas', 'fin', 'nfe', 'oth', 'sas']],
+    ['r2_1_647', 'genome', 441, 31400, ['afr', 'amr', 'asj', 'eas', 'fin', 'nfe', 'oth', 'sas']],
+    ['exac_647', 'exome', 689, 31082, ['afr', 'amr', 'eas', 'fin', 'nfe', 'oth', 'sas']],
+  ])(
+    'returns every top-level group of %s %s, so the groups sum to the callset AC and AN',
+    async (key, source, callsetAc, callsetAn, ids) => {
+      const { result } = await liveRecord(key);
+
+      const groups = result?.populations.filter((population) => population.source === source);
+      expect(groups?.map((population) => population.id)).toEqual(ids);
+      expect(groups?.reduce((sum, population) => sum + population.ac, 0)).toBe(callsetAc);
+      expect(groups?.reduce((sum, population) => sum + population.an, 0)).toBe(callsetAn);
+    },
+  );
+
+  it.each<[LiveKey, 'exome' | 'genome', number]>([
+    ['r3_974', 'genome', 27],
+    ['r2_1_647', 'exome', 66],
+    ['r2_1_647', 'genome', 16],
+    ['exac_647', 'exome', 3],
+  ])('returns oth from %s %s with AC %i', async (key, source, ac) => {
+    const { result } = await liveRecord(key);
+
+    expect(result?.populations).toContainEqual(expect.objectContaining({ id: 'oth', source, ac }));
+  });
+
+  it('drops the sex-split, subgroup, and HGDP rows the same payload carries', async () => {
+    const decoys = ['oth_XX', 'eas_jpn', 'nfe_bgr', 'XX', 'hgdp:balochi'];
+    const sent = [LIVE.r2_1_647.exome, LIVE.r2_1_647.genome, LIVE.r3_974.genome].flatMap(
+      (callset) => callset.populations.map((population) => population.id),
+    );
+    expect(sent).toEqual(expect.arrayContaining(decoys));
+
+    const ids = [
+      ...((await liveRecord('r2_1_647')).result?.populations ?? []),
+      ...((await liveRecord('r3_974')).result?.populations ?? []),
+    ].map((population) => population.id);
+
+    expect(ids.length).toBeGreaterThan(0);
+    for (const decoy of decoys) expect(ids).not.toContain(decoy);
+  });
+
+  it('keeps remaining and carries no oth on gnomad_r4', async () => {
+    const { result } = await liveRecord('r4_974');
+
+    const remaining = result?.populations.filter((population) => population.id === 'remaining');
+    expect(remaining?.map(({ source, ac }) => [source, ac])).toEqual([
+      ['exome', 786],
+      ['genome', 27],
+    ]);
+    expect(result?.populations.map((population) => population.id)).not.toContain('oth');
+  });
+});
+
+describe('GnomadService joint frequencies (#53)', () => {
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/53
+  it('reads the overall counts of a genome-only gnomad_r4 variant from joint, across both callsets', async () => {
+    const { result } = await liveRecord('r4_784');
+
+    expect(result).toMatchObject({
+      ac: 3,
+      an: 1_558_598,
+      af: 3 / 1_558_598,
+      homozygote_count: 0,
+      hemizygote_count: 0,
+      source: ['genome'],
+    });
+    // The genome callset alone: 3 / 152,386.
+    expect(result?.af).not.toBe(3 / 152_386);
+    expect(result?.populations.length).toBeGreaterThan(0);
+    expect(new Set(result?.populations.map((population) => population.source))).toEqual(
+      new Set(['genome']),
+    );
+  });
+
+  it('returns the ten joint ancestry groups, without the blank, XX/XY, or sex-split rows', async () => {
+    const sent = LIVE.r4_784.joint.populations.map((population) => population.id);
+    expect(sent).toEqual(expect.arrayContaining(['', 'XX', 'XY', 'afr_XX']));
+
+    const { result } = await liveRecord('r4_784');
+
+    expect(result?.joint_populations).toEqual(
+      [
+        ['remaining', 0, 60316],
+        ['amr', 0, 52708],
+        ['fin', 0, 59748],
+        ['ami', 0, 912],
+        ['eas', 0, 42946],
+        ['mid', 0, 4372],
+        ['sas', 0, 84986],
+        ['asj', 0, 28620],
+        ['afr', 3, 74272],
+        ['nfe', 0, 1149718],
+      ].map(([id, ac, an]) => ({
+        id,
+        ac,
+        an,
+        af: Number(ac) / Number(an),
+        homozygote_count: 0,
+        hemizygote_count: 0,
+      })),
+    );
+  });
+
+  it('reads a dual-callset gnomad_r4 variant from joint, which equals the callset sums there', async () => {
+    const { result } = await liveRecord('r4_974');
+
+    expect(result).toMatchObject({
+      ac: 23500,
+      an: 1_580_590,
+      af: 23500 / 1_580_590,
+      homozygote_count: 226,
+      source: ['exome', 'genome'],
+    });
+    expect(result?.joint_populations.map((population) => population.id)).toEqual([
+      'remaining',
+      'amr',
+      'fin',
+      'ami',
+      'eas',
+      'mid',
+      'sas',
+      'asj',
+      'afr',
+      'nfe',
+    ]);
+    expect(result?.joint_populations.find((population) => population.id === 'nfe')).toEqual({
+      id: 'nfe',
+      ac: 19432,
+      an: 1_164_182,
+      af: 19432 / 1_164_182,
+      homozygote_count: 159,
+      hemizygote_count: 0,
+    });
+  });
+
+  it.each<[LiveKey, number, number]>([
+    ['r3_974', 1866, 152286],
+    ['r2_1_647', 2782, 227620],
+    ['exac_647', 689, 31082],
+  ])(
+    'keeps the carried-callset sum on %s, where joint is null, with no joint groups',
+    async (key, ac, an) => {
+      const { result } = await liveRecord(key);
+
+      expect(result).toMatchObject({ ac, an, af: ac / an });
+      expect(result?.joint_populations).toEqual([]);
+    },
+  );
+
+  it('selects the joint totals and joint groups in the variant document', async () => {
+    const { requests } = await liveRecord('r4_784');
+
+    expect(requests[0]?.query.replace(/\s+/g, ' ')).toContain(
+      'joint { ac an homozygote_count hemizygote_count populations { id ac an homozygote_count hemizygote_count } }',
+    );
+  });
+
+  it('reads list rows from joint, and keeps a row with no joint record and no counts unknown', async () => {
+    const requests = fakeGraphql(() => ({
+      data: {
+        gene: {
+          chrom: '1',
+          variants: [
+            // Live PCSK9 row, gnomad_r4, captured 2026-11-01 (UTC).
+            {
+              variant_id: '1-55039784-C-G',
+              consequence: '5_prime_UTR_variant',
+              flags: [],
+              exome: null,
+              genome: { ac: 3, an: 152386, af: 3 / 152386, homozygote_count: 0 },
+              joint: { ac: 3, an: 1_558_598, homozygote_count: 0 },
+            },
+            {
+              variant_id: '1-101-A-G',
+              consequence: null,
+              flags: null,
+              exome: { ac: null, an: null, af: null, homozygote_count: null },
+              genome: null,
+              joint: null,
+            },
+          ],
+        },
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const rows = await svc.listGeneVariants(
+      { kind: 'gene', value: 'PCSK9' },
+      {},
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(rows[0]).toMatchObject({ ac: 3, an: 1_558_598, af: 3 / 1_558_598, source: 'genome' });
+    expect(rows[1]).toMatchObject({ af: null, ac: 0, an: 0, homozygote_count: 0, source: '' });
+    const query = requests[0]?.query.replace(/\s+/g, ' ') ?? '';
+    expect(query).toContain('joint { ac an homozygote_count }');
+    // joint.populations feeds no column and would multiply the response about 3.6×.
+    expect(query).not.toMatch(/joint \{[^}]*populations/);
+  });
+});
+
+/**
+ * Callset totals and QC filters of live gnomad_r4 VariantDetails records,
+ * captured 2026-11-01 (UTC), with population rows left out. `joint.filters` is
+ * the live value too: it disagrees with the callsets and must never decide QC.
+ */
+const QC_DETAIL = {
+  '1-55039866-G-A': {
+    exome: [0, 1_410_978, 0, ['AC0']],
+    genome: null,
+    joint: [0, 1_562_614, 0, []],
+  },
+  '1-55039800-G-A': {
+    exome: [4, 1_415_942, 0, ['AS_VQSR']],
+    genome: null,
+    joint: [4, 1_568_302, 0, []],
+  },
+  '1-55039793-C-T': {
+    exome: [0, 1_412_788, 0, ['AC0']],
+    genome: [3, 152_276, 0, []],
+    joint: [3, 1_565_064, 0, ['discrepant_frequencies']],
+  },
+  '1-55039974-G-T': {
+    exome: [21_634, 1_428_186, 209, []],
+    genome: [1_866, 152_404, 17, []],
+    joint: [23_500, 1_580_590, 226, []],
+  },
+} as const;
+
+type QcCallset = readonly [number, number, number, readonly string[]] | null;
+
+/** A callset (or joint) record as gnomAD sends it: totals, filters, no population rows. */
+function qcCallset(callset: QcCallset, withAf = true) {
+  if (!callset) return null;
+  const [ac, an, hom, filters] = callset;
+  return {
+    ac,
+    an,
+    ...(withAf && { af: ac / an }),
+    homozygote_count: hom,
+    hemizygote_count: 0,
+    filters: [...filters],
+    populations: [],
+  };
+}
+
+function qcDetail(variantId: keyof typeof QC_DETAIL) {
+  const { exome, genome, joint } = QC_DETAIL[variantId];
+  return {
+    variant_id: variantId,
+    reference_genome: 'GRCh38',
+    rsids: [],
+    flags: [],
+    exome: qcCallset(exome),
+    genome: qcCallset(genome),
+    joint: qcCallset(joint, false),
+    transcript_consequences: null,
+    in_silico_predictors: null,
+  };
+}
+
+/** Rows of the live gnomad_r4 PCSK9 gene list, captured 2026-11-01 (UTC), as the list document selects them. */
+const QC_LIST_R4 = [
+  {
+    variant_id: '1-55039793-C-T',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: { ac: 0, an: 1412788, af: 0, homozygote_count: 0, filters: ['AC0'] },
+    genome: { ac: 3, an: 152276, af: 0.00001970106911135044, homozygote_count: 0, filters: [] },
+    joint: { ac: 3, an: 1565064, homozygote_count: 0 },
+  },
+  {
+    variant_id: '1-55039766-G-T',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: { ac: 0, an: 1380722, af: 0, homozygote_count: 0, filters: ['AC0', 'AS_VQSR'] },
+    genome: null,
+    joint: { ac: 0, an: 1533108, homozygote_count: 0 },
+  },
+  {
+    variant_id: '1-55039784-C-G',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: null,
+    genome: { ac: 3, an: 152386, af: 0.000019686847873164203, homozygote_count: 0, filters: [] },
+    joint: { ac: 3, an: 1558598, homozygote_count: 0 },
+  },
+  {
+    variant_id: '1-55046674-A-C',
+    consequence: 'intron_variant',
+    flags: [],
+    exome: null,
+    genome: { ac: 0, an: 146584, af: 0, homozygote_count: 0, filters: ['AC0'] },
+    joint: { ac: 0, an: 1606364, homozygote_count: 0 },
+  },
+  {
+    variant_id: '1-55052616-T-G',
+    consequence: 'intron_variant',
+    flags: [],
+    exome: { ac: 0, an: 1457636, af: 0, homozygote_count: 0, filters: ['AC0', 'AS_VQSR'] },
+    genome: {
+      ac: 2,
+      an: 151386,
+      af: 0.000013211261279114317,
+      homozygote_count: 0,
+      filters: ['AS_VQSR'],
+    },
+    joint: { ac: 2, an: 1609022, homozygote_count: 0 },
+  },
+  {
+    variant_id: '1-55039974-G-T',
+    consequence: 'missense_variant',
+    flags: [],
+    exome: {
+      ac: 21634,
+      an: 1428186,
+      af: 0.015147886899885589,
+      homozygote_count: 209,
+      filters: [],
+    },
+    genome: { ac: 1866, an: 152404, af: 0.01224377312931419, homozygote_count: 17, filters: [] },
+    joint: { ac: 23500, an: 1580590, homozygote_count: 226 },
+  },
+];
+
+/** Rows of the live gnomad_r2_1 PCSK9 region 1-55505475-55505477, captured 2026-11-01 (UTC). */
+const QC_LIST_R21 = [
+  {
+    variant_id: '1-55505475-C-T',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: { ac: 1, an: 178702, af: 0.000005595908271871607, homozygote_count: 0, filters: ['RF'] },
+    genome: null,
+    joint: null,
+  },
+  {
+    variant_id: '1-55505477-C-T',
+    consequence: '5_prime_UTR_variant',
+    flags: [],
+    exome: { ac: 2, an: 178734, af: 0.000011189812794431949, homozygote_count: 0, filters: [] },
+    genome: { ac: 1, an: 31404, af: 0.00003184307731499172, homozygote_count: 0, filters: [] },
+    joint: null,
+  },
+];
+
+/** The QC columns of each list row, keyed by variant ID. */
+async function listQc(variants: unknown[], dataset: 'gnomad_r4' | 'gnomad_r2_1' = 'gnomad_r4') {
+  const requests = fakeGraphql(() => ({ data: { gene: { chrom: '1', variants } } }));
+  const svc = new GnomadService(getServerConfig());
+  const rows = await svc.listGeneVariants(
+    { kind: 'gene', value: 'PCSK9' },
+    {},
+    svc.resolveDatasetContext(dataset),
+    createMockContext(),
+  );
+  const qc = Object.fromEntries(
+    rows.map((row) => [
+      row.variant_id,
+      [row.exome_filters, row.genome_filters, row.qc_status] as const,
+    ]),
+  );
+  return { rows, qc, requests };
+}
+
+describe('GnomadService QC filters (#54)', () => {
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('selects filters on both callsets of the variant and list documents, never on joint', async () => {
+    const detail = fakeGraphql(() => ({
+      data: { variant: qcDetail('1-55039974-G-T'), clinvar_variant: null },
+    }));
+    const svc = new GnomadService(getServerConfig());
+    await svc.getVariant(
+      '1-55039974-G-T',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+    const { requests: list } = await listQc(QC_LIST_R4);
+
+    for (const query of [detail[0]?.query, list[0]?.query]) {
+      const flat = query?.replace(/\s+/g, ' ') ?? '';
+      expect(flat).toMatch(/exome \{[^}]*\bfilters\b/);
+      expect(flat).toMatch(/genome \{[^}]*\bfilters\b/);
+      expect(flat).not.toMatch(/joint \{[^}]*\bfilters\b/);
+    }
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it.each<[keyof typeof QC_DETAIL, 'pass' | 'filtered', unknown, unknown]>([
+    [
+      '1-55039866-G-A',
+      'filtered',
+      { ac: 0, an: 1_410_978, af: 0, homozygote_count: 0, hemizygote_count: 0, filters: ['AC0'] },
+      null,
+    ],
+    [
+      '1-55039800-G-A',
+      'filtered',
+      {
+        ac: 4,
+        an: 1_415_942,
+        af: 4 / 1_415_942,
+        homozygote_count: 0,
+        hemizygote_count: 0,
+        filters: ['AS_VQSR'],
+      },
+      null,
+    ],
+    [
+      '1-55039793-C-T',
+      'pass',
+      { ac: 0, an: 1_412_788, af: 0, homozygote_count: 0, hemizygote_count: 0, filters: ['AC0'] },
+      {
+        ac: 3,
+        an: 152_276,
+        af: 3 / 152_276,
+        homozygote_count: 0,
+        hemizygote_count: 0,
+        filters: [],
+      },
+    ],
+    [
+      '1-55039974-G-T',
+      'pass',
+      {
+        ac: 21_634,
+        an: 1_428_186,
+        af: 21_634 / 1_428_186,
+        homozygote_count: 209,
+        hemizygote_count: 0,
+        filters: [],
+      },
+      {
+        ac: 1_866,
+        an: 152_404,
+        af: 1_866 / 152_404,
+        homozygote_count: 17,
+        hemizygote_count: 0,
+        filters: [],
+      },
+    ],
+  ])(
+    'returns %s as qc_status %s with each callset on its own counts and filters',
+    async (variantId, qcStatus, exome, genome) => {
+      fakeGraphql(() => ({ data: { variant: qcDetail(variantId), clinvar_variant: null } }));
+      const svc = new GnomadService(getServerConfig());
+
+      const record = await svc.getVariant(
+        variantId,
+        svc.resolveDatasetContext('gnomad_r4'),
+        createMockContext(),
+      );
+
+      expect(record?.callsets).toEqual({ exome, genome });
+      expect(record?.qc_status).toBe(qcStatus);
+      // The overall counts still read joint; callsets carry the per-callset view beside them.
+      expect(record?.ac).toBe(QC_DETAIL[variantId].joint[0]);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('reads a carried callset with no filter list as unproven, never as a pass', async () => {
+    // A reply to a document that predates the filters selection: the genome record has no `filters`.
+    fakeGraphql(() => ({
+      data: {
+        variant: {
+          ...qcDetail('1-55039974-G-T'),
+          variant_id: '1-55039784-C-G',
+          exome: null,
+          genome: {
+            ac: 3,
+            an: 152_386,
+            af: 3 / 152_386,
+            homozygote_count: 0,
+            hemizygote_count: 0,
+            populations: [],
+          },
+          joint: null,
+        },
+        clinvar_variant: null,
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const record = await svc.getVariant(
+      '1-55039784-C-G',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(record?.source).toEqual(['genome']);
+    expect(record?.callsets.genome).toEqual({
+      ac: 3,
+      an: 152_386,
+      af: 3 / 152_386,
+      homozygote_count: 0,
+      hemizygote_count: 0,
+      filters: null,
+    });
+    expect(record?.qc_status).toBe('filtered');
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it("computes each callset's af from its own ac and an, never from gnomAD's af field", async () => {
+    // gnomAD types a callset's af nullable; a null one must not reach callsets.*.af.
+    fakeGraphql(() => ({
+      data: {
+        variant: {
+          ...qcDetail('1-55039793-C-T'),
+          exome: {
+            ac: 0,
+            an: 1_412_788,
+            af: null,
+            homozygote_count: 0,
+            hemizygote_count: 0,
+            filters: ['AC0'],
+            populations: [],
+          },
+          genome: {
+            ac: 3,
+            an: 152_276,
+            af: null,
+            homozygote_count: 0,
+            hemizygote_count: 0,
+            filters: [],
+            populations: [],
+          },
+        },
+        clinvar_variant: null,
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const record = await svc.getVariant(
+      '1-55039793-C-T',
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(record?.callsets.exome?.af).toBe(0);
+    expect(record?.callsets.genome?.af).toBe(3 / 152_276);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('derives each list row from its callsets: any carried callset passing makes the row pass', async () => {
+    const { qc } = await listQc(QC_LIST_R4);
+
+    expect(qc).toEqual({
+      '1-55039793-C-T': ['AC0', '', 'pass'],
+      '1-55039766-G-T': ['AC0|AS_VQSR', null, 'filtered'],
+      '1-55039784-C-G': [null, '', 'pass'],
+      '1-55046674-A-C': [null, 'AC0', 'filtered'],
+      '1-55052616-T-G': ['AC0|AS_VQSR', 'AS_VQSR', 'filtered'],
+      '1-55039974-G-T': ['', '', 'pass'],
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('reads a dataset-specific filter (gnomad_r2_1 RF) as filtered without a known-filter list', async () => {
+    const { qc } = await listQc(QC_LIST_R21, 'gnomad_r2_1');
+
+    expect(qc).toEqual({
+      '1-55505475-C-T': ['RF', null, 'filtered'],
+      '1-55505477-C-T': ['', '', 'pass'],
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('gives a callset that does not carry the variant, or carries no filter list, a null column', async () => {
+    const { rows, qc } = await listQc([
+      {
+        variant_id: '1-101-A-G',
+        consequence: null,
+        flags: null,
+        exome: { ac: null, an: null, af: null, homozygote_count: null, filters: [] },
+        genome: null,
+        joint: null,
+      },
+      {
+        variant_id: '1-102-A-G',
+        consequence: null,
+        flags: null,
+        exome: { ac: 1, an: 1_000, af: 0.001, homozygote_count: 0 },
+        genome: null,
+        joint: null,
+      },
+    ]);
+
+    expect(rows.map((row) => row.source)).toEqual(['', 'exome']);
+    expect(qc).toEqual({
+      '1-101-A-G': [null, null, 'filtered'],
+      '1-102-A-G': [null, null, 'filtered'],
+    });
+  });
+});
+
 /** gnomad_r4 predictor ids and value strings, shaped like the live `in_silico_predictors`. */
 const R4_PREDICTORS = [
   { id: 'cadd', value: '10.4' },

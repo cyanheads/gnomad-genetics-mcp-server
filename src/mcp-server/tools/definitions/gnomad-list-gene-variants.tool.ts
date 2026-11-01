@@ -1,7 +1,8 @@
 /**
  * @fileoverview gnomad_list_gene_variants — every variant in a gene / transcript
- * / region with allele frequencies and predicted consequences, filterable by
- * consequence class and a max-AF threshold. Sets larger than the inline
+ * / region with allele frequencies, predicted consequences, and per-callset QC
+ * filters, filterable by consequence class, a max-AF threshold, and QC status
+ * (pass_only, applied after qc_filtered is counted). Sets larger than the inline
  * preview spill to a DataCanvas table (gene_variants) for gnomad_dataframe_describe
  * and gnomad_dataframe_query; returns canvas_id + table_name plus the preview.
  * Degrades to a capped inline preview when the canvas is disabled.
@@ -28,8 +29,9 @@ const TABLE_NAME = 'gene_variants';
 /**
  * Inline preview budget in JSON characters of the preview rows, canvas on or
  * off. Each row lands on both surfaces (structuredContent and the format()
- * line), measured at ~1.63 serialized bytes per JSON character on real PCSK9
- * rows, so 14,000 keeps a response near 23 KB.
+ * line), measured at ~1.68 serialized bytes per JSON character on real PCSK9
+ * rows, so 14,000 keeps a response near 23 KB. Being counted in characters, the
+ * budget holds that size as rows widen: a wider row previews fewer rows.
  */
 const PREVIEW_CHARS = 14_000;
 
@@ -44,7 +46,21 @@ const TABLE_SCHEMA = rowSchema<GeneVariantRow>({
   homozygote_count: { type: 'BIGINT', nullable: false },
   source: { type: 'VARCHAR', nullable: false },
   flags: { type: 'VARCHAR', nullable: false },
+  exome_filters: { type: 'VARCHAR', nullable: true },
+  genome_filters: { type: 'VARCHAR', nullable: true },
+  qc_status: { type: 'VARCHAR', nullable: false },
+  transcript_id: { type: 'VARCHAR', nullable: true },
+  consequence_transcript: { type: 'VARCHAR', nullable: true },
 });
+
+/** A callset's QC filters column, as the service builds it. */
+const callsetFiltersField = (callset: 'exome' | 'genome') =>
+  z
+    .string()
+    .nullable()
+    .describe(
+      `QC filters gnomAD applied to the ${callset} call, pipe-joined (e.g. AC0|AS_VQSR; the set varies by dataset, RF on gnomad_r2_1). Empty when the ${callset} call passed QC; null when the ${callset} callset does not carry the variant or gnomAD returned no filter list.`,
+    );
 
 const GeneVariantRowSchema = z
   .object({
@@ -52,23 +68,59 @@ const GeneVariantRowSchema = z
     af: z
       .number()
       .nullable()
-      .describe('Allele frequency computed from joint allele counts; null when uncomputable.'),
-    ac: z.number().describe('Allele count (joint across carried callsets).'),
-    an: z.number().describe('Allele number (joint sum across carried callsets).'),
-    consequence: z.string().nullable().describe('VEP consequence term; null when none.'),
+      .describe(
+        'Allele frequency, ac/an from the same source — the value max_af filters on; null when an is 0.',
+      ),
+    ac: z
+      .number()
+      .describe(
+        "Allele count — gnomAD's joint exome + genome count on gnomad_r4, the sum across carried callsets on datasets without joint data.",
+      ),
+    an: z
+      .number()
+      .describe(
+        "Allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant; on gnomad_r3, gnomad_r2_1, and exac (no joint data), the sum across carried callsets.",
+      ),
+    consequence: z
+      .string()
+      .nullable()
+      .describe(
+        "VEP consequence term, as gnomAD's tables show it: the most severe in the gene on a gene target, the named transcript's term on a transcript target, the most severe across transcripts on a region target. It can sit on a non-primary isoform — see consequence_transcript. Null when none.",
+      ),
     consequence_class: z
       .enum(['lof', 'missense', 'synonymous', 'other'])
-      .describe('Bucketed consequence class.'),
-    homozygote_count: z.number().describe('Homozygote count (joint across callsets).'),
+      .describe(
+        "gnomAD's category of consequence (the terms each holds are listed on the consequence_class filter): lof is pLoF, missense covers missense and inframe indels, start_lost, and stop_lost; other includes a null consequence.",
+      ),
+    homozygote_count: z.number().describe('Homozygote count, from the same source as ac and an.'),
     source: z.string().describe('Carried callset(s), pipe-joined (e.g. exome|genome).'),
     flags: z.string().describe('Quality flags, pipe-joined (empty when none).'),
+    exome_filters: callsetFiltersField('exome'),
+    genome_filters: callsetFiltersField('genome'),
+    qc_status: z
+      .enum(['pass', 'filtered'])
+      .describe(
+        "gnomAD's QC verdict, by its browser's rule: pass when at least one callset carrying the variant passed QC (an empty filters column); filtered when none did — gnomAD's browser hides these by default, and AC0 among the filters means no high-quality carrier.",
+      ),
+    transcript_id: z
+      .string()
+      .nullable()
+      .describe(
+        'Ensembl transcript ID (unversioned) the consequence is on; null when gnomAD names none, as for an intergenic variant.',
+      ),
+    consequence_transcript: z
+      .enum(['mane_select', 'canonical', 'other'])
+      .nullable()
+      .describe(
+        "On a gene target, where transcript_id sits as gnomAD's gene table marks it (†): mane_select when it is the gene's MANE Select transcript; canonical when the gene has no MANE Select (none on gnomad_r2_1 or exac) and it is the canonical transcript; other when the consequence is on another transcript, so it may be milder or absent on the primary one — gnomad_get_variant's primary_transcript gives that term. Null on transcript and region targets, and for a gene with neither a MANE Select nor a canonical transcript.",
+      ),
   })
   .describe('One gene-variant row — also the canvas table column set.');
 
 export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
   title: 'gnomad-genetics-mcp-server: list gene variants',
   description:
-    'List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE=none) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    "List every gnomAD variant in a gene, transcript, or region with allele frequencies, predicted consequences, and QC status, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. Every row carries its exome and genome QC filters and a qc_status; qc_filtered counts the matching variants that failed QC in every callset carrying them (often AC0, no high-quality carrier, at AF 0), which gnomAD's browser hides by default — read them as low-confidence, not observed variants, or pass pass_only to drop them. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE=none) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -96,7 +148,9 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     consequence_class: z
       .enum(['lof', 'missense', 'synonymous', 'other'])
       .optional()
-      .describe('Keep only variants in this consequence class. Omit to return all classes.'),
+      .describe(
+        "Keep only variants in this gnomAD consequence category, read from each row's consequence: lof (pLoF) is transcript_ablation, splice_acceptor_variant, splice_donor_variant, stop_gained, frameshift_variant; missense (missense / inframe indel) is missense_variant, stop_lost, start_lost, inframe_insertion, inframe_deletion; synonymous is synonymous_variant; other is every other term and a null consequence. Omit to return all classes.",
+      ),
     max_af: z
       .number()
       .min(0)
@@ -104,6 +158,12 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .optional()
       .describe(
         'Keep only variants with allele frequency ≤ this value (0–1). Variants with null AF are always kept.',
+      ),
+    pass_only: z
+      .boolean()
+      .optional()
+      .describe(
+        "Keep only variants that passed gnomAD QC in at least one callset carrying them (qc_status pass), as gnomAD's browser shows by default. Applied after consequence_class and max_af; qc_filtered still counts the dropped rows. Omit to list every matching variant with its QC columns — a single-position region then never reads as absent because of QC.",
       ),
     canvas_id: CanvasIdSchema.optional().describe(
       'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, this call always writes its result to the gene_variants table on that canvas, replacing (not appending to) the previous one — even when the result fits inline; a result with no variants removes the table. Omit to stage on a fresh canvas only when the result is too large to inline.',
@@ -132,7 +192,16 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .describe(
         'True when the result exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all.',
       ),
-    total: z.number().describe('Total matching variants, including any beyond the preview.'),
+    total: z
+      .number()
+      .describe(
+        'Total matching variants, including any beyond the preview — counted after pass_only drops QC-failed rows when it is set, so it then excludes the qc_filtered rows.',
+      ),
+    qc_filtered: z
+      .number()
+      .describe(
+        'Matching variants that failed gnomAD QC in every callset carrying them (qc_status filtered), counted over every match — not just the preview — before pass_only drops them.',
+      ),
     dataset: z.string().describe('Effective gnomAD dataset.'),
     reference_genome: z.string().describe('Effective reference build.'),
   }),
@@ -141,7 +210,7 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       .string()
       .optional()
       .describe(
-        'Guidance when no variants matched, when the canvas is disabled and the preview is capped, and — when a table was staged — its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.',
+        'Guidance when no variants matched, when matching variants failed gnomAD QC (the qc_filtered count, and what pass_only dropped), when the canvas is disabled and the preview is capped, and — when a table was staged — its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.',
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -235,19 +304,37 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
       ctx,
     );
 
-    const rows = await svc.listGeneVariants(
+    const matched = await svc.listGeneVariants(
       target,
       { consequenceClass: input.consequence_class, maxAf: input.max_af },
       dsCtx,
       ctx,
     );
+    // Counted over every match before pass_only, so the count survives the drop.
+    const qcFiltered = matched.filter((row) => row.qc_status === 'filtered').length;
+    const rows = input.pass_only ? matched.filter((row) => row.qc_status === 'pass') : matched;
 
     /**
      * ctx.enrich.notice is last-wins, so every part is collected here and
-     * written once, in order: no-match or capped preview → staged table.
+     * written once, in order: no-match or QC → capped preview → staged table.
      */
     const notices: string[] = [];
-    if (rows.length === 0) notices.push(noMatchNotice(target.kind, target.value, input));
+    const scope = targetScope(target.kind, target.value, input);
+    if (matched.length === 0) {
+      notices.push(
+        `No variants in ${scope}. Broaden the filters, or verify the ${target.kind} exists in this dataset.`,
+      );
+    } else if (rows.length === 0) {
+      notices.push(
+        `All ${qcFiltered} variant(s) in ${scope} failed gnomAD QC in every callset carrying them, so pass_only dropped them. Omit pass_only to list them with their exome_filters and genome_filters.`,
+      );
+    } else if (qcFiltered > 0) {
+      notices.push(
+        input.pass_only
+          ? `pass_only dropped ${qcFiltered} of ${matched.length} matching variant(s) that failed gnomAD QC in every callset carrying them.`
+          : `${qcFiltered} of ${matched.length} matching variant(s) failed gnomAD QC in every callset carrying them (qc_status "filtered"; gnomAD's browser hides these by default); exome_filters and genome_filters name the filters. ${qcFiltered === matched.length ? 'None passed, so pass_only: true would return no rows.' : 'Pass pass_only: true to drop them.'}`,
+      );
+    }
 
     const { capped, staged } = await stageRows({
       rows,
@@ -269,28 +356,48 @@ export const gnomadListGeneVariants = tool('gnomad_list_gene_variants', {
     }
     if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
-    return { ...staged, dataset: dsCtx.dataset, reference_genome: dsCtx.reference_genome };
+    return {
+      ...staged,
+      qc_filtered: qcFiltered,
+      dataset: dsCtx.dataset,
+      reference_genome: dsCtx.reference_genome,
+    };
   },
 
   format: (result) => {
     const lines = [
       `## Gene variants — ${result.total} total`,
-      `**Dataset:** ${result.dataset} (${result.reference_genome}) | **Spilled:** ${result.spilled ? 'yes' : 'no'}`,
+      `**Dataset:** ${result.dataset} (${result.reference_genome}) | **Spilled:** ${result.spilled ? 'yes' : 'no'} | **QC filtered:** ${result.qc_filtered}`,
       stagedLine(result),
       '',
       `Showing ${result.preview.length} preview row(s):`,
     ];
     for (const r of result.preview) {
       const af = r.af != null ? `${r.af} (${r.af.toExponential(3)})` : 'n/a';
+      // A null filters column (callset not carrying the variant) is left out; '' is a pass.
+      const callsetQc = (
+        [
+          ['exome', r.exome_filters],
+          ['genome', r.genome_filters],
+        ] as const
+      )
+        .filter(([, filters]) => filters != null)
+        .map(([name, filters]) => `${name} ${filters ? escapeMarkdownInline(filters) : 'passed'}`);
+      // Left out only when both are null (no transcript, no marker); a gene row without a transcript is still marked.
+      const transcript =
+        r.transcript_id == null && r.consequence_transcript == null
+          ? ''
+          : ` | transcript ${escapeMarkdownInline(r.transcript_id ?? 'none')}${r.consequence_transcript ? ` (${r.consequence_transcript})` : ''}`;
       lines.push(
-        `- **${escapeMarkdownInline(r.variant_id)}** | ${r.consequence_class}${r.consequence ? ` (${escapeMarkdownInline(r.consequence)})` : ''} | AF ${af} | AC ${r.ac}/${r.an} | hom ${r.homozygote_count} | ${escapeMarkdownInline(r.source || 'none')}${r.flags ? ` | flags ${escapeMarkdownInline(r.flags)}` : ''}`,
+        `- **${escapeMarkdownInline(r.variant_id)}** | ${r.consequence_class}${r.consequence ? ` (${escapeMarkdownInline(r.consequence)})` : ''} | AF ${af} | AC ${r.ac}/${r.an} | hom ${r.homozygote_count} | ${escapeMarkdownInline(r.source || 'none')}${r.flags ? ` | flags ${escapeMarkdownInline(r.flags)}` : ''} | QC ${r.qc_status}${callsetQc.length ? ` (${callsetQc.join(', ')})` : ''}${transcript}`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });
 
-function noMatchNotice(
+/** The target and its filters, as the no-match and QC notices name them. */
+function targetScope(
   kind: string,
   value: string,
   input: { consequence_class?: string | undefined; max_af?: number | undefined },
@@ -299,5 +406,5 @@ function noMatchNotice(
   if (input.consequence_class) filters.push(`consequence_class=${input.consequence_class}`);
   if (input.max_af != null) filters.push(`max_af=${input.max_af}`);
   const filterText = filters.length ? ` matching ${filters.join(', ')}` : '';
-  return `No variants in ${kind} "${value}"${filterText}. Broaden the filters, or verify the ${kind} exists in this dataset.`;
+  return `${kind} "${value}"${filterText}`;
 }

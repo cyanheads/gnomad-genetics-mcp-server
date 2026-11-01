@@ -35,6 +35,7 @@ import type { GeneVariantRow } from '@/services/gnomad/types.js';
 
 type CallToolResult = Awaited<ReturnType<typeof runToolContract>>;
 
+/** The first 120 rows of the server's live gnomad_r4 PCSK9 list, captured 2026-11-01 06:23 (UTC). */
 const LIVE_VARIANTS = JSON.parse(
   readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
 ) as GeneVariantRow[];
@@ -287,6 +288,11 @@ const GENE_VARIANT_COLUMNS: Column[] = [
   { name: 'homozygote_count', type: 'BIGINT', nullable: false },
   { name: 'source', type: 'VARCHAR', nullable: false },
   { name: 'flags', type: 'VARCHAR', nullable: false },
+  { name: 'exome_filters', type: 'VARCHAR', nullable: true },
+  { name: 'genome_filters', type: 'VARCHAR', nullable: true },
+  { name: 'qc_status', type: 'VARCHAR', nullable: false },
+  { name: 'transcript_id', type: 'VARCHAR', nullable: true },
+  { name: 'consequence_transcript', type: 'VARCHAR', nullable: true },
 ];
 
 const CLINVAR_COLUMNS: Column[] = [
@@ -367,6 +373,55 @@ describe('staged column types (#35, #37)', () => {
       'SELECT count(*) FILTER (WHERE af > 0) AS af_pos FROM gene_variants',
     );
     expect(Number(counts.af_pos)).toBe(FRACTIONAL.length);
+    // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/57
+    // Every one of the fixture's 120 rows sits on PCSK9's MANE Select transcript.
+    const transcripts = await sql(
+      canvasId,
+      "SELECT count(*) FILTER (WHERE consequence_transcript = 'mane_select') AS mane, count(*) FILTER (WHERE transcript_id = 'ENST00000302118') AS on_mane FROM gene_variants",
+    );
+    expect([transcripts.mane, transcripts.on_mane].map(Number)).toEqual([120, 120]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it('stages the live QC columns, and only passing rows under pass_only', async () => {
+    serveVariants(LIVE_VARIANTS);
+    const all = await call(gnomadListGeneVariants, { gene: 'PCSK9' });
+    const canvasId = sc(all).canvas_id as string;
+
+    // The fixture's 120 rows: 59 fail QC in every callset carrying them, 61 pass.
+    expect(sc(all)).toMatchObject({ spilled: true, total: 120, qc_filtered: 59 });
+    const counts = await sql(
+      canvasId,
+      "SELECT count(*) FILTER (WHERE qc_status = 'filtered') AS filtered, count(*) FILTER (WHERE exome_filters IS NULL) AS no_exome, count(*) FILTER (WHERE genome_filters IS NULL) AS no_genome FROM gene_variants",
+    );
+    expect([counts.filtered, counts.no_exome, counts.no_genome].map(Number)).toEqual([59, 2, 97]);
+    expect(
+      await sql(
+        canvasId,
+        "SELECT exome_filters, genome_filters, qc_status FROM gene_variants WHERE variant_id = '1-55039766-G-T'",
+      ),
+    ).toEqual({ exome_filters: 'AC0|AS_VQSR', genome_filters: null, qc_status: 'filtered' });
+    expect(
+      await sql(
+        canvasId,
+        "SELECT exome_filters, genome_filters, qc_status FROM gene_variants WHERE variant_id = '1-55039793-C-T'",
+      ),
+    ).toEqual({ exome_filters: 'AC0', genome_filters: '', qc_status: 'pass' });
+
+    const passOnly = await call(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      pass_only: true,
+      canvas_id: canvasId,
+    });
+    expect(sc(passOnly)).toMatchObject({ total: 61, qc_filtered: 59 });
+    expect((sc(passOnly).preview as GeneVariantRow[]).every((r) => r.qc_status === 'pass')).toBe(
+      true,
+    );
+    const staged = await sql(
+      canvasId,
+      "SELECT count(*) AS n, count(*) FILTER (WHERE qc_status <> 'pass') AS not_pass FROM gene_variants",
+    );
+    expect([staged.n, staged.not_pass].map(Number)).toEqual([61, 0]);
   });
 
   it('keeps af DOUBLE when a spill preview holds only null and zero AFs', async () => {

@@ -4,7 +4,7 @@ description: Use gnomad_* tools to follow ClinVar gene candidates into populatio
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -25,6 +25,7 @@ For a single candidate, the user-invoked `gnomad_variant_triage` prompt already 
 - Before following an rsID into population evidence, inspect its batch outcome. For `ambiguous_rsid`, select the concrete allele matching the candidate from `candidates`, or resolve it through dbSNP or Ensembl when candidates are unavailable. Do not choose the first candidate by position.
 - Before calling a ClinVar search complete, follow `next_offset` until it is null. A window can have no retained rows after filtering while later candidate windows remain. `total_found` counts search candidates, not the final classified set; report `unavailable_ids` as gaps.
 - Before combining staged windows or genes, account for table replacement: another list call on the same canvas replaces `gene_variants`, and another ClinVar call replaces `clinvar_variants`. Query or retain the current result before advancing, or use separate canvases. Reusing a canvas does not append rows.
+- Before reading a catalog count or row as observed variants, check `qc_status` and `qc_filtered`. A `filtered` row failed gnomAD QC in every callset carrying it, often `AC0` (no high-quality carrier) at AF 0, so it passes any `max_af` and sorts first under `ORDER BY af`. Count, rank, or describe only `pass` rows as observed — filter on `qc_status` in SQL, or pass `pass_only` — and report the filtered rows separately. On `gnomad_get_variant`, read `callsets.*.filters` for the reason; a filtered record is a QC-failed call, neither an observed carrier nor proof of absence.
 - Before describing a frequency-filtered catalog as rare variants, separate rows with null AF. They survive the maximum-frequency filter because their frequency is unknown.
 - Before treating an inline preview as the full candidate set, compare it with the reported total and inspect notices. If the canvas is unavailable and rows were omitted, the preview cannot support an exhaustive count or ranking.
 
@@ -42,7 +43,7 @@ Process one ClinVar window at a time. Inspect or query all retained rows, select
 
 ### Screen a gene variant catalog
 
-Use `gnomad_list_gene_variants` to select candidates by consequence and frequency, then `gnomad_get_variant` for the selected IDs' full ancestry vectors and annotations. The catalog's joint AF is a screening value; it does not replace the detailed population record. Keep unknown-frequency rows distinct from measured rare rows, and do not turn a catalog shortlist into an unsupported pathogenicity ranking.
+Use `gnomad_list_gene_variants` to select candidates by consequence and frequency, then `gnomad_get_variant` for the selected IDs' full ancestry vectors and annotations. The catalog's joint AF is a screening value; it does not replace the detailed population record. Keep unknown-frequency rows distinct from measured rare rows, and do not turn a catalog shortlist into an unsupported pathogenicity ranking. A row's `consequence` is the most severe term in the gene and can sit on a minor isoform: where `consequence_transcript` is `other`, read the selected variant's `primary_transcript`, which covers the gene in its `gene_symbol`, before calling it pLoF. A null `primary_transcript` means the variant lies outside the gene's MANE Select and canonical transcripts altogether, not that the consequence there is unknown.
 
 ### Analyze staged results
 

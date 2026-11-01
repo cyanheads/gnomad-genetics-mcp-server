@@ -380,6 +380,7 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
   });
 
   it('keeps a full SELECT * page of live gnomAD rows under 24 KB on both surfaces', async () => {
+    // The server's live gnomad_r4 PCSK9 rows, captured 2026-11-01 06:23 (UTC).
     const live = JSON.parse(
       readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
     ) as Record<string, unknown>[];
@@ -397,6 +398,11 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
         { name: 'homozygote_count', type: 'BIGINT', nullable: false },
         { name: 'source', type: 'VARCHAR', nullable: false },
         { name: 'flags', type: 'VARCHAR', nullable: false },
+        { name: 'exome_filters', type: 'VARCHAR' },
+        { name: 'genome_filters', type: 'VARCHAR' },
+        { name: 'qc_status', type: 'VARCHAR', nullable: false },
+        { name: 'transcript_id', type: 'VARCHAR' },
+        { name: 'consequence_transcript', type: 'VARCHAR' },
       ],
     });
 

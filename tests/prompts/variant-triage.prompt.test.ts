@@ -192,4 +192,20 @@ describe('gnomad_variant_triage prompt', () => {
     const text = await renderText({ variant: 'rs11591147', gene: ' PCSK9 ' });
     expect(text).toContain('gnomad_get_gene_constraint(gene: "PCSK9")');
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
+  it.each(['1-55039866-G-A', 'rs11591147'])(
+    'has step 1 check qc_status and each callset’s filters before reading the frequency (%s)',
+    async (variant) => {
+      const text = await renderText({ variant });
+      const frequencyStep = text.split('\n').find((line) => line.startsWith('1. ')) ?? '';
+
+      expect(frequencyStep).toContain('`qc_status`');
+      expect(frequencyStep).toContain('`callsets.exome.filters`');
+      expect(frequencyStep).toContain('`callsets.genome.filters`');
+      expect(frequencyStep.indexOf('qc_status')).toBeLessThan(frequencyStep.indexOf('AC/AN/AF'));
+      const synthesis = text.split('\n').find((line) => line.startsWith('Synthesize:')) ?? '';
+      expect(synthesis).toContain('filtered qc_status');
+    },
+  );
 });

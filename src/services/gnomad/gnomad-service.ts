@@ -40,7 +40,9 @@ import {
   VARIANT_SEARCH_QUERY,
 } from './queries.js';
 import {
+  type CallsetRecord,
   type ConsequenceClass,
+  type ConsequenceTranscript,
   type ConstraintRelease,
   type CoverageSummary,
   type Dataset,
@@ -49,7 +51,10 @@ import {
   type GenomeTarget,
   type InSilicoPredictor,
   isCanonicalAncestry,
+  type JointPopulationFreq,
   type PopulationFreq,
+  type PrimaryTranscriptConsequence,
+  type QcStatus,
   type ReferenceGenome,
   type VariantRecord,
 } from './types.js';
@@ -216,6 +221,13 @@ const RawPopulation = z.object({
   hemizygote_count: z.number().nullable(),
 });
 
+/**
+ * A callset's QC filters — empty when it passed. gnomAD's schema types the list
+ * nullable and every observed record carries one; absent reads as null, which
+ * proves no pass (a reply to a document that predates the selection).
+ */
+const RawFilters = z.array(z.string()).nullish();
+
 const RawSeqData = z
   .object({
     ac: z.number().nullable(),
@@ -223,9 +235,19 @@ const RawSeqData = z
     af: z.number().nullable(),
     homozygote_count: z.number().nullable(),
     hemizygote_count: z.number().nullable(),
+    filters: RawFilters,
     populations: z.array(RawPopulation).nullable(),
   })
   .nullable();
+
+/**
+ * gnomAD's joint exome + genome record: null outside gnomad_r4, and no `af`
+ * field; its `filters` are never selected. Its AN spans every callable sample
+ * in both callsets, including a callset that does not carry the variant. Read
+ * as absent when a payload omits it, which takes the same callset-sum path as
+ * null.
+ */
+const RawJointData = RawSeqData.unwrap().omit({ af: true, filters: true }).nullish();
 
 const RawVariant = z
   .object({
@@ -235,12 +257,24 @@ const RawVariant = z
     flags: z.array(z.string()).nullable(),
     exome: RawSeqData,
     genome: RawSeqData,
+    joint: RawJointData,
+    /**
+     * gnomAD types gene_id and transcript_id non-null. gene_id and the fields
+     * after major_consequence read as absent on a reply to a document that
+     * predates their selection.
+     */
     transcript_consequences: z
       .array(
         z.object({
+          gene_id: z.string().optional(),
           gene_symbol: z.string().nullable(),
-          transcript_id: z.string().nullable(),
+          transcript_id: z.string(),
           major_consequence: z.string().nullable(),
+          is_mane_select: z.boolean().nullish(),
+          is_canonical: z.boolean().nullish(),
+          hgvsc: z.string().nullish(),
+          hgvsp: z.string().nullish(),
+          lof: z.string().nullish(),
         }),
       )
       .nullable(),
@@ -336,25 +370,39 @@ const RawListSeqData = z
     an: z.number().nullable(),
     af: z.number().nullable(),
     homozygote_count: z.number().nullable(),
+    filters: RawFilters,
   })
   .nullable();
 
 const RawListVariant = z.object({
   variant_id: z.string(),
   consequence: z.string().nullable(),
+  /** Null for a variant with no transcript consequence (intergenic); absent reads as null. */
+  transcript_id: z.string().nullish(),
   flags: z.array(z.string()).nullable(),
   exome: RawListSeqData,
   genome: RawListSeqData,
+  /** The joint totals only (see RawJointData); absent reads as null. */
+  joint: RawListSeqData.unwrap().omit({ af: true, filters: true }).nullish(),
 });
 
-const RawFeatureVariants = z
-  .object({ chrom: z.string(), variants: z.array(RawListVariant).nullable() })
-  .nullable()
-  .optional();
+const RawFeatureVariants = z.object({
+  chrom: z.string(),
+  variants: z.array(RawListVariant).nullable(),
+});
+
+/**
+ * A gene's list also carries its primary transcripts. Both are nullable in
+ * gnomAD's schema (no MANE Select on GRCh37); absent reads as null.
+ */
+const RawGeneVariants = RawFeatureVariants.extend({
+  canonical_transcript_id: z.string().nullish(),
+  mane_select_transcript: z.object({ ensembl_id: z.string() }).nullish(),
+});
 
 const VariantListResponse = z.object({
-  gene: RawFeatureVariants,
-  transcript: RawFeatureVariants,
+  gene: RawGeneVariants.nullable().optional(),
+  transcript: RawFeatureVariants.nullable().optional(),
   region: z
     .object({ variants: z.array(RawListVariant).nullable() })
     .nullable()
@@ -457,24 +505,31 @@ function basesInWindow(pos: number, { bucketSize, intervals }: CoverageWindow): 
   );
 }
 
-/** Classify a VEP consequence term into the four-bucket consequence class. */
-const LOF_TERMS = new Set([
-  'transcript_ablation',
-  'splice_acceptor_variant',
-  'splice_donor_variant',
-  'stop_gained',
-  'frameshift_variant',
-  'stop_lost',
-  'start_lost',
-  'transcript_amplification',
+/**
+ * gnomAD's consequence categories for the terms outside `other`, from
+ * gnomad-browser's `vepConsequences.ts`: pLoF, then Missense / Inframe indel.
+ */
+const CONSEQUENCE_CLASS_BY_TERM: ReadonlyMap<string, ConsequenceClass> = new Map([
+  ['transcript_ablation', 'lof'],
+  ['splice_acceptor_variant', 'lof'],
+  ['splice_donor_variant', 'lof'],
+  ['stop_gained', 'lof'],
+  ['frameshift_variant', 'lof'],
+  ['missense_variant', 'missense'],
+  ['stop_lost', 'missense'],
+  ['start_lost', 'missense'],
+  ['inframe_insertion', 'missense'],
+  ['inframe_deletion', 'missense'],
+  ['synonymous_variant', 'synonymous'],
 ]);
 
-function classifyConsequence(term: string | null): ConsequenceClass {
-  if (!term) return 'other';
-  if (LOF_TERMS.has(term)) return 'lof';
-  if (term === 'missense_variant') return 'missense';
-  if (term === 'synonymous_variant') return 'synonymous';
-  return 'other';
+/**
+ * A VEP consequence term's gnomAD category. Every other term is `other` — the
+ * rest of gnomAD's table, terms it lists in no category, and a null
+ * consequence — as gnomAD's browser filter reads them (`filterVariants.ts`).
+ */
+export function classifyConsequence(term: string | null): ConsequenceClass {
+  return CONSEQUENCE_CLASS_BY_TERM.get(term ?? '') ?? 'other';
 }
 
 /** True when a GraphQL `data` payload holds an explicit null at the named root field. */
@@ -526,6 +581,77 @@ interface ClinvarLookup {
 function computeAf(ac: number | null | undefined, an: number | null | undefined): number | null {
   if (ac == null || an == null || an === 0) return null;
   return ac / an;
+}
+
+/** One record's counts, shared by the callset and joint group vectors, the per-callset view, and the joint overall. */
+function groupCounts(
+  p: Omit<z.infer<typeof RawPopulation>, 'id'>,
+): Omit<JointPopulationFreq, 'id'> {
+  return {
+    ac: p.ac ?? 0,
+    an: p.an ?? 0,
+    af: computeAf(p.ac, p.an),
+    homozygote_count: p.homozygote_count ?? 0,
+    hemizygote_count: p.hemizygote_count,
+  };
+}
+
+/**
+ * The QC filters of a callset that carries the variant (has an AC, as `source`
+ * counts it); null for one that does not. An absent list stays null.
+ */
+function carriedFilters(
+  callset: { ac: number | null; filters?: string[] | null | undefined } | null,
+): string[] | null {
+  return callset?.ac != null ? (callset.filters ?? null) : null;
+}
+
+/**
+ * gnomAD browser's QC rule (VariantList/filterVariants.ts): a variant passes
+ * when any callset carrying it has an empty filter list. The filter names are
+ * never read, so each dataset's vocabulary (AC0, AS_VQSR, RF, VQSRTranche…)
+ * counts alike; a carried callset with no list proves no pass.
+ */
+function qcStatus(carried: readonly (readonly string[] | null)[]): QcStatus {
+  return carried.some((filters) => filters?.length === 0) ? 'pass' : 'filtered';
+}
+
+/**
+ * The consequence on the primary transcript of the reported consequence's gene
+ * (the gene of transcript_consequences[0]): its MANE Select entry, else its
+ * canonical entry. Another gene's entries never stand in.
+ */
+function primaryTranscriptConsequence(
+  entries: NonNullable<NonNullable<z.infer<typeof RawVariant>>['transcript_consequences']>,
+): PrimaryTranscriptConsequence | null {
+  const geneId = entries[0]?.gene_id;
+  const inGene = entries.filter((entry) => entry.gene_id === geneId);
+  const primary =
+    inGene.find((entry) => entry.is_mane_select) ?? inGene.find((entry) => entry.is_canonical);
+  if (!primary) return null;
+  return {
+    transcript_id: primary.transcript_id,
+    is_mane_select: primary.is_mane_select ?? null,
+    consequence: primary.major_consequence,
+    hgvsc: primary.hgvsc ?? null,
+    hgvsp: primary.hgvsp ?? null,
+    lof: primary.lof ?? null,
+  };
+}
+
+/**
+ * The transcript gnomAD's gene table marks each row's consequence against
+ * (VariantList/variantTableColumns.tsx): the gene's MANE Select transcript,
+ * else its canonical one. Null for a gene with neither.
+ */
+function genePrimaryTranscript(
+  gene: z.infer<typeof RawGeneVariants>,
+): { id: string; kind: Exclude<ConsequenceTranscript, 'other'> } | null {
+  if (gene.mane_select_transcript) {
+    return { id: gene.mane_select_transcript.ensembl_id, kind: 'mane_select' };
+  }
+  if (gene.canonical_transcript_id) return { id: gene.canonical_transcript_id, kind: 'canonical' };
+  return null;
 }
 
 /** A decimal score as gnomAD writes one: optional sign, fraction, and exponent. */
@@ -898,6 +1024,11 @@ export class GnomadService {
   ): VariantRecord {
     const source: VariantRecord['source'] = [];
     const populations: PopulationFreq[] = [];
+    const callsets: Record<'exome' | 'genome', CallsetRecord | null> = {
+      exome: null,
+      genome: null,
+    };
+    // The carried-callset sum — the overall counts wherever gnomAD publishes no joint record.
     let ac = 0;
     let an = 0;
     let hom = 0;
@@ -912,6 +1043,7 @@ export class GnomadService {
     ] as const) {
       if (!data || data.ac == null) continue;
       source.push(src);
+      callsets[src] = { ...groupCounts(data), filters: data.filters ?? null };
       ac += data.ac;
       an += data.an ?? 0;
       hom += data.homozygote_count ?? 0;
@@ -922,35 +1054,52 @@ export class GnomadService {
         hasAf = true;
       }
       for (const p of data.populations ?? []) {
-        if (!isCanonicalAncestry(p.id)) continue;
-        populations.push({
-          id: p.id,
-          source: src,
-          ac: p.ac ?? 0,
-          an: p.an ?? 0,
-          af: computeAf(p.ac, p.an),
-          homozygote_count: p.homozygote_count ?? 0,
-          hemizygote_count: p.hemizygote_count,
-        });
+        if (isCanonicalAncestry(p.id))
+          populations.push({ id: p.id, source: src, ...groupCounts(p) });
       }
     }
 
-    const tc = v.transcript_consequences?.[0];
+    let overall: Pick<VariantRecord, 'ac' | 'an' | 'af' | 'homozygote_count' | 'hemizygote_count'> =
+      {
+        ac,
+        an,
+        af: hasAf ? afNumerator / afDenominator : null,
+        homozygote_count: hom,
+        hemizygote_count: hemi,
+      };
+    const jointPopulations: JointPopulationFreq[] = [];
+    /**
+     * gnomad_r4's joint record is the overall source when it carries an AC, as
+     * a callset does: its AN spans both callsets' callable samples, so a
+     * single-callset variant is not divided by that callset's AN alone — the
+     * Total gnomAD's own browser shows. `source` still names only the callsets
+     * carrying the variant.
+     */
+    const { joint } = v;
+    if (joint?.ac != null) {
+      overall = groupCounts(joint);
+      for (const p of joint.populations ?? []) {
+        if (isCanonicalAncestry(p.id)) jointPopulations.push({ id: p.id, ...groupCounts(p) });
+      }
+    }
+
+    const consequences = v.transcript_consequences ?? [];
+    const tc = consequences[0];
     return {
       variant_id: v.variant_id,
       rsids: v.rsids ?? [],
       reference_genome: dsCtx.reference_genome,
       dataset: dsCtx.dataset,
-      ac,
-      an,
-      af: hasAf ? afNumerator / afDenominator : null,
-      homozygote_count: hom,
-      hemizygote_count: hemi,
+      ...overall,
       populations,
+      joint_populations: jointPopulations,
+      callsets,
       source,
       flags: v.flags ?? [],
+      qc_status: qcStatus([callsets.exome?.filters ?? null, callsets.genome?.filters ?? null]),
       consequence: tc?.major_consequence ?? null,
       transcript_id: tc?.transcript_id ?? null,
+      primary_transcript: primaryTranscriptConsequence(consequences),
       gene_symbol: tc?.gene_symbol ?? null,
       in_silico: (v.in_silico_predictors ?? []).map((p) => ({
         id: p.id,
@@ -1041,7 +1190,9 @@ export class GnomadService {
     );
     assertNuclearFeature(target, data.gene ?? data.transcript);
     const raw = (data.gene ?? data.transcript ?? data.region)?.variants ?? [];
-    const rows = raw.map((r) => this.normalizeListVariant(r));
+    // gnomAD's gene table marks consequences off the primary transcript on gene targets only.
+    const primary = data.gene ? genePrimaryTranscript(data.gene) : null;
+    const rows = raw.map((r) => this.normalizeListVariant(r, primary));
     return rows.filter((row) => {
       if (filters.consequenceClass && row.consequence_class !== filters.consequenceClass)
         return false;
@@ -1050,30 +1201,47 @@ export class GnomadService {
     });
   }
 
-  private normalizeListVariant(r: RawListVariantT): GeneVariantRow {
-    const exome = r.exome;
-    const genome = r.genome;
-    const ac = (exome?.ac ?? 0) + (genome?.ac ?? 0);
-    // Joint frequency over the carried callsets: sum ac and an across exome +
-    // genome, then af = ac/an — matching normalizeVariant(). The per-callset
-    // upstream af describes one callset only, so it must not stand in for the
-    // joint frequency: an exome-only af on a dual-callset row understates it and
-    // would make max_af filter on the wrong number.
-    const an = (exome?.an ?? 0) + (genome?.an ?? 0);
-    const af = computeAf(ac, an);
+  private normalizeListVariant(
+    r: RawListVariantT,
+    primary: ReturnType<typeof genePrimaryTranscript>,
+  ): GeneVariantRow {
+    const { exome, genome, joint } = r;
+    /**
+     * Overall counts match normalizeVariant(): gnomAD's joint record where it
+     * carries an AC (gnomad_r4), else the sum across exome + genome. ac, an, and
+     * homozygote_count share that one source and af = ac/an, so max_af filters
+     * on the frequency the row shows. The per-callset upstream af describes one
+     * callset only and never stands in for it.
+     */
+    const counts =
+      joint?.ac != null
+        ? { ac: joint.ac, an: joint.an ?? 0, homozygote_count: joint.homozygote_count ?? 0 }
+        : {
+            ac: (exome?.ac ?? 0) + (genome?.ac ?? 0),
+            an: (exome?.an ?? 0) + (genome?.an ?? 0),
+            homozygote_count: (exome?.homozygote_count ?? 0) + (genome?.homozygote_count ?? 0),
+          };
     const source: string[] = [];
     if (exome?.ac != null) source.push('exome');
     if (genome?.ac != null) source.push('genome');
+    const exomeFilters = carriedFilters(exome);
+    const genomeFilters = carriedFilters(genome);
+    const transcriptId = r.transcript_id ?? null;
     return {
       variant_id: r.variant_id,
-      af,
-      ac,
-      an,
+      af: computeAf(counts.ac, counts.an),
+      ac: counts.ac,
+      an: counts.an,
       consequence: r.consequence,
       consequence_class: classifyConsequence(r.consequence),
-      homozygote_count: (exome?.homozygote_count ?? 0) + (genome?.homozygote_count ?? 0),
+      homozygote_count: counts.homozygote_count,
       source: source.join('|'),
       flags: (r.flags ?? []).join('|'),
+      exome_filters: exomeFilters?.join('|') ?? null,
+      genome_filters: genomeFilters?.join('|') ?? null,
+      qc_status: qcStatus([exomeFilters, genomeFilters]),
+      transcript_id: transcriptId,
+      consequence_transcript: primary && (transcriptId === primary.id ? primary.kind : 'other'),
     };
   }
 

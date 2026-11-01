@@ -10,9 +10,9 @@ Human population genetics over [gnomAD](https://gnomad.broadinstitute.org) (the 
 
 | Tool | Summary | readOnlyHint | openWorldHint | Key inputs | Output shape |
 |---|---|---|---|---|---|
-| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per ancestry group, homozygote/hemizygote counts, quality flags, transcript consequence, in-silico predictors, and joined ClinVar significance. The "how common / is it benign" answer in one call. Per-id batch (up to 25 IDs) with partial success. | `true` | `true` | `variants[]` (1–25 items; each a `chrom-pos-ref-alt` variantId on chromosomes 1–22/X/Y with optional `chr` prefix and positive position (M/MT fail per item as `mitochondrial_unsupported`), or an rsID; coordinate IDs normalize to upper-case unprefixed form), `dataset`, `reference_genome` | `{ found[], failed[], dataset, reference_genome }` (each `failed[]` item `{ variant, error, reason, recovery, candidates? }` — `reason` from the tool's declared set, `recovery` its declared hint) |
+| `gnomad_get_variant` | Full population record for one or more variants — AC/AN/AF overall and per ancestry group, homozygote/hemizygote counts, quality flags, per-callset counts and QC filters with a `qc_status`, the most severe transcript consequence beside the consequence on the gene's MANE Select (else canonical) transcript (`primary_transcript`), in-silico predictors, and joined ClinVar significance. The "how common / is it benign" answer in one call. Per-id batch (up to 25 IDs) with partial success. | `true` | `true` | `variants[]` (1–25 items; each a `chrom-pos-ref-alt` variantId on chromosomes 1–22/X/Y with optional `chr` prefix and positive position (M/MT fail per item as `mitochondrial_unsupported`), or an rsID; coordinate IDs normalize to upper-case unprefixed form), `dataset`, `reference_genome` | `{ found[], failed[], dataset, reference_genome }` (each `failed[]` item `{ variant, error, reason, recovery, candidates? }` — `reason` from the tool's declared set, `recovery` its declared hint) |
 | `gnomad_get_gene_constraint` | Loss-of-function constraint for a gene — pLI, LOEUF (`oe_lof_upper`) with CI, missense/synonymous/LoF Z-scores, observed/expected ratios, labeled with the constraint release they come from. The metric that weights a candidate LoF variant. By gene symbol or Ensembl gene ID. | `true` | `true` | `gene` (HGNC symbol e.g. `PCSK9`, or Ensembl gene ID `ENSG…` — obtain from `ensembl_lookup_gene`), `dataset`, `reference_genome` | `{ gene_id, symbol, dataset, reference_genome, constraint_release, pli, oe_lof, oe_lof_lower, oe_lof_upper, oe_mis, oe_syn, lof_z, mis_z, syn_z, obs/exp_*, constraint_flags[] }` (flat — constraint fields are top-level, not nested; on `exac` the ratios, LOEUF, and flags are always null/empty) |
-| `gnomad_list_gene_variants` | All variants in a gene / transcript / region with allele frequencies and predicted consequences. Filter by consequence class and frequency threshold. Sets too large to inline spill to a DataCanvas table for SQL (rank by AF, count by consequence); returns `canvas_id` + `table_name` for `gnomad_dataframe_describe`, then `gnomad_dataframe_query`. | `true` | `true` | one of `gene` / `transcript_id` / `region` (blank `gene` / `transcript_id` = omitted); `consequence_class?` (`'lof' \| 'missense' \| 'synonymous' \| 'other'`), `max_af?` (0–1, float), `canvas_id?`, `dataset`, `reference_genome` | `{ preview[], canvas_id, table_name, spilled, total, dataset, reference_genome }` |
+| `gnomad_list_gene_variants` | All variants in a gene / transcript / region with allele frequencies, predicted consequences with the transcript each is on (marked, on a gene target, against the gene's MANE Select or canonical transcript), and per-callset QC filters with a `qc_status`. Filter by gnomAD's consequence category and frequency threshold; `qc_filtered` counts every matching row that failed QC, and `pass_only` drops those rows after the count. Sets too large to inline spill to a DataCanvas table for SQL (rank by AF, count by consequence); returns `canvas_id` + `table_name` for `gnomad_dataframe_describe`, then `gnomad_dataframe_query`. | `true` | `true` | one of `gene` / `transcript_id` / `region` (blank `gene` / `transcript_id` = omitted); `consequence_class?` (`'lof' \| 'missense' \| 'synonymous' \| 'other'`), `max_af?` (0–1, float), `pass_only?` (boolean; absent lists every match), `canvas_id?`, `dataset`, `reference_genome` | `{ preview[], canvas_id, table_name, spilled, total, qc_filtered, dataset, reference_genome }` |
 | `gnomad_get_coverage` | Sequencing coverage across a gene / transcript / region — mean & median depth and the mean fraction of samples over depth thresholds (1/5/10/15/20/25/30/50/100×), aggregated per callset track. Disambiguates a true absent variant from an uncallable position before concluding "not seen in gnomAD." | `true` | `true` | one of `gene` / `transcript_id` / `region` (blank `gene` / `transcript_id` = omitted); `dataset`, `reference_genome`, `coverage_source?` (`'exome' \| 'genome'`; omit to return every available track) | `{ target, target_kind, summaries[] (per-track positions, target_positions, missing_positions, bucket_count, bucket_size, depth + fraction-over thresholds), dataset, reference_genome }` + optional notice |
 | `gnomad_dataframe_query` | Run a read-only SQL `SELECT` against a canvas table staged by `gnomad_list_gene_variants` or `gnomad_search_clinvar` (rank by AF, group by consequence, count LoF). Use the `canvas_id` and `table_name` returned by those tools. Returns one page of the result, cut on the server from the rows the canvas query returns: up to `limit` rows, ending early before the rows pass 10,000 characters of JSON (a first row over that fails with `row_too_large`). Each page re-runs the SQL, so stable paging needs an `ORDER BY` over a unique key; `total` is `null` above the canvas row cap, which paging cannot pass. | `true` | `false` | `canvas_id` (from a prior `gnomad_list_gene_variants` or `gnomad_search_clinvar` call), `sql` (SELECT only), `offset` (default 0), `limit` (1–500, default 100) | `{ rows[], columns[], offset, returned, total, truncated, next_offset }` |
 | `gnomad_dataframe_describe` | List the tables staged on a canvas and their columns (name + type) before writing SQL. Use the `canvas_id` from a `gnomad_list_gene_variants` or `gnomad_search_clinvar` call to see what's queryable. | `true` | `false` | `canvas_id` (from a prior spill call) | `{ tables[] }` (each `{ name, row_count, columns[] }`) |
@@ -54,7 +54,7 @@ Primary agent workflows: (1) **frequency lookup** — "how common is `1-55051215
 
 **Functional**
 
-- Fetch the full population record for a variant by `chrom-pos-ref-alt` variantId or rsID — AC/AN/AF overall and for every genetic-ancestry group, homozygote and (for hemizygous regions) hemizygote counts, quality flags, the worst/transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance.
+- Fetch the full population record for a variant by `chrom-pos-ref-alt` variantId or rsID — AC/AN/AF overall and for every genetic-ancestry group, homozygote and (for hemizygous regions) hemizygote counts, quality flags, each callset's own counts and QC filters with a `qc_status`, the most severe transcript consequence beside the one on the gene's MANE Select (else canonical) transcript, in-silico predictor scores, and joined ClinVar clinical significance.
 - Accept a **batch** of variant IDs in one `gnomad_get_variant` call with per-item partial success (one bad ID does not fail the call).
 - Fetch gene loss-of-function constraint by gene symbol or Ensembl gene ID: pLI, LOEUF (`oe_lof_upper`) + its lower bound, observed/expected for LoF/missense/synonymous, and the three Z-scores.
 - List all variants in a gene, transcript, or region with AF + predicted consequence, filterable by consequence class and a max-AF threshold; spill a set too large to inline to a DataCanvas table and expose SQL over it.
@@ -107,17 +107,20 @@ type GeneRef = string;
  */
 type Region = string;
 
-/** Genetic-ancestry group codes. Exomes carry all except ami; genomes add ami (Amish). */
-type AncestryGroup = 'afr' | 'amr' | 'asj' | 'eas' | 'fin' | 'mid' | 'nfe' | 'sas' | 'remaining' | 'ami';
+/**
+ * Genetic-ancestry group codes. The catch-all group is `remaining` on gnomad_r4 and
+ * `oth` on gnomad_r3, gnomad_r2_1, and exac. ami (Amish) appears in v4 and v3 genomes only.
+ */
+type AncestryGroup = 'afr' | 'amr' | 'asj' | 'eas' | 'fin' | 'mid' | 'nfe' | 'sas' | 'remaining' | 'oth' | 'ami';
 
 /** One genetic-ancestry group's counts. AF = AC / AN (null when AN == 0). */
 interface PopulationFreq {
-  id: AncestryGroup;        // afr | amr | asj | eas | fin | mid | nfe | sas | remaining | ami (genomes only)
+  id: AncestryGroup;        // afr | amr | asj | eas | fin | mid | nfe | sas | remaining (r4) | oth (r3, r2_1, exac) | ami (genomes only)
   ac: number;               // allele count
   an: number;               // allele number (called chromosomes)
   af: number | null;        // allele frequency
   homozygote_count: number;
-  hemizygote_count: number | null; // X/Y only
+  hemizygote_count: number | null; // 0 off X/Y; null when gnomAD reports none
 }
 
 /** The population record gnomad_get_variant returns per variant. */
@@ -126,14 +129,36 @@ interface VariantRecord {
   rsids: RsId[];
   reference_genome: ReferenceGenome;
   dataset: Dataset;
-  // overall, then the full per-ancestry vector — never collapsed to a single global AF
+  // overall, then the full per-ancestry vector — never collapsed to a single global AF.
+  // Overall counts read gnomAD's joint exome + genome record where it carries an AC
+  // (gnomad_r4; its AN spans every callable sample in both callsets), else the sum
+  // across carried callsets (r3, r2_1, exac publish no joint record). ac, an, af
+  // (= ac / an), and the zygosity counts always share one source.
   ac: number; an: number; af: number | null;
   homozygote_count: number; hemizygote_count: number | null;
-  populations: PopulationFreq[];
-  source: ('exome' | 'genome')[];   // which gnomAD callset(s) carry it
+  populations: (PopulationFreq & { source: 'exome' | 'genome' })[];  // per carrying callset
+  joint_populations: PopulationFreq[];  // the joint record's groups; [] without joint data
+  // Each callset's own view; null when that callset does not carry the variant (absent
+  // from source). filters is gnomAD's QC verdict for the callset: [] passed; vocabulary
+  // varies by dataset (AC0, AS_VQSR, InbreedingCoeff on r4; RF on r2_1); null when
+  // gnomAD returned no list, which proves no pass.
+  callsets: Record<'exome' | 'genome', {
+    ac: number; an: number; af: number | null;  // af = ac / an
+    homozygote_count: number; hemizygote_count: number | null;
+    filters: string[] | null;
+  } | null>;
+  source: ('exome' | 'genome')[];   // which gnomAD callset(s) carry it — not what an spans
   flags: string[];                  // quality flags, e.g. "lcr", "segdup", "lc_lof"
-  consequence: string | null;       // worst/transcript VEP consequence term
-  transcript_id: string | null;     // transcript the consequence is on
+  qc_status: 'pass' | 'filtered';   // pass when any carried callset has empty filters (gnomAD browser rule)
+  consequence: string | null;       // most severe VEP term across transcripts (transcript_consequences[0])
+  transcript_id: string | null;     // transcript the consequence is on — possibly a non-primary isoform
+  primary_transcript: {             // the consequence's gene's MANE Select entry, else its canonical entry;
+    transcript_id: string;          //   null when gnomAD lists neither (the variant lies outside both). Same reply.
+    is_mane_select: boolean | null; // canonical fallback: null where no MANE status (gene without one; GRCh37)
+    consequence: string | null;     // most severe term on this transcript
+    hgvsc: string | null; hgvsp: string | null;
+    lof: string | null;             // LOFTEE call (e.g. HC, LC)
+  } | null;
   // ids vary by dataset — r4: cadd, revel_max, spliceai_ds_max, pangolin_largest_ds, phylop,
   // sift_max, polyphen_max; r3: cadd, revel, splice_ai, primate_ai; r2_1 / exac: none.
   // gnomAD sends each value as a string; r3 writes SpliceAI as "0.00 (no_consequence)",
@@ -168,15 +193,28 @@ interface GeneConstraint {
   constraint_flags: string[];  // gnomAD's per-gene caveats (e.g. no_exp_lof, syn_outlier); [] on exac
 }
 
-/** One row of the gnomad_list_gene_variants canvas table. */
+/** One row of the gnomad_list_gene_variants canvas table, columns in this order. */
 interface GeneVariantRow {
   variant_id: VariantId;
-  af: number | null; ac: number; an: number;
-  consequence: string | null;     // VEP term
+  af: number | null; ac: number; an: number;  // one source, as VariantRecord's overall counts
+  consequence: string | null;     // VEP term: most severe in the gene (gene target), the named
+                                  // transcript's (transcript target), most severe across transcripts (region)
+  // gnomAD's categories (browser vepConsequences.ts): lof = transcript_ablation, splice_acceptor_variant,
+  // splice_donor_variant, stop_gained, frameshift_variant; missense = missense_variant, stop_lost,
+  // start_lost, inframe_insertion, inframe_deletion; synonymous = synonymous_variant; other = the rest,
+  // terms gnomAD lists in no category, and null.
   consequence_class: 'lof' | 'missense' | 'synonymous' | 'other';
   homozygote_count: number;
-  clinvar_significance: string | null;
-  flags: string[];
+  source: string;                 // carried callsets, pipe-joined ("exome|genome")
+  flags: string;                  // quality flags, pipe-joined ("" when none)
+  exome_filters: string | null;   // exome QC filters, pipe-joined: "" passed, null when exomes do not carry it
+  genome_filters: string | null;  // the same for genomes
+  qc_status: 'pass' | 'filtered'; // as VariantRecord.qc_status
+  transcript_id: string | null;   // transcript the consequence is on; null when none (intergenic)
+  // gene targets only, gnomAD's gene-table † rule: transcript_id is the gene's MANE Select, else (no MANE
+  // Select, as on GRCh37) its canonical transcript, else another; null on transcript / region targets
+  // and for a gene with neither.
+  consequence_transcript: 'mane_select' | 'canonical' | 'other' | null;
 }
 
 /**
@@ -210,7 +248,7 @@ interface CoverageSummary {
 }
 ```
 
-**Per-ancestry group set differs by callset.** v4 exomes: `afr amr asj eas fin mid nfe sas remaining`. v4 genomes add `ami` (Amish). The handler returns whatever groups the queried callset(s) carry — it does not assume a fixed list. (v2 uses a slightly different group set; the schema returns the dataset's own groups.)
+**Per-ancestry group set differs by callset and release.** v4 exomes: `afr amr asj eas fin mid nfe sas remaining`; v4 genomes add `ami` (Amish). v3 genomes carry `oth` in place of `remaining`, plus `ami`; v2.1 and ExAC carry `afr amr asj eas fin nfe oth sas` (ExAC without `asj`). gnomAD also returns sex splits (`afr_XX`), `XX`/`XY` aggregates, v2.1 subgroups (`eas_jpn`, `nfe_bgr`), and 1000 Genomes/HGDP subpopulations (`1kg:*`, `hgdp:*`); the service keeps exact matches to the `AncestryGroup` set, so each callset's groups sum to its AC and AN. `oth` keeps its upstream ID rather than being renamed to `remaining`: the releases compose the group differently, so the ID stays as gnomAD sends it.
 
 **No server-side record identity.** Every tool is a read against upstream; there is no local mutable state to version. The only identity to track is the canvas `canvas_id` (opaque 10-char token from the framework) holding a spilled variant/ClinVar list.
 
@@ -274,7 +312,7 @@ The dependency that matters: an absent result from step 1 is *uninterpretable* w
 
 | # | Call | Purpose | Cross-tool hop |
 |---|---|---|---|
-| 1 | `gnomad_list_gene_variants(gene: "BRCA2", consequence_class: "lof", max_af: 0.001)` | Stage every matching variant on a canvas when the set is too large to inline; inline a preview. | Returns `canvas_id` + `table_name` (`gene_variants`), and a notice naming both follow-up tools. |
+| 1 | `gnomad_list_gene_variants(gene: "BRCA2", consequence_class: "lof", max_af: 0.001, pass_only: true)` | Stage every matching variant that passed QC on a canvas when the set is too large to inline (`qc_filtered` still counts the dropped QC-failed rows, which sort first at AF 0); inline a preview. | Returns `canvas_id` + `table_name` (`gene_variants`), and a notice naming both follow-up tools. |
 | 2 | `gnomad_dataframe_describe(canvas_id)` | Confirm the staged table and its columns before writing SQL. | Takes step 1's `canvas_id`. |
 | 3 | `gnomad_dataframe_query(canvas_id, sql: "SELECT variant_id, af, consequence FROM gene_variants ORDER BY af DESC, variant_id")` | Rank / count / group across the **full** set, not the preview. The first page carries up to 100 rows; follow `next_offset` for more, or add a SQL `LIMIT` when only the top rows matter. | **`canvas_id` and `table_name` come only from step 1's output** — the hop is explicit in both schemas. |
 
@@ -285,14 +323,18 @@ The dependency that matters: an absent result from step 1 is *uninterpretable* w
 ## Design Decisions
 
 - **`dataset` and `reference_genome` are separate parameters, both echoed in output.** The live GraphQL schema takes them as two distinct enums (`DatasetId`, `ReferenceGenomeId`); idea.md's single "dataset/build" axis would have under-modeled it. The service derives a default `reference_genome` from `dataset` and validates coherence (v4⇒GRCh38), but both are exposed — a frequency from the wrong build silently misleads, so the choice can't be buried in a default.
-- **Per-ancestry vector is returned in full, never collapsed.** The whole point of gnomAD for clinical use is that a variant common in one genetic-ancestry group and absent in another is the signal. Each group ships its own AC/AN/AF; the handler returns whatever groups the queried callset carries (exome vs. genome differ by `ami`).
+- **Per-ancestry vector is returned in full, never collapsed.** The whole point of gnomAD for clinical use is that a variant common in one genetic-ancestry group and absent in another is the signal. Each group ships its own AC/AN/AF; the handler returns every top-level group the queried callset carries from the fixed `AncestryGroup` set (exome vs. genome differ by `ami`; releases differ by `remaining` vs. `oth`), so the groups of one callset sum to its counts. The set is matched exactly, so sex splits, subgroups, and HGDP/1000 Genomes subpopulations never enter the vector — a group missing from the set would drop silently, which is why `oth` sits beside `remaining`.
+- **Overall counts share one source, and that source is gnomAD's joint record where one exists.** `ac`, `an`, `af`, and the zygosity counts on both `gnomad_get_variant` and `gnomad_list_gene_variants` come from the same record, `af` is always `ac / an`, and `max_af` filters on that `af` — so a list row never pairs a summed count with a single-callset frequency. On `gnomad_r4` that record is `joint`, whose AN counts every callable sample in both callsets, as gnomAD's own browser does for its Total row; elsewhere it is the sum across carried callsets. The list selects only the joint totals: `joint.populations` feeds no column and would multiply the response about 3.6× (PCSK9 on `gnomad_r4`, as of November 2026). `gnomad_get_variant` selects them and returns them as `joint_populations`, beside the per-callset `populations`.
+- **QC status is reported, never applied by default.** Each callset's `filters` reaches the caller (`callsets.*.filters` on the record, `exome_filters` / `genome_filters` on list rows), and `qc_status` applies gnomAD's browser rule: `pass` when any callset carrying the variant has empty filters. Without it, AC0 rows (no high-quality carrier) read as observed variants at AF 0 and pass every `max_af` — 1,499 of PCSK9's 4,544 `gnomad_r4` rows fail QC, as of November 2026. Rows stay listed because hiding them is a browser display default, would turn a single-position `region` into a false absence, and drops filtered rows that still carry AC; `pass_only` opts into the browser's view after `qc_filtered` has counted them. The rule reads only empty versus non-empty, since the filter vocabulary differs by dataset (`RF` on `gnomad_r2_1`, `VQSRTranche*` on `exac`). `joint.filters` never decides QC: it carries joint-level flags (`discrepant_frequencies`) and disagrees between the detail and list documents for the same variant.
+- **`consequence_class` is gnomAD's own consequence category.** The class names are gnomAD's category keys, so the terms follow its browser's table (`vepConsequences.ts`): pLoF holds transcript ablation, splice acceptor/donor, stop gained, and frameshift; missense also holds inframe indels, start lost, and stop lost; any term the table omits, and a null consequence, is `other`, as the browser's filter reads them. The initial set put start/stop lost and `transcript_amplification` in `lof` and inframe indels in `other`, so a `lof` count disagreed with gnomAD's pLoF filter of the same name (CDKN2A: 93 against 71).
+- **`consequence` keeps gnomAD's most-severe term; the primary-transcript view sits beside it.** The term is the one gnomAD's own tables show, and `consequence_class` and its filter derive from it, so switching it to the MANE term would break parity and silently re-scope every class count. Instead `gnomad_get_variant` adds `primary_transcript`, read from the `transcript_consequences` already in the reply, and list rows carry `transcript_id` plus, on gene targets, `consequence_transcript`, which reproduces the browser's † rule against the gene's MANE Select (else canonical) transcript. The rule is gene-level, not each row's own `is_mane_select`/`is_canonical` flags: those cannot tell a canonical-but-not-MANE row on a GRCh38 gene from the transcript the browser compares against. A per-transcript list read is no alternative: `transcript().variants` is refused for TTN, and `consequence_in_canonical_transcript` is null on every row sampled.
 - **ClinVar rides inside gnomAD's variant response for the core; the NCBI tool is optional.** gnomAD joins ClinVar significance per-variant for free, keeping the core keyless and single-source. `gnomad_search_clinvar` (NCBI E-utilities) is a deferred-to-optional extension for gene-panel curation depth, not a core dependency — it's the only thing that adds a second upstream and an optional key.
 - **Only the two list tools spill; the spill emitters ship paired with the standardized canvas-accessor trio.** Per-gene variant lists are analytical (rank by AF, count by consequence, group) and can exceed any context budget — the canvas's earns-its-keep test passes on *shape*, not just size. The scalar tools (`get_variant`, `get_gene_constraint`) and `get_coverage` return bounded records and inline directly. A `canvas_id` with no query tool is dead output, so `gnomad_dataframe_query` is mandatory the moment anything spills; `gnomad_dataframe_describe` and the opt-in `gnomad_dataframe_drop` complete the three-tool accessor surface.
 - **DataCanvas is on by default; the `.mcpb` bundle is inline-only.** The list tools' full value is the SQL path, so `src/index.ts` sets `CANVAS_PROVIDER_TYPE=duckdb` after `.env` loads whenever normalization treats the variable as unset (absent, blank, or a whole unsubstituted placeholder). The bundle strips DuckDB's native bindings to stay portable, so `manifest.json` pins `none`: a bundle running `duckdb` would start normally and then fail on its first staging call.
 - **`gnomad_dataframe_describe` ships, even though the spill tools document their schemas.** The framework canvas guidance (Checklist + simple-shape Tools row) standardizes on describe so an agent can discover staged table/column names. Both spill tools do return a fixed, documented column set (`GeneVariantRow` / ClinVar row) in their own output, which once argued for dropping describe as redundant — but fleet-wide consistency on the canvas-accessor surface wins over the per-server optimization: every analytics server ships the same `query` / `describe` / `drop` trio, so agents and operators meet one predictable shape. Describe also stays correct if the column set ever turns dynamic.
 - **Reusing a `canvas_id` REPLACES the staged table — it never accumulates.** Both spill tools register their result under a fixed table name (`gene_variants` / `clinvar_variants`). The framework's `registerTable` is drop-and-create on an existing name (`DROP TABLE IF EXISTS` → `CREATE TABLE`), so passing a prior `canvas_id` back into the same tool overwrites that table with the new call's rows rather than appending. A supplied `canvas_id` writes the table even when the result fits inline, so the table never holds an earlier call's rows; a zero-row result drops it instead (an empty table would earn a describe/query pointer to nothing). The ClinVar Ensembl-ID short-circuit is the one exception: it searched nothing, so it returns `canvas_id: ''` and leaves a supplied canvas and its table as they were rather than acquiring the canvas only to fail on an unknown id or discard a table the caller still wants. To analyze two genes side by side, query each before re-staging, or use separate canvases — the `canvas_id` input descriptions state this so an agent doesn't assume the two result sets coexist.
 - **No canvas is minted for a result that fits inline without a `canvas_id`.** The rows are already materialized, so the fit-vs-spill decision (the same JSON-character rule `spillover()` applies) runs before `acquire()`. Minted canvases count against the per-tenant cap (`CANVAS_MAX_CANVASES_PER_TENANT`), and with auth off every caller shares one tenant, so empty canvases from small lookups would exhaust it. Such a response carries `canvas_id: ''`, which renders as "no canvas table for this call" — never as a disabled canvas.
-- **The inline preview is sized for a ~24 KB response.** Preview rows land on both surfaces (`structuredContent.preview` and the `format()` text), so the budget is set from measured real PCSK9 rows: `gnomad_list_gene_variants` previews 14,000 JSON characters (~1.63 serialized bytes per character across both surfaces), `gnomad_search_clinvar` 11,000 (~1.98, plus a longer composed notice). With the canvas disabled the preview is the same longest-prefix-within-budget rule, not a row count: a row cap sized on the average row let heavy genes (BRCA1's ClinVar rows run about twice the PCSK9 average) overshoot, so both modes preview the same rows.
+- **The inline preview is sized for a ~24 KB response.** Preview rows land on both surfaces (`structuredContent.preview` and the `format()` text), so the budget is set from measured real PCSK9 rows: `gnomad_list_gene_variants` previews 14,000 JSON characters (~1.68 serialized bytes per character across both surfaces), `gnomad_search_clinvar` 11,000 (~1.98, plus a longer composed notice). With the canvas disabled the preview is the same longest-prefix-within-budget rule, not a row count: a row cap sized on the average row let heavy genes (BRCA1's ClinVar rows run about twice the PCSK9 average) overshoot, so both modes preview the same rows.
 - **`gnomad_dataframe_query` pages on the server over the rows the canvas query returns.** Returning every row up to the canvas cap put megabytes in `structuredContent` while `format()` showed 50, so `content[]` readers lost the rest. A page is `offset`/`limit` (default 100, max 500) cut by the same longest-prefix JSON-character rule the previews use, at 10,000 characters so a page on both surfaces stays under 24 KB. The caller's SQL is never rewritten: the canvas `query()` bounds rows at its cap and `preview` slices only from row 0, so slicing after it keeps the gate and the SQL exactly as written, at the cost of re-running the SQL per page. `total` replaced `row_count` because above the cap the materialized count is the cap, not the result size — `total` is `null` there instead.
 - **`gnomad_dataframe_drop` is opt-in and off by default.** Dropping a staged table is a mutation (`readOnlyHint: false`); the default-keyless research surface stays read-only, so the tool is gated behind `GNOMAD_DATAFRAME_DROP_ENABLED=true` through `disabledTool()`: when off it never appears in `tools/list` and shows as disabled on the HTTP landing page. Operators who want manual canvas-memory reclamation flip the flag; everyone else gets a strictly read-only surface. (Per-table TTL already reclaims memory automatically, so drop is a convenience, not a requirement.)
 - **`gnomad_search_clinvar` pages by offset and reports `total_found`.** A popular gene has thousands of ClinVar records, so one call returns a window of up to 500 ESearch IDs and says how many candidates exist (`total_found`, the ESearch count before the post-fetch filters) and where the next window starts; a silent 500-record cap read as the complete set. The significance phrase and star floor also go into the ESearch term so the window holds relevant candidates, but NCBI matches the phrase across all fields, so the post-fetch filters stay authoritative and `limit` counts candidates, not returned rows. The significance is normalized once (`"` dropped, underscores read as spaces, trimmed) so the term and the post-filter always test the same value.
@@ -317,7 +359,7 @@ The dependency that matters: an absent result from step 1 is *uninterpretable* w
 - **Constraint release labels are static.** gnomAD's API carries no release identifier, so `constraint_release` comes from a fixed dataset → release map in the service. When gnomAD republishes a table (GRCh38 moved to v4.1.2 on 2026-09-28, values unchanged from v4.1.1), the map needs a matching edit. `gnomad_r3` has no constraint of its own and serves the GRCh38 v4.1.2 table, which the label and the tool's text state.
 - **No liftover.** The server does not translate coordinates between GRCh37 and GRCh38 — the caller (or `ensembl`) must supply IDs in the build matching the chosen `dataset`. Mismatches are made *visible* (echoed `reference_genome`) but not auto-corrected.
 - **Sparse / null fields are real.** Many variants lack in-silico scores, ClinVar entries, or counts in a given ancestry; many genes have null constraint. Optional-vs-required field modeling follows actual upstream nullability — the server preserves uncertainty and never fabricates a value from a missing field.
-- **Exome vs. genome split.** AC/AN, coverage, and the ancestry-group set differ between the exome and genome callsets. The variant record reports which callset(s) carry the variant; coverage exposes an explicit exome/genome source switch. Conflating the two would misstate both frequency and callability.
+- **Exome vs. genome split.** AC/AN, coverage, and the ancestry-group set differ between the exome and genome callsets. The variant record reports which callset(s) carry the variant (`source`) and keeps `populations` per callset; coverage exposes an explicit exome/genome source switch. On `gnomad_r4` the overall counts and `joint_populations` come from gnomAD's joint record instead, whose AN covers every callable sample in both callsets — so overall `an` can span a callset that does not carry the variant, and `source` no longer tells you what `an` counts. Summing only the carried callsets there overstates a single-callset variant's AF (up to 20× for a genome-only PCSK9 variant). Datasets without a joint record (`gnomad_r3`, `gnomad_r2_1`, `exac`) keep that carried-callset sum.
 - **`gnomad_dataframe_query` needs the canvas, which `CANVAS_PROVIDER_TYPE=none` disables.** With it off the list tools return a capped inline preview (the same 14,000 / 11,000-character budget) with `spilled: false` and `canvas_id: ''`. The canvas/SQL path is unavailable there and in the `.mcpb` bundle, which pins `none`, and unavailable entirely on Cloudflare Workers (DuckDB has no V8-isolate build).
 
 ## v1 Scope vs. Deferred

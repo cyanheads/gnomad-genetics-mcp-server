@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 07:29:22
+Generated on: 2026-11-01 06:40:57
 
 ```text
 gnomad-genetics-mcp-server/
@@ -188,6 +188,7 @@ gnomad-genetics-mcp-server/
 │   │   │   ├── gnomad_r4-55043800-55044600.response.json
 │   │   │   └── gnomad_r4-55043850-55044550.response.json
 │   │   ├── clinvar-esummary-heavy.live.json
+│   │   ├── clinvar-esummary-placeholder.live.json
 │   │   ├── clinvar-esummary.live.json
 │   │   ├── gnomad-coverage.live.json
 │   │   ├── gnomad-variant-clinvar-error.live.json
@@ -196,6 +197,7 @@ gnomad-genetics-mcp-server/
 │   │   └── identifiers-and-responses.fuzz.test.ts
 │   ├── helpers/
 │   │   ├── fake-gnomad-coverage.ts
+│   │   ├── live-consequences.ts
 │   │   ├── minimal-variant.ts
 │   │   └── worker-resource-read.ts
 │   ├── integration/
