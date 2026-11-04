@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-03
+
+Adds gnomad_get_variant_cooccurrence, filtering allele frequency, LOFTEE and HGVS fields, ten subset datasets, the LOEUF percentile and mitochondrial constraint, hemizygote counts, and ClinVar somatic classifications; ClinVar indel rows gain GRCh38 IDs from gnomAD's ClinVar mapping.
+
 ## [0.5.2](changelog/0.5.x/0.5.2.md) — 2026-11-01 · 🛡️ Security
 
 An unknown gene or transcript fails instead of returning an empty success, wrong-build variant IDs name their other-build candidates, gnomad_list_gene_variants pages by offset, common ID spellings normalize, over-cap limits clamp, ClinVar significance filters narrow server-side, and gnomad_dataframe_query pages are bounded.
