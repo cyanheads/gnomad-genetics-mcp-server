@@ -17,13 +17,9 @@ import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-cov
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import { gnomadListGeneVariants } from '@/mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js';
 import { initGnomadService } from '@/services/gnomad/gnomad-service.js';
+import type { GraphqlRequest } from '../helpers/fake-gnomad-graphql.js';
 import { minimalVariant } from '../helpers/minimal-variant.js';
 import { readResourceBody, rpcErrorOf } from '../helpers/worker-resource-read.js';
-
-interface GraphqlRequest {
-  query: string;
-  variables: Record<string, unknown>;
-}
 
 /** Answer every GraphQL document with an empty, well-formed payload for its root. */
 function emptyPayload(request: GraphqlRequest, featureChrom: string): unknown {
@@ -82,7 +78,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(REGION_TOOLS)('%s — region forms gnomAD already serves', (_name, tool) => {
+/**
+ * The release a dataset belongs to, read off its name: a subset's ID extends its
+ * parent's (gnomad_r3_non_cancer → gnomad_r3).
+ */
+const releaseOf = (dataset: string) =>
+  /^(?:gnomad_r4|gnomad_r3|gnomad_r2_1|exac)/.exec(dataset)?.[0];
+
+describe.each(REGION_TOOLS)('%s — region forms gnomAD already serves', (name, tool) => {
+  // gnomAD serves no subset coverage, so coverage goes out on the parent release (#68).
   it.each(GNOMAD_DATASETS)('sends each of 1–22, X, and Y unchanged on %s', async (dataset) => {
     fakeGnomad();
     for (const chrom of NUCLEAR) {
@@ -93,7 +97,8 @@ describe.each(REGION_TOOLS)('%s — region forms gnomAD already serves', (_name,
       expect(result.isError).toBeFalsy();
     }
     expect(requests.map((request) => request.variables.chrom)).toEqual([...NUCLEAR]);
-    expect(requests.every((request) => request.variables.dataset === dataset)).toBe(true);
+    const sent = name === 'gnomad_get_coverage' ? releaseOf(dataset) : dataset;
+    expect(requests.map((request) => request.variables.dataset)).toEqual(NUCLEAR.map(() => sent));
   });
 
   it('sends a single-position region with start equal to stop', async () => {

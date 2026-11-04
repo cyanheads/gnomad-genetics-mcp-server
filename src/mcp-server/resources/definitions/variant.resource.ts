@@ -14,17 +14,15 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { Dataset } from '@/services/gnomad/types.js';
-import { normalizeVariantIdentifier } from '../../tools/shared-schemas.js';
+import { DATASET_CHOICES, normalizeVariantIdentifier } from '../../tools/shared-schemas.js';
 
 export const variantResource = resource('gnomad://variant/{dataset}/{variantId}', {
   description:
-    'Population record for one gnomAD variant — AC/AN/AF overall and per ancestry, counts, flags, consequence, in-silico predictors, and joined ClinVar significance. Mirrors gnomad_get_variant. The dataset segment (e.g. gnomad_r4) makes the URI self-describing.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    "Population record for one gnomAD variant — AC/AN/AF overall and per ancestry, the filtering allele frequency (faf95), counts, flags, consequence with its HGVS and LOFTEE call, LoF curations, in-silico predictors, and joined ClinVar significance. Mirrors gnomad_get_variant. The dataset segment (e.g. gnomad_r4, or a subset such as gnomad_r4_non_ukb) makes the URI self-describing. On a gnomad_r4 or gnomad_r3 subset, faf95 and each callset's faf95 are null: gnomAD's record there carries the parent release's FAF, not the subset's, and a resource carries no notice to say so — read the parent's segment for its faf95.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/",
   name: 'gnomAD variant record',
   mimeType: 'application/json',
   params: z.object({
-    dataset: z
-      .enum(GNOMAD_DATASETS)
-      .describe('gnomAD dataset segment: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac.'),
+    dataset: z.enum(GNOMAD_DATASETS).describe(`gnomAD dataset segment: ${DATASET_CHOICES}.`),
     variantId: z
       .string()
       .describe(

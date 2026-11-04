@@ -8,8 +8,27 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import { normalizeEnv, parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
-/** Dataset identifiers accepted on every tool — a subset of the gnomAD DatasetId enum. */
-export const GNOMAD_DATASETS = ['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac'] as const;
+/**
+ * Dataset identifiers accepted wherever `dataset` is taken: gnomAD's whole
+ * DatasetId enum, in its order — four releases, each followed by its subsets.
+ * Each one's parent release and build live in the gnomAD service's lineage table.
+ */
+export const GNOMAD_DATASETS = [
+  'gnomad_r4',
+  'gnomad_r4_non_ukb',
+  'gnomad_r3',
+  'gnomad_r3_controls_and_biobanks',
+  'gnomad_r3_non_cancer',
+  'gnomad_r3_non_neuro',
+  'gnomad_r3_non_topmed',
+  'gnomad_r3_non_v2',
+  'gnomad_r2_1',
+  'gnomad_r2_1_controls',
+  'gnomad_r2_1_non_neuro',
+  'gnomad_r2_1_non_cancer',
+  'gnomad_r2_1_non_topmed',
+  'exac',
+] as const;
 
 const ServerConfigSchema = z.object({
   gnomadApiBaseUrl: z

@@ -1,0 +1,515 @@
+{
+  "source": "gnomAD GraphQL API (https://gnomad.broadinstitute.org/api), variant_cooccurrence on dataset gnomad_r2_1, captured 2026-11-03. Each key is the variants argument as sent, space-joined; each value is the HTTP 200 body gnomAD returned.",
+  "replies": {
+    "1-55516888-G-GA 1-55505647-G-T": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["1-55516888-G-GA", "1-55505647-G-T"],
+          "genotype_counts": [63996, 2283, 29, 117, 0, 0, 2, 0, 0],
+          "haplotype_counts": [130392, 2341, 121, 0],
+          "p_compound_heterozygous": 1,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [2946, 28, 0, 93, 0, 0, 2, 0, 0],
+              "haplotype_counts": [6013, 28, 97, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [12145, 187, 1, 18, 0, 0, 0, 0, 0],
+              "haplotype_counts": [24495, 189, 18, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4044, 42, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [8130, 42, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [5213, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [10426, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [2690, 679, 19, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [6059, 717, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [23774, 1252, 9, 4, 0, 0, 0, 0, 0],
+              "haplotype_counts": [48804, 1270, 4, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [1992, 66, 0, 2, 0, 0, 0, 0, 0],
+              "haplotype_counts": [4052, 66, 2, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [11192, 29, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [22413, 29, 0, 0],
+              "p_compound_heterozygous": null
+            }
+          ]
+        }
+      }
+    },
+    "1-55505647-G-T 1-55505651-C-T": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["1-55505647-G-T", "1-55505651-C-T"],
+          "genotype_counts": [92584, 1887, 14, 2194, 17, 0, 28, 0, 0],
+          "haplotype_counts": [
+            189249.04847395173, 1931.9515260482826, 2266.9515260482826, 0.04847395171724291
+          ],
+          "p_compound_heterozygous": 0.9979097658252426,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [5634, 26, 0, 26, 0, 0, 0, 0, 0],
+              "haplotype_counts": [11320, 26, 26, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [14055, 290, 1, 180, 2, 0, 1, 0, 0],
+              "haplotype_counts": [
+                28580.145562415993, 293.8544375840076, 183.85443758400763, 0.14556241599237624
+              ],
+              "p_compound_heterozygous": 0.9285025699368075
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4264, 193, 3, 41, 1, 0, 0, 0, 0],
+              "haplotype_counts": [
+                8762.057271673193, 199.94272832680664, 41.942728326806645, 0.05727167319336335
+              ],
+              "p_compound_heterozygous": 0.9435396185484511
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [7262, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [14525, 1, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [7630, 209, 1, 653, 7, 0, 18, 0, 0],
+              "haplotype_counts": [
+                16122.003974516145, 217.9960254838559, 695.9960254838559, 0.003974516144110475
+              ],
+              "p_compound_heterozygous": 0.9995778521527476
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [39222, 815, 4, 1201, 7, 0, 9, 0, 0],
+              "haplotype_counts": [
+                80460.00589431949, 829.9941056805125, 1225.9941056805123, 0.005894319487586099
+              ],
+              "p_compound_heterozygous": 0.9995341479857517
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2419, 56, 1, 65, 0, 0, 0, 0, 0],
+              "haplotype_counts": [4959, 58, 65, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [12098, 297, 4, 28, 0, 0, 0, 0, 0],
+              "haplotype_counts": [24521, 305, 28, 0],
+              "p_compound_heterozygous": 1
+            }
+          ]
+        }
+      }
+    },
+    "1-55505651-C-T 1-55505647-G-T": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["1-55505647-G-T", "1-55505651-C-T"],
+          "genotype_counts": [92584, 1887, 14, 2194, 17, 0, 28, 0, 0],
+          "haplotype_counts": [
+            189249.04847395173, 1931.9515260482826, 2266.9515260482826, 0.04847395171724291
+          ],
+          "p_compound_heterozygous": 0.9979097658252426,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [5634, 26, 0, 26, 0, 0, 0, 0, 0],
+              "haplotype_counts": [11320, 26, 26, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [14055, 290, 1, 180, 2, 0, 1, 0, 0],
+              "haplotype_counts": [
+                28580.145562415993, 293.8544375840076, 183.85443758400763, 0.14556241599237624
+              ],
+              "p_compound_heterozygous": 0.9285025699368075
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4264, 193, 3, 41, 1, 0, 0, 0, 0],
+              "haplotype_counts": [
+                8762.057271673193, 199.94272832680664, 41.942728326806645, 0.05727167319336335
+              ],
+              "p_compound_heterozygous": 0.9435396185484511
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [7262, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [14525, 1, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [7630, 209, 1, 653, 7, 0, 18, 0, 0],
+              "haplotype_counts": [
+                16122.003974516145, 217.9960254838559, 695.9960254838559, 0.003974516144110475
+              ],
+              "p_compound_heterozygous": 0.9995778521527476
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [39222, 815, 4, 1201, 7, 0, 9, 0, 0],
+              "haplotype_counts": [
+                80460.00589431949, 829.9941056805125, 1225.9941056805123, 0.005894319487586099
+              ],
+              "p_compound_heterozygous": 0.9995341479857517
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2419, 56, 1, 65, 0, 0, 0, 0, 0],
+              "haplotype_counts": [4959, 58, 65, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [12098, 297, 4, 28, 0, 0, 0, 0, 0],
+              "haplotype_counts": [24521, 305, 28, 0],
+              "p_compound_heterozygous": 1
+            }
+          ]
+        }
+      }
+    },
+    "1-55505515-G-A 1-55505537-C-G": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["1-55505515-G-A", "1-55505537-C-G"],
+          "genotype_counts": [82412, 1, 0, 1, 0, 0, 0, 0, 0],
+          "haplotype_counts": [164826, 1, 1, 0],
+          "p_compound_heterozygous": 1,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [4564, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [9128, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [12733, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [25466, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4257, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [8514, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [6191, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [12382, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [7959, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [15918, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [32662, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [65325, 1, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2270, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [4540, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [11776, 0, 0, 1, 0, 0, 0, 0, 0],
+              "haplotype_counts": [23553, 0, 1, 0],
+              "p_compound_heterozygous": null
+            }
+          ]
+        }
+      }
+    },
+    "1-55505537-C-G 1-55505515-G-A": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["1-55505537-C-G", "1-55505515-G-A"],
+          "genotype_counts": [82412, 1, 0, 1, 0, 0, 0, 0, 0],
+          "haplotype_counts": [164826, 1, 1, 0],
+          "p_compound_heterozygous": 1,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [4564, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [9128, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [12733, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [25466, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4257, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [8514, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [6191, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [12382, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [7959, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [15918, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [32662, 0, 0, 1, 0, 0, 0, 0, 0],
+              "haplotype_counts": [65325, 0, 1, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2270, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [4540, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [11776, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [23553, 1, 0, 0],
+              "p_compound_heterozygous": null
+            }
+          ]
+        }
+      }
+    },
+    "11-2181053-G-T 11-2181054-C-T": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["11-2181053-G-T", "11-2181054-C-T"],
+          "genotype_counts": [120227, 31, 0, 0, 0, 0, 0, 0, 0],
+          "haplotype_counts": [240485, 31, 0, 0],
+          "p_compound_heterozygous": null,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [7594, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [15188, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [16850, 4, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [33704, 4, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4865, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [9731, 1, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [8970, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [17940, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [10107, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [20214, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [54263, 25, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [108551, 25, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2929, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [5858, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [14616, 1, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [29233, 1, 0, 0],
+              "p_compound_heterozygous": null
+            }
+          ]
+        }
+      }
+    },
+    "11-2181072-C-T 11-2182024-C-A": {
+      "data": {
+        "variant_cooccurrence": {
+          "variant_ids": ["11-2181072-C-T", "11-2182024-C-A"],
+          "genotype_counts": [121931, 1, 0, 2, 0, 0, 0, 0, 0],
+          "haplotype_counts": [243865, 1, 2, 0],
+          "p_compound_heterozygous": 1,
+          "populations": [
+            {
+              "id": "afr",
+              "genotype_counts": [7726, 0, 0, 1, 0, 0, 0, 0, 0],
+              "haplotype_counts": [15453, 0, 1, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "amr",
+              "genotype_counts": [17010, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [34020, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "asj",
+              "genotype_counts": [4919, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [9838, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "eas",
+              "genotype_counts": [9059, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [18118, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "fin",
+              "genotype_counts": [10300, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [20600, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "nfe",
+              "genotype_counts": [54976, 1, 0, 1, 0, 0, 0, 0, 0],
+              "haplotype_counts": [109954, 1, 1, 0],
+              "p_compound_heterozygous": 1
+            },
+            {
+              "id": "oth",
+              "genotype_counts": [2968, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [5936, 0, 0, 0],
+              "p_compound_heterozygous": null
+            },
+            {
+              "id": "sas",
+              "genotype_counts": [14876, 0, 0, 0, 0, 0, 0, 0, 0],
+              "haplotype_counts": [29752, 0, 0, 0],
+              "p_compound_heterozygous": null
+            }
+          ]
+        }
+      }
+    },
+    "1-55505647-G-T 1-55505647-G-T": {
+      "errors": [
+        {
+          "message": "Variants must be different"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55505647-G-T 1-55505650-A-ACGTACGTACGT": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for variants found in gnomAD"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55051215-G-GA 1-55039974-G-T": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for variants found in gnomAD"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55505647-G-T 11-2181054-C-T": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for variants that occur in the same gene"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55505742-G-A 1-55505753-G-A": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for coding or UTR variants that occur in the same gene"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55505647-G-T 1-55505452-T-G": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for variants that appear in gnomAD exome samples"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    },
+    "1-55505647-G-T 1-55505668-C-T": {
+      "errors": [
+        {
+          "message": "Variant co-occurrence is only available for variants with a global allele frequency ≤ 5%"
+        }
+      ],
+      "data": {
+        "variant_cooccurrence": null
+      }
+    }
+  }
+}

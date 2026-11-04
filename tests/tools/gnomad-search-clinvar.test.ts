@@ -28,12 +28,15 @@ import {
 import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetServerConfig } from '@/config/server-config.js';
+import { getServerConfig, resetServerConfig } from '@/config/server-config.js';
 import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 import * as clinvarModule from '@/services/clinvar/clinvar-service.js';
 import { initClinVarService } from '@/services/clinvar/clinvar-service.js';
 import type { ClinVarRow, ClinVarSearchResult } from '@/services/clinvar/types.js';
+import * as gnomadModule from '@/services/gnomad/gnomad-service.js';
+import { initGnomadService } from '@/services/gnomad/gnomad-service.js';
+import { UPSTREAM_CALL_BUDGET_MS } from '@/services/upstream-deadline.js';
 
 type CallToolResult = Awaited<ReturnType<typeof runToolContract>>;
 type SchemaProperties = { properties: Record<string, Record<string, unknown>> };
@@ -51,6 +54,14 @@ function row(i: number): ClinVarRow {
     molecular_consequences: 'missense_variant',
     protein_change: `G${i}S`,
     conditions: 'Familial hypercholesterolemia',
+    oncogenicity_classification: null,
+    oncogenicity_review_status: null,
+    oncogenicity_last_evaluated: null,
+    oncogenicity_conditions: '',
+    clinical_impact_classification: null,
+    clinical_impact_review_status: null,
+    clinical_impact_last_evaluated: null,
+    clinical_impact_conditions: '',
     submission_count: 2,
     canonical_spdi: null,
     rsids: '',
@@ -58,7 +69,11 @@ function row(i: number): ClinVarRow {
   };
 }
 
-/** Stub the ClinVar service so searchGene yields a fixed row set as one complete window. */
+/**
+ * Stub the ClinVar service so searchGene yields a fixed row set as one complete
+ * window, and gnomAD's ClinVar mapping so it holds none of those synthetic
+ * VariationIDs: their null grch38_variant_id stays null, with no notice.
+ */
 function stubClinvar(impl: () => Promise<ClinVarRow[]>) {
   const fake = {
     searchGene: vi.fn(async (): Promise<ClinVarSearchResult> => {
@@ -73,6 +88,9 @@ function stubClinvar(impl: () => Promise<ClinVarRow[]>) {
     }),
   };
   vi.spyOn(clinvarModule, 'getClinVarService').mockReturnValue(fake as never);
+  vi.spyOn(gnomadModule, 'getGnomadService').mockReturnValue({
+    clinvarVariantIds: async () => ({ status: 'resolved', variantIds: new Map() }),
+  } as never);
   return fake;
 }
 
@@ -125,6 +143,11 @@ function fakeCanvas() {
   return { canvas, tables, dropped };
 }
 
+// A window with a null grch38_variant_id reaches gnomAD's ClinVar mapping; every block fakes its fetch.
+beforeEach(() => {
+  initGnomadService({} as never, {} as never);
+});
+
 describe('gnomad_search_clinvar handler — canvas disabled', () => {
   it('returns spilled=false with an empty canvas_id', async () => {
     stubClinvar(async () => [row(1), row(2)]);
@@ -141,20 +164,20 @@ describe('gnomad_search_clinvar handler — canvas disabled', () => {
   });
 
   it('previews every row of a window that fits the 11,000-character budget, however many (#37)', async () => {
-    stubClinvar(async () => Array.from({ length: 20 }, (_, i) => sized(i + 1, 550)));
+    stubClinvar(async () => Array.from({ length: 10 }, (_, i) => sized(i + 1, 1_100)));
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadSearchClinvar.errors });
     const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(result.total).toBe(20);
-    expect(result.preview).toHaveLength(20);
+    expect(result.total).toBe(10);
+    expect(result.preview).toHaveLength(10);
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
   it('returns every row one character past the budget, with no notice (#59)', async () => {
-    const rows = [...Array.from({ length: 19 }, (_, i) => sized(i + 1, 550)), sized(20, 551)];
+    const rows = [...Array.from({ length: 9 }, (_, i) => sized(i + 1, 1_100)), sized(10, 1_101)];
     stubClinvar(async () => rows);
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
@@ -162,7 +185,7 @@ describe('gnomad_search_clinvar handler — canvas disabled', () => {
     const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(result).toMatchObject({ total: 20, spilled: false, canvas_id: '', table_name: '' });
+    expect(result).toMatchObject({ total: 10, spilled: false, canvas_id: '', table_name: '' });
     expect(result.preview).toEqual(rows);
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
@@ -340,7 +363,7 @@ describe('gnomad_search_clinvar handler — canvas enabled', () => {
   });
 
   it('fits a window of exactly 11,000 preview characters inline (#37 boundary)', async () => {
-    stubClinvar(async () => Array.from({ length: 20 }, (_, i) => sized(i + 1, 550)));
+    stubClinvar(async () => Array.from({ length: 10 }, (_, i) => sized(i + 1, 1_100)));
     const { canvas } = fakeCanvas();
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
 
@@ -348,13 +371,13 @@ describe('gnomad_search_clinvar handler — canvas enabled', () => {
     const input = gnomadSearchClinvar.input.parse({ gene: 'LDLR' });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(result).toMatchObject({ spilled: false, canvas_id: '', total: 20 });
-    expect(result.preview).toHaveLength(20);
+    expect(result).toMatchObject({ spilled: false, canvas_id: '', total: 10 });
+    expect(result.preview).toHaveLength(10);
     expect(canvas.acquire).not.toHaveBeenCalled();
   });
 
   it('spills one character past 11,000 and previews the rows under the budget (#37 boundary)', async () => {
-    const rows = [...Array.from({ length: 19 }, (_, i) => sized(i + 1, 550)), sized(20, 551)];
+    const rows = [...Array.from({ length: 9 }, (_, i) => sized(i + 1, 1_100)), sized(10, 1_101)];
     stubClinvar(async () => rows);
     const { canvas, tables } = fakeCanvas();
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
@@ -363,9 +386,9 @@ describe('gnomad_search_clinvar handler — canvas enabled', () => {
     const input = gnomadSearchClinvar.input.parse({ gene: 'LDLR' });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(result).toMatchObject({ spilled: true, table_name: 'clinvar_variants', total: 20 });
-    expect(result.preview).toHaveLength(19);
-    expect(tables.clinvar_variants).toHaveLength(20);
+    expect(result).toMatchObject({ spilled: true, table_name: 'clinvar_variants', total: 10 });
+    expect(result.preview).toHaveLength(9);
+    expect(tables.clinvar_variants).toHaveLength(10);
   });
 
   it('replaces the named table when a supplied canvas_id gets a window that fits (#35)', async () => {
@@ -505,6 +528,24 @@ const PLACEHOLDER = JSON.parse(
   ),
 ) as EsummaryFixture;
 
+/**
+ * Real records carrying a germline and a somatic classification (captured
+ * 2026-11-03), `allele_freq_set` trimmed: KRAS 3116215 (clinical impact Tier I -
+ * Strong) and TP53 4880485 (Likely oncogenic).
+ */
+const SOMATIC = JSON.parse(
+  readFileSync(new URL('../fixtures/clinvar-esummary-somatic.live.json', import.meta.url), 'utf8'),
+) as EsummaryFixture;
+
+/**
+ * The real BRCA1 record 4713084 (`c.3338_3339del`, a Microsatellite with no
+ * rsID; captured 2026-11-03), whose canonical SPDI drops the anchor base, so
+ * no ID derives from it.
+ */
+const INDEL = JSON.parse(
+  readFileSync(new URL('../fixtures/clinvar-esummary-indel.live.json', import.meta.url), 'utf8'),
+) as EsummaryFixture;
+
 function fetchUrl(input: string | URL | Request): URL {
   if (input instanceof URL) return input;
   if (input instanceof Request) return new URL(input.url);
@@ -537,18 +578,60 @@ function summaryFor(
 }
 
 /**
- * Route ESearch to a canned envelope and ESummary to a live fixture (LIVE by
- * default). Any other request rejects, so nothing reaches live NCBI.
+ * Live `gene.clinvar_variants` entries of gnomAD's ClinVar mapping (GRCh38,
+ * ClinVar release 2026-10-11), captured 2026-11-03 and trimmed to the
+ * VariationIDs these tests use: BRCA1 (4713084, the PLACEHOLDER records
+ * 1687128 and 54221, HEAVY's 4845640, 4842661, and 4800824), TTR, and MT-ND1,
+ * whose IDs are all mitochondrial.
  */
-function fakeNcbi(
+const GNOMAD_MAPPING = JSON.parse(
+  readFileSync(
+    new URL('../fixtures/gnomad-clinvar-variant-ids.live.json', import.meta.url),
+    'utf8',
+  ),
+) as Record<string, { clinvar_variation_id: string; variant_id: string }[]>;
+
+const GNOMAD_ORIGIN = new URL(getServerConfig().gnomadApiBaseUrl).origin;
+
+/** gnomAD's reply to the ClinVar-mapping request for one gene. */
+type GnomadRoute = (gene: string, init: RequestInit | undefined) => Response | Promise<Response>;
+
+/**
+ * gnomAD's mapping as captured; a gene the capture lacks answers an empty
+ * list, so the synthetic VariationIDs these tests use stay unmapped.
+ */
+const capturedMapping: GnomadRoute = (gene) =>
+  Response.json({ data: { gene: { clinvar_variants: GNOMAD_MAPPING[gene] ?? [] } } });
+
+/**
+ * Route ESearch to a canned envelope, ESummary to a live fixture (LIVE by
+ * default), and gnomAD's ClinVar-mapping request to `gnomad` (the captured
+ * mapping by default). Any other request rejects, so nothing reaches live
+ * NCBI or gnomAD. `urls` logs the NCBI requests, `genes` the gene of each
+ * gnomAD request.
+ */
+function fakeUpstreams(
   esearch: Record<string, unknown>,
-  missing: string[] = [],
-  source: EsummaryFixture = LIVE,
+  {
+    missing = [],
+    source = LIVE,
+    gnomad = capturedMapping,
+  }: { gnomad?: GnomadRoute; missing?: string[]; source?: EsummaryFixture } = {},
 ) {
   const urls: URL[] = [];
+  const genes: string[] = [];
   const absent = new Set(missing);
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = fetchUrl(input);
+    if (url.origin === GNOMAD_ORIGIN) {
+      const { query, variables } = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { gene: string };
+      };
+      if (!query.includes('GnomadGeneClinvarVariantIds')) throw new Error('unmocked gnomAD query');
+      genes.push(variables.gene);
+      return gnomad(variables.gene, init);
+    }
     urls.push(url);
     if (url.pathname.endsWith('/esearch.fcgi')) {
       return new Response(JSON.stringify({ esearchresult: esearch }));
@@ -558,7 +641,16 @@ function fakeNcbi(
     }
     throw new Error('unmocked fetch');
   });
-  return urls;
+  return { urls, genes };
+}
+
+/** {@link fakeUpstreams} with the captured gnomAD mapping, returning the NCBI request log. */
+function fakeNcbi(
+  esearch: Record<string, unknown>,
+  missing: string[] = [],
+  source: EsummaryFixture = LIVE,
+) {
+  return fakeUpstreams(esearch, { missing, source }).urls;
 }
 
 /** Run the tool contract under fake timers so NCBI pacing never costs wall-clock time. */
@@ -934,7 +1026,7 @@ describe('gnomad_search_clinvar limit (#63)', () => {
     const sc = result.structuredContent as Record<string, unknown>;
     expect(sc).toMatchObject({ truncated: true, next_offset: 1500 });
     expect(sc.notice).toBe(
-      'Requested limit 5000 was clamped to the cap of 1500. This window covers ClinVar candidates 1–1500 of 16107 for "BRCA1"; continue with offset=1500 for the next window. To check population frequency, pass grch38_variant_id to gnomad_get_variant with a GRCh38 dataset (gnomad_r4 or gnomad_r3); prefer it over rsids, since one rsID can match several gnomAD variants.',
+      'Requested limit 5000 was clamped to the cap of 1500. This window covers ClinVar candidates 1–1500 of 16107 for "BRCA1"; continue with offset=1500 for the next window. To check population frequency, pass grch38_variant_id to gnomad_get_variant with a GRCh38 dataset (gnomad_r4, gnomad_r3, or one of their subsets); prefer it over rsids, since one rsID can match several gnomAD variants.',
     );
     const text = textOf(result);
     expect(text).toContain('Requested limit 5000 was clamped to the cap of 1500.');
@@ -1366,7 +1458,7 @@ describe('gnomad_search_clinvar format() staged line (#21, #33)', () => {
 /* ------------------------------------------------------------------------- */
 
 const IDENTIFIERS =
-  'To check population frequency, pass grch38_variant_id to gnomad_get_variant with a GRCh38 dataset (gnomad_r4 or gnomad_r3); prefer it over rsids, since one rsID can match several gnomAD variants.';
+  'To check population frequency, pass grch38_variant_id to gnomad_get_variant with a GRCh38 dataset (gnomad_r4, gnomad_r3, or one of their subsets); prefer it over rsids, since one rsID can match several gnomAD variants.';
 const NEUTRAL = '**Staged:** no canvas table for this call.';
 const clinvarPointer = (n: number, id: string) =>
   `Staged this window's ${n} record(s) in table "clinvar_variants" (canvas_id ${id}). Call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to run SQL over the staged window.`;
@@ -1759,5 +1851,487 @@ describe('gnomad_search_clinvar staged nulls on a real DuckDB canvas (#61)', () 
         last_evaluated: null,
       },
     ]);
+
+    // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/76
+    // Only 4849514 carries an oncogenicity and only 4852577 a clinical-impact
+    // classification; every other record's somatic blocks are blank.
+    const somatic = await staged.query(
+      "SELECT count(*) FILTER (WHERE oncogenicity_classification IS NULL AND oncogenicity_review_status IS NULL AND oncogenicity_last_evaluated IS NULL) AS no_oncogenicity, count(*) FILTER (WHERE clinical_impact_classification IS NULL AND clinical_impact_review_status IS NULL AND clinical_impact_last_evaluated IS NULL) AS no_impact, count(*) FILTER (WHERE oncogenicity_last_evaluated = '1/01/01 00:00' OR clinical_impact_last_evaluated = '1/01/01 00:00' OR oncogenicity_classification = '' OR clinical_impact_classification = '' OR oncogenicity_review_status = '' OR clinical_impact_review_status = '' OR oncogenicity_last_evaluated = '' OR clinical_impact_last_evaluated = '') AS placeholders FROM clinvar_variants",
+    );
+    expect(
+      Object.fromEntries(Object.entries(somatic.rows[0] ?? {}).map(([k, v]) => [k, Number(v)])),
+    ).toEqual({ no_oncogenicity: ids.length - 1, no_impact: ids.length - 1, placeholders: 0 });
+    const somaticPicked = await staged.query(
+      "SELECT clinvar_variation_id, oncogenicity_classification, oncogenicity_review_status, oncogenicity_last_evaluated, oncogenicity_conditions, clinical_impact_classification, clinical_impact_review_status, clinical_impact_last_evaluated, clinical_impact_conditions FROM clinvar_variants WHERE clinvar_variation_id IN ('4849514', '4852577') ORDER BY clinvar_variation_id",
+    );
+    expect(somaticPicked.rows).toEqual([
+      {
+        clinvar_variation_id: '4849514',
+        oncogenicity_classification: 'Likely oncogenic',
+        oncogenicity_review_status: 'no assertion criteria provided',
+        oncogenicity_last_evaluated: null,
+        oncogenicity_conditions: 'Ovarian cancer',
+        clinical_impact_classification: null,
+        clinical_impact_review_status: null,
+        clinical_impact_last_evaluated: null,
+        clinical_impact_conditions: '',
+      },
+      {
+        clinvar_variation_id: '4852577',
+        oncogenicity_classification: null,
+        oncogenicity_review_status: null,
+        oncogenicity_last_evaluated: null,
+        oncogenicity_conditions: '',
+        clinical_impact_classification: 'Tier III - Unknown',
+        clinical_impact_review_status: 'no assertion criteria provided',
+        clinical_impact_last_evaluated: null,
+        clinical_impact_conditions: 'Familial cancer of breast',
+      },
+    ]);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* ClinVar's oncogenicity and clinical-impact classifications (#76).          */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * 4849514 (oncogenicity only), 4852577 (clinical impact only), KRAS 3116215
+ * (germline beside clinical impact), TP53 4880485 (germline beside
+ * oncogenicity), and 2878 (germline only) — every record real.
+ */
+const SOMATIC_MIX: EsummaryFixture = {
+  result: {
+    ...PLACEHOLDER.result,
+    ...SOMATIC.result,
+    '2878': LIVE.result['2878'],
+    uids: ['4849514', '4852577', '3116215', '4880485', '2878'],
+  },
+};
+
+const SOMATIC_FIELDS = [
+  'oncogenicity_classification',
+  'oncogenicity_review_status',
+  'oncogenicity_last_evaluated',
+  'oncogenicity_conditions',
+  'clinical_impact_classification',
+  'clinical_impact_review_status',
+  'clinical_impact_last_evaluated',
+  'clinical_impact_conditions',
+] as const;
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/76
+describe('gnomad_search_clinvar oncogenicity and clinical-impact classifications (#76)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('carries every somatic field in structuredContent beside the germline ones', async () => {
+    fakeNcbi({ count: '5', idlist: SOMATIC_MIX.result.uids }, [], SOMATIC_MIX);
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(result.isError).toBeFalsy();
+    const { preview } = result.structuredContent as { preview: ClinVarRow[] };
+    expect(
+      preview.map((r) => [
+        r.clinvar_variation_id,
+        r.clinical_significance,
+        ...SOMATIC_FIELDS.map((field) => r[field]),
+      ]),
+    ).toEqual([
+      [
+        '4849514',
+        null,
+        'Likely oncogenic',
+        'no assertion criteria provided',
+        null,
+        'Ovarian cancer',
+        null,
+        null,
+        null,
+        '',
+      ],
+      [
+        '4852577',
+        null,
+        null,
+        null,
+        null,
+        '',
+        'Tier III - Unknown',
+        'no assertion criteria provided',
+        null,
+        'Familial cancer of breast',
+      ],
+      [
+        '3116215',
+        'Conflicting classifications of pathogenicity',
+        null,
+        null,
+        null,
+        '',
+        'Tier I - Strong',
+        'criteria provided, single submitter',
+        '2024/10/24 00:00',
+        'Papillary thyroid carcinoma; Low grade glioma; Pilocytic astrocytoma',
+      ],
+      [
+        '4880485',
+        'Likely pathogenic',
+        'Likely oncogenic',
+        'criteria provided, single submitter',
+        '2026/10/16 00:00',
+        'Neoplasm',
+        null,
+        null,
+        null,
+        '',
+      ],
+      ['2878', 'Benign/Likely benign', null, null, null, '', null, null, null, ''],
+    ]);
+  });
+
+  it('renders a line for each classification a row carries, and none for a germline-only row', async () => {
+    fakeNcbi({ count: '5', idlist: SOMATIC_MIX.result.uids }, [], SOMATIC_MIX);
+
+    const result = await run({ gene: 'BRCA1' });
+
+    const text = textOf(result);
+    const oncogenicity = rowBlock(text, '4849514');
+    expect(oncogenicity).toContain(
+      '\n**Oncogenicity:** Likely oncogenic | **Review:** no assertion criteria provided | **Last evaluated:** Not available | **Conditions:** Ovarian cancer\n',
+    );
+    expect(oncogenicity).not.toContain('**Clinical impact:**');
+    const impact = rowBlock(text, '4852577');
+    expect(impact).toContain(
+      '\n**Clinical impact:** Tier III - Unknown | **Review:** no assertion criteria provided | **Last evaluated:** Not available | **Conditions:** Familial cancer of breast\n',
+    );
+    expect(impact).not.toContain('**Oncogenicity:**');
+    const both = rowBlock(text, '3116215');
+    expect(both).toContain(
+      '\n**Significance:** Conflicting classifications of pathogenicity (1★) | **Review:** criteria provided, conflicting classifications | **Last evaluated:** 2025/11/11 00:00\n',
+    );
+    expect(both).toContain(
+      '\n**Clinical impact:** Tier I - Strong | **Review:** criteria provided, single submitter | **Last evaluated:** 2024/10/24 00:00 | **Conditions:** Papillary thyroid carcinoma; Low grade glioma; Pilocytic astrocytoma\n',
+    );
+    expect(rowBlock(text, '4880485')).toContain(
+      '\n**Oncogenicity:** Likely oncogenic | **Review:** criteria provided, single submitter | **Last evaluated:** 2026/10/16 00:00 | **Conditions:** Neoplasm\n',
+    );
+    const germline = rowBlock(text, '2878');
+    expect(germline).not.toContain('**Oncogenicity:**');
+    expect(germline).not.toContain('**Clinical impact:**');
+    expect(text).not.toContain('1/01/01');
+  });
+});
+
+describe('gnomad_search_clinvar format() somatic lines (#76)', () => {
+  const render = (preview: ClinVarRow[]) =>
+    (
+      gnomadSearchClinvar.format?.({
+        ...NO_FILTERS,
+        preview,
+        canvas_id: '',
+        table_name: '',
+        spilled: false,
+        total: preview.length,
+        total_found: preview.length,
+        truncated: false,
+        next_offset: null,
+        unavailable_ids: [],
+      }) ?? []
+    )
+      .map((b) => ('text' in b ? b.text : ''))
+      .join('');
+
+  it('renders a somatic line whenever any of its fields is set, so content[] drops no value', () => {
+    const text = render([
+      { ...row(1), clinical_impact_review_status: 'criteria provided, single submitter' },
+      { ...row(2), oncogenicity_conditions: 'Glioma' },
+    ]);
+    expect(rowBlock(text, '100001')).toContain(
+      '\n**Clinical impact:** Not available | **Review:** criteria provided, single submitter | **Last evaluated:** Not available | **Conditions:** Not available\n',
+    );
+    expect(rowBlock(text, '100002')).toContain(
+      '\n**Oncogenicity:** Not available | **Review:** Not available | **Last evaluated:** Not available | **Conditions:** Glioma\n',
+    );
+  });
+
+  it('escapes Markdown in somatic values', () => {
+    const text = render([
+      {
+        ...row(1),
+        oncogenicity_classification: 'Likely *oncogenic*',
+        oncogenicity_conditions: '[x]',
+      },
+    ]);
+    expect(text).toContain('**Oncogenicity:** Likely \\*oncogenic\\* | ');
+    expect(text).toContain('**Conditions:** \\[x\\]');
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* grch38_variant_id filled from gnomAD's ClinVar mapping (#66).              */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Real BRCA1 records, every one a single allele with no SPDI-derived ID except
+ * 2878 (PCSK9, derived 1-55039974-G-T): 4713084, 1687128 (deletion), and 54221
+ * (insertion), which gnomAD's mapping holds; 4852577 (duplication), which it
+ * lacks; and 4682935 (copy-number loss), which ClinVar's VCF cannot express.
+ */
+const FILL: EsummaryFixture = {
+  result: {
+    ...PLACEHOLDER.result,
+    ...INDEL.result,
+    '2878': LIVE.result['2878'],
+    '4682935': LIVE.result['4682935'],
+    uids: ['4713084', '1687128', '54221', '4852577', '4682935', '2878'],
+  },
+};
+
+/** VariationID → grch38_variant_id for each preview row. */
+const idsOf = (result: CallToolResult) =>
+  Object.fromEntries(
+    (result.structuredContent as { preview: ClinVarRow[] }).preview.map((r) => [
+      r.clinvar_variation_id,
+      r.grch38_variant_id,
+    ]),
+  );
+
+const UNAVAILABLE = (n: number) =>
+  `gnomAD's ClinVar mapping for "BRCA1" failed or ran out of time, so ${n} row(s) without an SPDI-derived grch38_variant_id keep it null. A later call can fill them once gnomAD answers; when the call's time budget ran out, a smaller limit leaves the mapping more of that budget.`;
+
+/** A request that stays pending until its signal aborts, as a stalled upstream does. */
+const hang = (init: RequestInit | undefined) =>
+  new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+  });
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/66
+describe("gnomad_search_clinvar fills grch38_variant_id from gnomAD's ClinVar mapping (#66)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    initClinVarService({} as never, {} as never);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('fills each null ID the mapping holds by VariationID, on both surfaces', async () => {
+    const { genes } = fakeUpstreams({ count: '6', idlist: FILL.result.uids }, { source: FILL });
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(result.isError).toBeFalsy();
+    expect(genes).toEqual(['BRCA1']);
+    expect(idsOf(result)).toEqual({
+      '4713084': '17-43092191-CAT-C',
+      '1687128': '17-43074377-CCCAGA-C',
+      '54221': '17-43094167-T-TTC',
+      '4852577': null,
+      '4682935': null,
+      '2878': '1-55039974-G-T',
+    });
+    const text = textOf(result);
+    expect(rowBlock(text, '4713084')).toContain(
+      '\n**GRCh38 variant ID:** 17-43092191-CAT-C | **rsIDs:** none | ',
+    );
+    expect(rowBlock(text, '4852577')).toContain('\n**GRCh38 variant ID:** Not available | ');
+    expect((result.structuredContent as { notice: string }).notice).toBe(IDENTIFIERS);
+  });
+
+  it('never overwrites a derived ID, even when the mapping holds another for its VariationID', async () => {
+    fakeUpstreams(
+      { count: '2', idlist: ['2878', '4713084'] },
+      {
+        source: FILL,
+        gnomad: () =>
+          Response.json({
+            data: {
+              gene: {
+                clinvar_variants: [
+                  ...(GNOMAD_MAPPING.BRCA1 ?? []),
+                  { clinvar_variation_id: '2878', variant_id: '1-55039974-G-A' },
+                ],
+              },
+            },
+          }),
+      },
+    );
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(idsOf(result)).toEqual({ '2878': '1-55039974-G-T', '4713084': '17-43092191-CAT-C' });
+  });
+
+  it('points at grch38_variant_id when the window’s only IDs are filled ones', async () => {
+    // Neither record carries an rsID, so before the fill the window had no identifier at all.
+    fakeUpstreams({ count: '2', idlist: ['4713084', '4852577'] }, { source: FILL });
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(idsOf(result)).toEqual({ '4713084': '17-43092191-CAT-C', '4852577': null });
+    expect((result.structuredContent as { notice: string }).notice).toBe(IDENTIFIERS);
+    expect(textOf(result)).toContain(IDENTIFIERS);
+  });
+
+  it('asks gnomAD for the symbol NCBI searched', async () => {
+    const { genes } = fakeUpstreams({ count: '1', idlist: ['4713084'] }, { source: FILL });
+
+    const result = await run({ gene: ' "BRCA1" ' });
+
+    expect(genes).toEqual(['BRCA1']);
+    expect(idsOf(result)).toEqual({ '4713084': '17-43092191-CAT-C' });
+  });
+
+  it.each([
+    ['a window with no null ID', { gene: 'PCSK9' }, { count: '1', idlist: ['2878'] }],
+    ['an empty window', { gene: 'BRCA1' }, { count: '0', idlist: [] }],
+    ['an Ensembl gene ID', { gene: 'ENSG00000012048' }, { count: '1', idlist: ['4713084'] }],
+  ])('sends no gnomAD request for %s', async (_label, input, esearch) => {
+    const { genes } = fakeUpstreams(esearch, { source: FILL });
+
+    const result = await run(input);
+
+    expect(result.isError).toBeFalsy();
+    expect(genes).toEqual([]);
+  });
+
+  it.each<[string, GnomadRoute, string]>([
+    [
+      'an HTTP 503 through every retry',
+      () => new Response('Service Unavailable', { status: 503 }),
+      UNAVAILABLE(2),
+    ],
+    [
+      'a GraphQL error',
+      () => Response.json({ errors: [{ message: 'Unknown field' }], data: null }),
+      UNAVAILABLE(2),
+    ],
+    [
+      'Gene not found',
+      () => Response.json({ errors: [{ message: 'Gene not found' }], data: { gene: null } }),
+      'gnomAD has no GRCh38 gene "BRCA1" to map ClinVar records from, so 2 row(s) without an SPDI-derived grch38_variant_id keep it null.',
+    ],
+  ])(
+    'returns the rows with their nulls and a notice when gnomAD answers %s',
+    async (_label, gnomad, mapping) => {
+      fakeUpstreams(
+        { count: '3', idlist: ['4713084', '1687128', '2878'] },
+        { source: FILL, gnomad },
+      );
+
+      const result = await run({ gene: 'BRCA1' });
+
+      expect(result.isError).toBeFalsy();
+      expect(idsOf(result)).toEqual({
+        '4713084': null,
+        '1687128': null,
+        '2878': '1-55039974-G-T',
+      });
+      const notice = (result.structuredContent as { notice: string }).notice;
+      expect(notice).toBe(`${mapping} ${IDENTIFIERS}`);
+      expect(textOf(result)).toContain(mapping);
+    },
+  );
+
+  it('places the mapping notice after the staged table and before the identifier pointer', async () => {
+    fakeUpstreams(
+      { count: '3', idlist: ['4713084', '1687128', '2878'] },
+      { source: FILL, gnomad: () => new Response('Service Unavailable', { status: 503 }) },
+    );
+    const { canvas } = fakeCanvas();
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
+
+    const result = await run({ gene: 'BRCA1', limit: 5000, canvas_id: REUSED });
+
+    expect((result.structuredContent as { notice: string }).notice).toBe(
+      [
+        'Requested limit 5000 was clamped to the cap of 1500.',
+        clinvarPointer(3, REUSED),
+        UNAVAILABLE(2),
+        IDENTIFIERS,
+      ].join(' '),
+    );
+  });
+
+  it('starts no gnomAD request once NCBI has spent the call budget the handler started', async () => {
+    const { genes } = fakeUpstreams({ count: '2', idlist: ['4713084', '2878'] }, { source: FILL });
+    const ncbi = vi.mocked(globalThis.fetch).getMockImplementation();
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      // The summary answers only once the whole 45 s budget has passed.
+      if (fetchUrl(input).pathname.endsWith('/esummary.fcgi')) {
+        vi.setSystemTime(Date.now() + UPSTREAM_CALL_BUDGET_MS);
+      }
+      return (ncbi as typeof fetch)(input, init);
+    });
+
+    const result = await run({ gene: 'BRCA1' });
+
+    expect(result.isError).toBeFalsy();
+    expect(genes).toEqual([]);
+    expect(idsOf(result)).toEqual({ '4713084': null, '2878': '1-55039974-G-T' });
+    expect((result.structuredContent as { notice: string }).notice).toBe(
+      `${UNAVAILABLE(1)} ${IDENTIFIERS}`,
+    );
+  });
+
+  it('stages the filled IDs in the clinvar_variants table', async () => {
+    fakeUpstreams({ count: '6', idlist: FILL.result.uids }, { source: FILL });
+    const { canvas, tables } = fakeCanvas();
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
+
+    const result = await run({ gene: 'BRCA1', canvas_id: REUSED });
+
+    expect((result.structuredContent as { table_name: string }).table_name).toBe(
+      'clinvar_variants',
+    );
+    expect(
+      Object.fromEntries(
+        (tables.clinvar_variants ?? []).map((r) => [r.clinvar_variation_id, r.grch38_variant_id]),
+      ),
+    ).toEqual(idsOf(result));
+    expect(tables.clinvar_variants?.[0]).toMatchObject({ grch38_variant_id: '17-43092191-CAT-C' });
+  });
+
+  it('rejects a call cancelled during the gnomAD request instead of degrading it', async () => {
+    const controller = new AbortController();
+    const { genes } = fakeUpstreams(
+      { count: '2', idlist: ['4713084', '2878'] },
+      {
+        source: FILL,
+        gnomad: (_gene, init) => {
+          queueMicrotask(() => controller.abort(new Error('client cancelled')));
+          return hang(init);
+        },
+      },
+    );
+    vi.useFakeTimers();
+    const ctx = createMockContext({
+      errors: gnomadSearchClinvar.errors,
+      signal: controller.signal,
+    });
+    const input = gnomadSearchClinvar.input.parse({ gene: 'BRCA1' });
+
+    const outcome = Promise.resolve()
+      .then(() => gnomadSearchClinvar.handler(input, ctx as never))
+      .catch((err: unknown) => err);
+    for (let i = 0; i < 20; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await outcome).toMatchObject({ message: 'client cancelled' });
+    expect(genes).toEqual(['BRCA1']);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-11-01 11:39:31
+Generated on: 2026-11-04 05:24:33
 
 ```text
 gnomad-genetics-mcp-server/
@@ -162,6 +162,7 @@ gnomad-genetics-mcp-server/
 │   │       │   ├── gnomad-dataframe-query.tool.ts
 │   │       │   ├── gnomad-get-coverage.tool.ts
 │   │       │   ├── gnomad-get-gene-constraint.tool.ts
+│   │       │   ├── gnomad-get-variant-cooccurrence.tool.ts
 │   │       │   ├── gnomad-get-variant.tool.ts
 │   │       │   ├── gnomad-list-gene-variants.tool.ts
 │   │       │   └── gnomad-search-clinvar.tool.ts
@@ -193,16 +194,29 @@ gnomad-genetics-mcp-server/
 │   │   │   ├── gnomad_r4-55043800-55044600.response.json
 │   │   │   └── gnomad_r4-55043850-55044550.response.json
 │   │   ├── clinvar-esummary-heavy.live.json
+│   │   ├── clinvar-esummary-indel.live.json
 │   │   ├── clinvar-esummary-placeholder.live.json
+│   │   ├── clinvar-esummary-somatic.live.json
 │   │   ├── clinvar-esummary.live.json
+│   │   ├── gnomad-clinvar-variant-ids.live.json
+│   │   ├── gnomad-constraint.live.json
+│   │   ├── gnomad-cooccurrence.live.json
 │   │   ├── gnomad-coverage.live.json
+│   │   ├── gnomad-faf-gene-lists.live.json.gz
+│   │   ├── gnomad-faf.live.json
+│   │   ├── gnomad-subsets.live.json
 │   │   ├── gnomad-variant-clinvar-error.live.json
 │   │   └── pcsk9-gene-variants.live.json
 │   ├── fuzz/
 │   │   └── identifiers-and-responses.fuzz.test.ts
 │   ├── helpers/
 │   │   ├── fake-gnomad-coverage.ts
+│   │   ├── fake-gnomad-graphql.ts
 │   │   ├── live-consequences.ts
+│   │   ├── live-constraint.ts
+│   │   ├── live-cooccurrence.ts
+│   │   ├── live-faf.ts
+│   │   ├── live-subsets.ts
 │   │   ├── minimal-variant.ts
 │   │   └── worker-resource-read.ts
 │   ├── integration/
@@ -241,6 +255,7 @@ gnomad-genetics-mcp-server/
 │   │   ├── gnomad-dataframe-query.test.ts
 │   │   ├── gnomad-get-coverage.test.ts
 │   │   ├── gnomad-get-gene-constraint.test.ts
+│   │   ├── gnomad-get-variant-cooccurrence.test.ts
 │   │   ├── gnomad-get-variant.batch-config.test.ts
 │   │   ├── gnomad-get-variant.test.ts
 │   │   ├── gnomad-list-gene-variants.test.ts

@@ -11,11 +11,15 @@
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
-import { normalizeVariantIdentifier, VARIANT_OR_RSID_REGEX } from '../../tools/shared-schemas.js';
+import {
+  DATASET_CHOICES,
+  normalizeVariantIdentifier,
+  VARIANT_OR_RSID_REGEX,
+} from '../../tools/shared-schemas.js';
 
 /** gnomAD's LoF-intolerance guidance, per constraint release. */
 const CONSTRAINT_GUIDANCE =
-  'Read pLI (>0.9 intolerant) and LOEUF (oe_lof_upper): gnomAD recommends LOEUF < 0.45 for gnomAD v4.1.2 constraint (gnomad_r4, gnomad_r3) and < 0.35 for gnomAD v2.1.1 (gnomad_r2_1); ExAC constraint (exac) has no LOEUF, so judge it by pLI alone. The constraint_release field names the release the numbers come from.';
+  'Read pLI (>0.9 intolerant) and LOEUF (oe_lof_upper): gnomAD recommends LOEUF < 0.45 for gnomAD v4.1.2 constraint (gnomad_r4, gnomad_r3, and their subsets) and < 0.35 for gnomAD v2.1.1 (gnomad_r2_1 and its subsets); ExAC constraint (exac) has no LOEUF, so judge it by pLI alone. The constraint_release field names the release the numbers come from.';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description:
@@ -50,13 +54,11 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
     dataset: z
       .union([
         z.literal(''),
-        z
-          .enum(GNOMAD_DATASETS)
-          .describe('gnomAD dataset: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac.'),
+        z.enum(GNOMAD_DATASETS).describe(`gnomAD dataset: ${DATASET_CHOICES}.`),
       ])
       .optional()
       .describe(
-        'gnomAD dataset to use: gnomad_r4 (GRCh38), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), or exac (GRCh37). Omit or leave blank to use the server default.',
+        `gnomAD dataset to use: ${DATASET_CHOICES}. A subset reads its parent release's coverage and constraint. faf95 is null on a gnomad_r4 or gnomad_r3 subset; look the variant up on the parent. Omit or leave blank to use the server default.`,
       ),
   }),
   generate: (args) => {
@@ -101,7 +103,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
           text: [
             `Triage variant **${variant}** for rare-disease causality using gnomAD. Run these steps in order and report the population context plainly — never overstate certainty from a missing field.`,
             '',
-            `1. **Population frequency.** Call \`gnomad_get_variant(variants: ["${variant}"]${datasetClause})\`. Check \`qc_status\` first: \`filtered\` means the variant failed gnomAD QC in every callset carrying it — read \`callsets.exome.filters\` and \`callsets.genome.filters\` for why (AC0 means no high-quality carrier) — so its counts are low-confidence, not an observed frequency. Then report the overall AC/AN/AF and the full per-ancestry vector — a variant common in one genetic-ancestry group and absent in another is exactly the signal. Note homozygote/hemizygote counts, quality flags, and any joined ClinVar significance.`,
+            `1. **Population frequency.** Call \`gnomad_get_variant(variants: ["${variant}"]${datasetClause})\`. Check \`qc_status\` first: \`filtered\` means the variant failed gnomAD QC in every callset carrying it — read \`callsets.exome.filters\` and \`callsets.genome.filters\` for why (AC0 means no high-quality carrier) — so its counts are low-confidence, not an observed frequency. Then report the overall AC/AN/AF and the full per-ancestry vector — a variant common in one genetic-ancestry group and absent in another is exactly the signal. Compare \`faf95\` (gnomAD's filtering allele frequency, the lower 95% confidence bound of the highest non-bottlenecked group AF), not raw AF, against the disease's frequency threshold (e.g. ACMG/AMP BA1 or BS1); a null \`faf95\` gives nothing to compare, not a pass. Note homozygote/hemizygote counts, quality flags, and any joined ClinVar significance.`,
             '',
             geneStep,
             '',

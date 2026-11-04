@@ -23,8 +23,14 @@ import { gnomadListGeneVariants } from '@/mcp-server/tools/definitions/gnomad-li
 import * as canvasAccessor from '@/services/canvas-accessor.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService } from '@/services/gnomad/gnomad-service.js';
-import type { GeneVariantRow } from '@/services/gnomad/types.js';
-import { PCSK9_R4_GENE } from '../helpers/live-consequences.js';
+import type { AnnotatedGeneVariantRow, GeneVariantRow } from '@/services/gnomad/types.js';
+import {
+  PCSK9_R2_1_REGION_ANNOTATED_ROW,
+  PCSK9_R2_1_REGION_ROW,
+  PCSK9_R4_GENE,
+} from '../helpers/live-consequences.js';
+import { fakeFafLists } from '../helpers/live-faf.js';
+import { SUBSET_REPLIES } from '../helpers/live-subsets.js';
 
 type CallToolResult = Awaited<ReturnType<typeof runToolContract>>;
 
@@ -39,6 +45,9 @@ function row(i: number): GeneVariantRow {
     consequence: 'missense_variant',
     consequence_class: 'missense',
     homozygote_count: 0,
+    hemizygote_count: 0,
+    faf95_max: null,
+    faf95_max_group: null,
     source: 'exome|genome',
     flags: '',
     exome_filters: '',
@@ -46,6 +55,7 @@ function row(i: number): GeneVariantRow {
     qc_status: 'pass',
     transcript_id: 'ENST00000302118',
     consequence_transcript: 'mane_select',
+    lof: null,
   };
 }
 
@@ -140,8 +150,8 @@ describe('gnomad_list_gene_variants handler — canvas disabled', () => {
   });
 
   it('returns every row of a page that fits the 14,000-character budget, however many (#37, #59)', async () => {
-    // 45 compact rows (~295 characters each, no consequence) sum to under 14,000.
-    const rows = Array.from({ length: 45 }, (_, i) => ({
+    // 38 compact rows (~367 characters each, no consequence) sum to under 14,000.
+    const rows = Array.from({ length: 38 }, (_, i) => ({
       ...row(i + 1),
       consequence: null,
       consequence_class: 'other' as const,
@@ -153,24 +163,24 @@ describe('gnomad_list_gene_variants handler — canvas disabled', () => {
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
-    const input = gnomadListGeneVariants.input.parse({ gene: 'BRCA2', limit: 45 });
+    const input = gnomadListGeneVariants.input.parse({ gene: 'BRCA2', limit: 38 });
     const result = await gnomadListGeneVariants.handler(input, ctx as never);
 
-    expect(result.total).toBe(45);
-    expect(result.preview).toHaveLength(45);
+    expect(result.total).toBe(38);
+    expect(result.preview).toHaveLength(38);
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
   it('returns the whole page one character past the staging budget with the canvas off (#59)', async () => {
-    const rows = [...Array.from({ length: 39 }, (_, i) => sized(i + 1, 350)), sized(40, 351)];
+    const rows = [...Array.from({ length: 34 }, (_, i) => sized(i + 1, 400)), sized(35, 401)];
     stubService(rows);
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
-    const input = gnomadListGeneVariants.input.parse({ gene: 'BRCA2', limit: 40 });
+    const input = gnomadListGeneVariants.input.parse({ gene: 'BRCA2', limit: 35 });
     const result = await gnomadListGeneVariants.handler(input, ctx as never);
 
-    expect(result.total).toBe(40);
+    expect(result.total).toBe(35);
     expect(result.preview).toEqual(rows);
     expect(result.next_offset).toBeNull();
     expect(getEnrichment(ctx).notice).toBeUndefined();
@@ -269,32 +279,32 @@ describe('gnomad_list_gene_variants handler — canvas enabled', () => {
   });
 
   it('fits a result of exactly 14,000 preview characters inline (#37 boundary)', async () => {
-    stubService(Array.from({ length: 40 }, (_, i) => sized(i + 1, 350)));
+    stubService(Array.from({ length: 35 }, (_, i) => sized(i + 1, 400)));
     const { canvas } = fakeCanvas();
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
 
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
-    const input = gnomadListGeneVariants.input.parse({ gene: 'PCSK9', limit: 40 });
+    const input = gnomadListGeneVariants.input.parse({ gene: 'PCSK9', limit: 35 });
     const result = await gnomadListGeneVariants.handler(input, ctx as never);
 
-    expect(result).toMatchObject({ spilled: false, canvas_id: '', total: 40 });
-    expect(result.preview).toHaveLength(40);
+    expect(result).toMatchObject({ spilled: false, canvas_id: '', total: 35 });
+    expect(result.preview).toHaveLength(35);
     expect(canvas.acquire).not.toHaveBeenCalled();
   });
 
   it('spills one character past 14,000 and still returns the whole page (#37 boundary, #59)', async () => {
-    const rows = [...Array.from({ length: 39 }, (_, i) => sized(i + 1, 350)), sized(40, 351)];
+    const rows = [...Array.from({ length: 34 }, (_, i) => sized(i + 1, 400)), sized(35, 401)];
     stubService(rows);
     const { canvas, tables } = fakeCanvas();
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
 
     const ctx = createMockContext({ errors: gnomadListGeneVariants.errors });
-    const input = gnomadListGeneVariants.input.parse({ gene: 'PCSK9', limit: 40 });
+    const input = gnomadListGeneVariants.input.parse({ gene: 'PCSK9', limit: 35 });
     const result = await gnomadListGeneVariants.handler(input, ctx as never);
 
-    expect(result).toMatchObject({ spilled: true, table_name: 'gene_variants', total: 40 });
+    expect(result).toMatchObject({ spilled: true, table_name: 'gene_variants', total: 35 });
     expect(result.preview).toEqual(rows);
-    expect(tables.gene_variants).toHaveLength(40);
+    expect(tables.gene_variants).toHaveLength(35);
   });
 
   it('replaces the named table when a supplied canvas_id gets a result that fits (#35)', async () => {
@@ -346,7 +356,7 @@ const stagedLine = (id: string) =>
 
 type Size = 'spill' | 'fit' | 'zero';
 const rowsFor: Record<Size, () => GeneVariantRow[]> = {
-  spill: () => Array.from({ length: 100 }, (_, i) => sized(i + 1, 350)),
+  spill: () => Array.from({ length: 100 }, (_, i) => sized(i + 1, 400)),
   fit: () => [row(1), row(2), row(3)],
   zero: () => [],
 };
@@ -592,7 +602,7 @@ describe('gnomad_list_gene_variants QC status (#54)', () => {
       expect(result.structuredContent).toMatchObject({ preview: rows, total: 3, qc_filtered: 1 });
       expect(fake.listGeneVariants).toHaveBeenCalledWith(
         { kind: 'gene', value: 'PCSK9' },
-        { consequenceClass: 'missense', maxAf: 0.01, passOnly: false },
+        { annotations: false, consequenceClass: 'missense', maxAf: 0.01, passOnly: false },
         expect.anything(),
         expect.anything(),
       );
@@ -613,7 +623,7 @@ describe('gnomad_list_gene_variants QC status (#54)', () => {
 
     expect(fake.listGeneVariants).toHaveBeenCalledWith(
       { kind: 'gene', value: 'PCSK9' },
-      { consequenceClass: 'lof', maxAf: 0.001, passOnly: true },
+      { annotations: false, consequenceClass: 'lof', maxAf: 0.001, passOnly: true },
       expect.anything(),
       expect.anything(),
     );
@@ -741,21 +751,35 @@ describe("gnomad_list_gene_variants pass_only counts from a row's passing callse
 });
 
 describe('gnomad_list_gene_variants response budget (#37)', () => {
-  // The first 120 rows of the server's live gnomad_r4 PCSK9 list, captured 2026-11-01 06:23 (UTC).
-  const LIVE_ROWS = JSON.parse(
-    readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
-  ) as GeneVariantRow[];
+  // The first 120 rows of the server's live gnomad_r4 PCSK9 list with annotations; the fixture's _about names the capture.
+  const LIVE_ANNOTATED_ROWS = (
+    JSON.parse(
+      readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
+    ) as { rows: AnnotatedGeneVariantRow[] }
+  ).rows;
+  // The same rows in the default shape, as the capture's call without annotations returned them.
+  const LIVE_ROWS: GeneVariantRow[] = LIVE_ANNOTATED_ROWS.map(
+    ({ hgvsc, hgvsp, lof_filter, lof_flags, rsids, ...row }) => row,
+  );
 
-  it.each(['enabled', 'disabled'] as const)(
-    'keeps a real-row response under 24 KB with the canvas %s',
-    async (mode) => {
-      stubService(LIVE_ROWS);
+  it.each([
+    ['enabled', false],
+    ['disabled', false],
+    ['enabled', true],
+    ['disabled', true],
+  ] as const)(
+    'keeps a real-row response under 24 KB with the canvas %s (annotations %s)',
+    async (mode, annotations) => {
+      stubService(annotations ? LIVE_ANNOTATED_ROWS : LIVE_ROWS);
       const { canvas } = fakeCanvas();
       vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(
         mode === 'enabled' ? (canvas as never) : undefined,
       );
 
-      const result = await runToolContract(gnomadListGeneVariants, { gene: 'PCSK9' });
+      const result = await runToolContract(gnomadListGeneVariants, {
+        gene: 'PCSK9',
+        ...(annotations && { annotations }),
+      });
 
       const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
       expect(bytes).toBeLessThan(24_000);
@@ -763,6 +787,7 @@ describe('gnomad_list_gene_variants response budget (#37)', () => {
       expect(sc.total).toBe(LIVE_ROWS.length);
       // The default page (#59, #63), so the bound above is measured on a full one.
       expect(sc.preview).toHaveLength(25);
+      expect('rsids' in (sc.preview[0] ?? {})).toBe(annotations);
     },
   );
 });
@@ -967,7 +992,13 @@ describe('gnomad_list_gene_variants handler — input contracts', () => {
 const ECHO = {
   target: 'PCSK9',
   target_kind: 'gene' as const,
-  filters: { consequence_class: null, max_af: null, pass_only: null },
+  filters: {
+    consequence_class: null,
+    lof_confidence: null,
+    max_af: null,
+    max_faf: null,
+    pass_only: null,
+  },
   truncated: false,
   next_offset: null,
 };
@@ -995,10 +1026,10 @@ describe('gnomad_list_gene_variants format()', () => {
     expect(text).toContain('Showing 2 preview row(s):');
     const lines = text.split('\n');
     expect(lines).toContain(
-      '- **1-55000002-A-T** | missense (missense_variant) | AF 0.000002 (2.000e-6) | AC 2/1000000 | hom 0 | exome\\|genome | QC pass (exome passed, genome passed) | transcript ENST00000302118 (mane_select)',
+      '- **1-55000002-A-T** | missense (missense_variant) | AF 0.000002 (2.000e-6) | AC 2/1000000 | hom 0 | hemi 0 | exome\\|genome | QC pass (exome passed, genome passed) | transcript ENST00000302118 (mane_select)',
     );
     expect(lines).toContain(
-      '- **1-55000003-A-T** | missense (missense_variant) | AF 0.000003 (3.000e-6) | AC 3/1000000 | hom 0 | exome\\|genome | flags lcr | QC pass (exome passed, genome passed) | transcript ENST00000302118 (mane_select)',
+      '- **1-55000003-A-T** | missense (missense_variant) | AF 0.000003 (3.000e-6) | AC 3/1000000 | hom 0 | hemi 0 | exome\\|genome | flags lcr | QC pass (exome passed, genome passed) | transcript ENST00000302118 (mane_select)',
     );
   });
 
@@ -1016,7 +1047,7 @@ describe('gnomad_list_gene_variants format()', () => {
       .split('\n')
       .filter((line) => line.startsWith('- **'));
 
-    expect(lines.map((line) => line.split(' | ').slice(6).join(' | '))).toEqual([
+    expect(lines.map((line) => line.split(' | ').slice(7).join(' | '))).toEqual([
       'QC pass (exome passed, genome passed) | transcript ENST00000673903 (other)',
       'QC pass (exome passed, genome passed) | transcript none (other)',
       'QC pass (exome passed, genome passed) | transcript ENST00000302118',
@@ -1364,8 +1395,8 @@ const continuation = (from: number, to: number, total: number) =>
 describe('gnomad_list_gene_variants paging (#59)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  /** 100 rows of 350 JSON characters: 35,000 characters, past the 14,000-character staging budget. */
-  const hundred = () => Array.from({ length: 100 }, (_, i) => sized(i + 1, 350));
+  /** 100 rows of 400 JSON characters: 40,000 characters, past the 14,000-character staging budget. */
+  const hundred = () => Array.from({ length: 100 }, (_, i) => sized(i + 1, 400));
 
   it('returns every row a limit covers with the canvas off, past the 14,000-character budget', async () => {
     const rows = hundred();
@@ -1524,7 +1555,12 @@ describe('gnomad_list_gene_variants paging (#59)', () => {
     // Every filter reaches the service on every page; pass_only's drop applies to what it returns.
     expect(fake.listGeneVariants).toHaveBeenCalledTimes(5);
     for (const call of fake.listGeneVariants.mock.calls as unknown[][]) {
-      expect(call[1]).toEqual({ consequenceClass: 'missense', maxAf: 0.01, passOnly: true });
+      expect(call[1]).toEqual({
+        annotations: false,
+        consequenceClass: 'missense',
+        maxAf: 0.01,
+        passOnly: true,
+      });
     }
   });
 
@@ -1656,7 +1692,13 @@ describe('gnomad_list_gene_variants target and filter echo (#70)', () => {
     expect(result.structuredContent).toMatchObject({
       target: '13-32315474-32400266',
       target_kind: 'region',
-      filters: { consequence_class: null, max_af: null, pass_only: null },
+      filters: {
+        consequence_class: null,
+        lof_confidence: null,
+        max_af: null,
+        max_faf: null,
+        pass_only: null,
+      },
     });
     expect(textOf(result)).toContain('**Target:** region 13-32315474-32400266 | **Filters:** none');
   });
@@ -1675,7 +1717,9 @@ describe('gnomad_list_gene_variants target and filter echo (#70)', () => {
 
     expect((result.structuredContent as { filters: unknown }).filters).toEqual({
       consequence_class: null,
+      lof_confidence: null,
       max_af: null,
+      max_faf: null,
       pass_only: echoed,
     });
     expect(textOf(result)).toContain(`**Target:** gene PCSK9${rendered}`);
@@ -1704,7 +1748,7 @@ describe('gnomad_list_gene_variants target and filter echo (#70)', () => {
     },
   );
 
-  it('keeps offset, limit, and canvas_id out of filters', async () => {
+  it('keeps offset, limit, canvas_id, and annotations out of filters', async () => {
     stubService([row(1)]);
     vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
 
@@ -1714,11 +1758,19 @@ describe('gnomad_list_gene_variants target and filter echo (#70)', () => {
       limit: 10,
       canvas_id: REUSED,
       max_af: 0.5,
+      annotations: true,
     });
 
     const { filters } = result.structuredContent as { filters: Record<string, unknown> };
-    expect(Object.keys(filters)).toEqual(['consequence_class', 'max_af', 'pass_only']);
+    expect(Object.keys(filters)).toEqual([
+      'consequence_class',
+      'lof_confidence',
+      'max_af',
+      'max_faf',
+      'pass_only',
+    ]);
     expect(textOf(result)).toContain('**Filters:** max_af=0.5\n');
+    expect(textOf(result)).not.toContain('annotations');
   });
 });
 
@@ -1741,5 +1793,561 @@ describe('gnomad_list_gene_variants definition-time limit mode (#63)', () => {
     expect(limit).toMatchObject({ default: 25, minimum: 1, maximum: 3000 });
     expect(strict.input.safeParse({ gene: 'PCSK9', limit: 3000 }).success).toBe(true);
     expect(strict.input.safeParse({ gene: 'PCSK9', limit: 3001 }).success).toBe(false);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+describe('gnomad_list_gene_variants on a subset dataset (#68)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('sends gnomad_r2_1_non_neuro as given and sums the callsets of its rows', async () => {
+    const live = SUBSET_REPLIES['list-region:gnomad_r2_1_non_neuro:1-55505647-55505647'];
+    const requests: { variables: Record<string, unknown> }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { variables: Record<string, unknown> };
+      requests.push(request);
+      if (!live) throw new Error('Unmocked gnomAD document');
+      return Response.json(live.body, { status: live.status });
+    });
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: '1-55505647-55505647',
+      dataset: 'gnomad_r2_1_non_neuro',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.variables)).toEqual([
+      {
+        chrom: '1',
+        start: 55505647,
+        stop: 55505647,
+        dataset: 'gnomad_r2_1_non_neuro',
+        referenceGenome: 'GRCh37',
+        // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+        jointFafmax: false,
+        callsetFafmax: false,
+        callsetFaf95: true,
+        // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+        annotations: false,
+      },
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      dataset: 'gnomad_r2_1_non_neuro',
+      reference_genome: 'GRCh37',
+      total: 1,
+      preview: [{ variant_id: '1-55505647-G-T', ac: 1863 + 279, an: 163544 + 21264 }],
+    });
+  });
+
+  it('describes joint counts as gnomad_r4 only, gnomad_r4_non_ukb summed', () => {
+    const rowShape = (
+      gnomadListGeneVariants.output.shape.preview as unknown as {
+        element: { shape: Record<string, { description?: string }> };
+      }
+    ).element.shape;
+    expect(rowShape.ac?.description).toMatch(/gnomad_r4_non_ukb/);
+    expect(rowShape.an?.description).toMatch(/gnomad_r4_non_ukb/);
+    expect(gnomadListGeneVariants.input.shape.pass_only.description).toMatch(/gnomad_r4_non_ukb/);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/75
+describe('gnomad_list_gene_variants hemizygote_count (#75)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Live X-38403555-G-A row on gnomad_r4, captured 2026-11-04 (UTC). */
+  const X_R4_ROW = {
+    variant_id: 'X-38403555-G-A',
+    consequence: 'intron_variant',
+    transcript_id: 'ENST00000039007',
+    flags: [],
+    exome: {
+      ac: 395059,
+      an: 1028348,
+      af: 0.38416858884346544,
+      homozygote_count: 54539,
+      hemizygote_count: 125444,
+      filters: [],
+    },
+    genome: {
+      ac: 51516,
+      an: 110767,
+      af: 0.46508436628237654,
+      homozygote_count: 9642,
+      hemizygote_count: 15246,
+      filters: [],
+    },
+    joint: { ac: 446575, an: 1139115, homozygote_count: 64181, hemizygote_count: 140690 },
+  };
+
+  it('carries the joint hemizygote count on both surfaces and in the staged table', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({ data: { region: { variants: [X_R4_ROW] } } }),
+    );
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    const { canvas, tables } = fakeCanvas();
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(canvas as never);
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: 'X-38403555-38403555',
+      canvas_id: REUSED,
+    });
+
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as { preview: GeneVariantRow[] };
+    expect(sc.preview).toMatchObject([{ homozygote_count: 64181, hemizygote_count: 140690 }]);
+    expect(tables.gene_variants).toEqual(sc.preview);
+    expect(textOf(result)).toContain('| hom 64181 | hemi 140690 |');
+  });
+
+  it('leaves hemi out of a row line whose hemizygote_count is null', async () => {
+    stubService([{ ...row(1), hemizygote_count: null }, row(2)]);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+    const result = await runToolContract(gnomadListGeneVariants, { gene: 'OTC' });
+
+    const [nullHemi, zeroHemi] = textOf(result)
+      .split('\n')
+      .filter((line) => line.startsWith('- **'));
+    expect(nullHemi).toContain('| hom 0 | exome\\|genome |');
+    expect(zeroHemi).toContain('| hom 0 | hemi 0 | exome\\|genome |');
+    const sc = result.structuredContent as { preview: GeneVariantRow[] };
+    expect(sc.preview.map((r) => r.hemizygote_count)).toEqual([null, 0]);
+  });
+
+  it('declares hemizygote_count a nullable count beside homozygote_count', () => {
+    const rowShape = (
+      gnomadListGeneVariants.output.shape.preview as unknown as {
+        element: { shape: Record<string, z.ZodType> };
+      }
+    ).element.shape;
+    const keys = Object.keys(rowShape);
+    expect(keys.indexOf('hemizygote_count')).toBe(keys.indexOf('homozygote_count') + 1);
+    expect(rowShape.hemizygote_count?.safeParse(null).success).toBe(true);
+    expect(gnomadListGeneVariants.input.shape.pass_only.description).toMatch(/hemizygote_count/);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+describe('gnomad_list_gene_variants faf95_max and max_faf (#64)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Run the real service over gnomAD's live FAF replies, canvas off. */
+  function serveLive() {
+    fakeFafLists();
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+  }
+  const untested = (count: number, total: number) =>
+    `max_faf could not test ${count} of the ${total} variant(s) it kept: gnomAD reports no filtering allele frequency for them (faf95_max null), so judge them by af.`;
+  const noFafRows = (dataset: string) =>
+    `${dataset} list rows carry no filtering allele frequency (faf95_max is null on every row), so max_faf filtered no variant.`;
+  const out = (result: CallToolResult) =>
+    gnomadListGeneVariants.output.parse(result.structuredContent);
+
+  it('lists PCSK9 on gnomad_r4 whole without max_faf, with no FAF notice and a null max_faf echo', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, { gene: 'PCSK9' });
+
+    const sc = result.structuredContent as { total: number; notice?: string };
+    expect(out(result)).toMatchObject({ total: 4544, filters: { max_faf: null } });
+    expect(sc.notice).not.toMatch(/max_faf|filtering allele frequency/);
+    expect(textOf(result)).toContain('**Target:** gene PCSK9 | **Filters:** none');
+  });
+
+  it.each([
+    [1, 4544],
+    [0.001, 4409],
+    [0, 3004],
+  ])(
+    'keeps %d → %i PCSK9 rows on gnomad_r4, counting the 3,004 null-FAF rows kept, on both surfaces',
+    async (maxFaf, total) => {
+      serveLive();
+
+      const result = await runToolContract(gnomadListGeneVariants, {
+        gene: 'PCSK9',
+        max_faf: maxFaf,
+      });
+
+      const parsed = out(result);
+      expect(parsed).toMatchObject({ total, filters: { max_faf: maxFaf } });
+      expect(parsed.preview.every((r) => r.faf95_max == null || r.faf95_max <= maxFaf)).toBe(true);
+      const notice = (result.structuredContent as { notice: string }).notice;
+      expect(notice).toContain(untested(3004, total));
+      const text = textOf(result);
+      expect(text).toContain(untested(3004, total));
+      expect(text).toContain(`**Target:** gene PCSK9 | **Filters:** max_faf=${maxFaf}\n`);
+    },
+  );
+
+  it('keeps 1,316 PCSK9 rows on gnomad_r2_1 under max_faf 0.001, 857 of them untested', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      dataset: 'gnomad_r2_1',
+      max_faf: 0.001,
+    });
+
+    expect(out(result)).toMatchObject({ total: 1316, dataset: 'gnomad_r2_1' });
+    expect((result.structuredContent as { notice: string }).notice).toContain(untested(857, 1316));
+  });
+
+  it.each([
+    ['gnomad_r3', { gene: 'INS' }, 156],
+    ['exac', { region: '1-55505647-55505647' }, 1],
+  ] as const)(
+    'filters nothing on %s, whose list rows carry no FAF, and says so',
+    async (dataset, target, total) => {
+      serveLive();
+
+      const result = await runToolContract(gnomadListGeneVariants, {
+        ...target,
+        dataset,
+        max_faf: 0.001,
+      });
+
+      const parsed = out(result);
+      expect(parsed.total).toBe(total);
+      expect(parsed.preview.every((r) => r.faf95_max === null && r.faf95_max_group === null)).toBe(
+        true,
+      );
+      const notice = (result.structuredContent as { notice: string }).notice;
+      expect(notice).toContain(noFafRows(dataset));
+      expect(notice).not.toContain('max_faf could not test');
+      expect(textOf(result)).toContain(noFafRows(dataset));
+    },
+  );
+
+  it('adds no untested count when max_faf leaves no row to count', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: '1-55039974-55039974',
+      max_faf: 0.01,
+      consequence_class: 'synonymous',
+    });
+
+    const sc = result.structuredContent as { total: number; notice: string };
+    expect(sc.total).toBe(0);
+    expect(sc.notice).toBe(
+      'No variants in region "1-55039974-55039974" matching consequence_class=synonymous, max_faf=0.01. Broaden the filters.',
+    );
+  });
+
+  it('carries faf95_max and its group on both surfaces, and leaves a null one out of the row line', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: '1-55039974-55039974',
+    });
+
+    expect(out(result).preview.map((r) => [r.variant_id, r.faf95_max, r.faf95_max_group])).toEqual([
+      ['1-55039974-G-T', 0.01649444, 'nfe'],
+      ['1-55039974-G-A', null, null],
+    ]);
+    const [withFaf, withoutFaf] = textOf(result)
+      .split('\n')
+      .filter((line) => line.startsWith('- **'));
+    expect(withFaf).toMatch(
+      /^- \*\*1-55039974-G-T\*\* \|.* \| hom 226 \| FAF95 0\.01649444 \(nfe\) \| /,
+    );
+    expect(withoutFaf).toMatch(/^- \*\*1-55039974-G-A\*\* \|/);
+    expect(withoutFaf).not.toContain('FAF95');
+  });
+
+  it('renders a FAF95 whose group gnomAD leaves unnamed without one', async () => {
+    stubService([{ ...row(1), faf95_max: 0.0021, faf95_max_group: null }]);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+    const result = await runToolContract(gnomadListGeneVariants, { gene: 'PCSK9' });
+
+    expect(textOf(result)).toContain('| hom 0 | hemi 0 | FAF95 0.0021 | exome\\|genome |');
+  });
+
+  it.each([
+    [0, true],
+    [1, true],
+    [-0.001, false],
+    [1.001, false],
+  ])('takes max_faf %d: %s', (maxFaf, accepted) => {
+    expect(gnomadListGeneVariants.input.safeParse({ gene: 'PCSK9', max_faf: maxFaf }).success).toBe(
+      accepted,
+    );
+  });
+
+  it('declares faf95_max and faf95_max_group after hemizygote_count, both nullable', () => {
+    const rowShape = (
+      gnomadListGeneVariants.output.shape.preview as unknown as {
+        element: { shape: Record<string, z.ZodType> };
+      }
+    ).element.shape;
+    const keys = Object.keys(rowShape);
+    expect(keys.slice(keys.indexOf('hemizygote_count') + 1, keys.indexOf('source'))).toEqual([
+      'faf95_max',
+      'faf95_max_group',
+    ]);
+    expect(rowShape.faf95_max?.safeParse(null).success).toBe(true);
+    expect(rowShape.faf95_max_group?.safeParse(null).success).toBe(true);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+describe('gnomad_list_gene_variants lof, lof_confidence, and annotations (#65)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const ANNOTATIONS = ['hgvsc', 'hgvsp', 'lof_filter', 'lof_flags', 'rsids'] as const;
+
+  /** Run the real service over gnomAD's live list replies, canvas off. */
+  function serveLive() {
+    const requests = fakeFafLists();
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+    return requests;
+  }
+  const out = (result: CallToolResult) =>
+    gnomadListGeneVariants.output.parse(result.structuredContent);
+  const rowLines = (result: CallToolResult) =>
+    textOf(result)
+      .split('\n')
+      .filter((line) => line.startsWith('- **'));
+
+  it.each([
+    ['HC', 181],
+    ['LC', 23],
+  ] as const)(
+    'keeps the %s rows of PCSK9 on gnomad_r4 (%i), echoed and rendered on both surfaces',
+    async (lofConfidence, total) => {
+      serveLive();
+
+      const result = await runToolContract(gnomadListGeneVariants, {
+        gene: 'PCSK9',
+        lof_confidence: lofConfidence,
+        limit: 3000,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const parsed = out(result);
+      expect(parsed).toMatchObject({ total, filters: { lof_confidence: lofConfidence } });
+      expect(parsed.preview.every((r) => r.lof === lofConfidence)).toBe(true);
+      expect(textOf(result)).toContain(`**Filters:** lof_confidence=${lofConfidence}\n`);
+      const lines = rowLines(result);
+      expect(lines).toHaveLength(total);
+      expect(lines.every((line) => line.endsWith(` | LoF ${lofConfidence}`))).toBe(true);
+    },
+  );
+
+  it('lists PCSK9 whole without lof_confidence: 4,544 rows, 4,340 with lof null, a null echo', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, { gene: 'PCSK9', limit: 3000 });
+    const rest = await runToolContract(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      limit: 3000,
+      offset: 3000,
+    });
+
+    const parsed = out(result);
+    expect(parsed).toMatchObject({ total: 4544, filters: { lof_confidence: null } });
+    expect(textOf(result)).not.toContain('lof_confidence');
+    const rows = [...parsed.preview, ...out(rest).preview];
+    expect(rows).toHaveLength(4544);
+    expect(rows.filter((r) => r.lof == null)).toHaveLength(4340);
+  });
+
+  it.each([
+    ['HC', 1],
+    ['LC', 9],
+  ] as const)(
+    'keeps %s INS rows on gnomad_r2_1 (%i), never the OS row',
+    async (lofConfidence, total) => {
+      serveLive();
+
+      const result = await runToolContract(gnomadListGeneVariants, {
+        gene: 'INS',
+        dataset: 'gnomad_r2_1',
+        lof_confidence: lofConfidence,
+      });
+
+      const parsed = out(result);
+      expect(parsed.total).toBe(total);
+      expect(parsed.preview.map((r) => r.variant_id)).not.toContain(
+        '11-2181230-G-GCAGGTCCTCTGCCTC',
+      );
+      expect(textOf(result)).not.toContain('11-2181230-G-GCAGGTCCTCTGCCTC');
+    },
+  );
+
+  it('names lof_confidence in the no-match notice of an empty result', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: '1-55505647-55505647',
+      dataset: 'gnomad_r2_1',
+      lof_confidence: 'HC',
+    });
+
+    expect(out(result)).toMatchObject({ total: 0, preview: [] });
+    expect((result.structuredContent as { notice?: string }).notice).toBe(
+      'No variants in region "1-55505647-55505647" matching lof_confidence=HC. Broaden the filters.',
+    );
+  });
+
+  it('counts the HC rows max_faf could not test, beside lof_confidence', async () => {
+    serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      lof_confidence: 'HC',
+      max_faf: 0.0001,
+    });
+
+    expect(out(result)).toMatchObject({
+      total: 175,
+      filters: { lof_confidence: 'HC', max_faf: 0.0001 },
+    });
+    expect((result.structuredContent as { notice?: string }).notice).toContain(
+      'max_faf could not test 122 of the 175 variant(s) it kept',
+    );
+    expect(textOf(result)).toContain('**Filters:** lof_confidence=HC, max_faf=0.0001\n');
+  });
+
+  it('takes lof_confidence HC or LC and a boolean annotations', () => {
+    const parse = (input: Record<string, unknown>) =>
+      gnomadListGeneVariants.input.safeParse({ gene: 'PCSK9', ...input }).success;
+
+    expect(parse({ lof_confidence: 'HC' })).toBe(true);
+    expect(parse({ lof_confidence: 'LC', annotations: true })).toBe(true);
+    expect(parse({ annotations: false })).toBe(true);
+    expect(parse({ annotations: 'true' })).toBe(false);
+  });
+
+  it.each(['OS', 'hc', '', 'HC '])('rejects lof_confidence %j at the schema', async (value) => {
+    expect(
+      gnomadListGeneVariants.input.safeParse({ gene: 'PCSK9', lof_confidence: value }).success,
+    ).toBe(false);
+    const fake = stubService([row(1)]);
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      gene: 'PCSK9',
+      lof_confidence: value,
+    } as never);
+
+    expect(result.isError).toBe(true);
+    expect(fake.listGeneVariants).not.toHaveBeenCalled();
+  });
+
+  it('sends annotations false by default: rows and their lines carry lof and none of the five', async () => {
+    const requests = serveLive();
+
+    const result = await runToolContract(gnomadListGeneVariants, { gene: 'PCSK9' });
+
+    expect(requests[0]?.variables).toMatchObject({ annotations: false });
+    const preview = (result.structuredContent as { preview: Record<string, unknown>[] }).preview;
+    expect(preview).toHaveLength(25);
+    for (const r of [...preview, ...out(result).preview]) {
+      expect('lof' in r).toBe(true);
+      expect(ANNOTATIONS.filter((name) => name in r)).toEqual([]);
+    }
+    expect(textOf(result)).not.toMatch(/HGVSc|HGVSp|LoF filter|LoF flags|rsIDs/);
+  });
+
+  it('returns the region row 1-55505647-G-T with its live annotations on both surfaces', async () => {
+    const sent: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const { variables } = JSON.parse(String(init?.body)) as {
+        variables: Record<string, unknown>;
+      };
+      sent.push(variables);
+      const row = variables.annotations ? PCSK9_R2_1_REGION_ANNOTATED_ROW : PCSK9_R2_1_REGION_ROW;
+      return Response.json({ data: { region: { variants: [row] } } });
+    });
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    vi.spyOn(canvasAccessor, 'getCanvas').mockReturnValue(undefined);
+
+    const result = await runToolContract(gnomadListGeneVariants, {
+      region: '1-55505647-55505647',
+      dataset: 'gnomad_r2_1',
+      annotations: true,
+    });
+
+    expect(sent).toMatchObject([{ annotations: true }]);
+    const [annotated] = out(result).preview;
+    expect(annotated).toMatchObject({
+      variant_id: '1-55505647-G-T',
+      lof: null,
+      hgvsc: 'c.137G>T',
+      hgvsp: 'p.Arg46Leu',
+      lof_filter: null,
+      lof_flags: null,
+      rsids: 'rs11591147',
+    });
+    expect(Object.keys(annotated ?? {}).slice(-6)).toEqual(['lof', ...ANNOTATIONS]);
+    // annotations is a column toggle, not a filter.
+    expect(out(result).filters).not.toHaveProperty('annotations');
+    // A null lof, lof_filter, and lof_flags render no field.
+    expect(rowLines(result)).toEqual([
+      expect.stringMatching(
+        / \| transcript ENST00000302118 \| HGVSc c\.137G>T \| HGVSp p\.Arg46Leu \| rsIDs rs11591147$/,
+      ),
+    ]);
+  });
+
+  it('renders lof and each annotations value on a row line, and nothing for a null or empty one', () => {
+    const lines = (
+      gnomadListGeneVariants.format?.({
+        ...ECHO,
+        canvas_id: '',
+        table_name: '',
+        spilled: false,
+        total: 3,
+        qc_filtered: 0,
+        dataset: 'gnomad_r4',
+        reference_genome: 'GRCh38',
+        preview: [
+          { ...row(1), lof: 'LC' },
+          {
+            ...row(2),
+            lof: 'LC',
+            hgvsc: 'c.1819G>T',
+            hgvsp: 'p.Glu607Ter',
+            lof_filter: 'END_TRUNC',
+            lof_flags: 'PHYLOCSF_WEAK',
+            rsids: 'rs1|rs2',
+          },
+          { ...row(3), hgvsc: null, hgvsp: null, lof_filter: null, lof_flags: null, rsids: '' },
+        ],
+      }) ?? []
+    )
+      .map((b) => ('text' in b ? b.text : ''))
+      .join('\n')
+      .split('\n')
+      .filter((line) => line.startsWith('- **'))
+      .map((line) => line.slice(line.indexOf('| transcript')));
+
+    expect(lines).toEqual([
+      '| transcript ENST00000302118 (mane_select) | LoF LC',
+      '| transcript ENST00000302118 (mane_select) | LoF LC | HGVSc c.1819G>T | HGVSp p.Glu607Ter | LoF filter END_TRUNC | LoF flags PHYLOCSF_WEAK | rsIDs rs1\\|rs2',
+      '| transcript ENST00000302118 (mane_select)',
+    ]);
+  });
+
+  it('declares lof after consequence_transcript and the five optional columns last', () => {
+    const rowShape = (
+      gnomadListGeneVariants.output.shape.preview as unknown as {
+        element: { shape: Record<string, z.ZodType> };
+      }
+    ).element.shape;
+    const keys = Object.keys(rowShape);
+    expect(keys.slice(-7)).toEqual(['consequence_transcript', 'lof', ...ANNOTATIONS]);
+    expect(rowShape.lof?.safeParse(undefined).success).toBe(false);
+    for (const name of ANNOTATIONS) {
+      expect(rowShape[name]?.safeParse(undefined).success).toBe(true);
+      expect(rowShape[name]?.description).toMatch(/Present only when annotations is true/);
+    }
+    expect(rowShape.rsids?.safeParse(null).success).toBe(false);
+    expect(gnomadListGeneVariants.input.shape.annotations.description).toMatch(/not a filter/);
   });
 });

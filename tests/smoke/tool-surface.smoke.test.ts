@@ -1,5 +1,5 @@
 /**
- * @fileoverview Offline smoke test for the complete eight-tool MCP surface.
+ * @fileoverview Offline smoke test for the complete nine-tool MCP surface.
  * Confirms every definition loads, has a unique public name, advertises input
  * and output contracts, and keeps build identity on every gnomAD data response.
  * @module tests/smoke/tool-surface.smoke.test
@@ -13,6 +13,7 @@ import { gnomadDataframeQuery } from '@/mcp-server/tools/definitions/gnomad-data
 import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
+import { gnomadGetVariantCooccurrence } from '@/mcp-server/tools/definitions/gnomad-get-variant-cooccurrence.tool.js';
 import { gnomadListGeneVariants } from '@/mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js';
 import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 
@@ -21,25 +22,27 @@ const tools = [
   gnomadListGeneVariants,
   gnomadGetGeneConstraint,
   gnomadGetCoverage,
+  gnomadGetVariantCooccurrence,
   gnomadSearchClinvar,
   gnomadDataframeQuery,
   gnomadDataframeDescribe,
   gnomadDataframeDrop,
 ];
 
-describe('eight-tool surface', () => {
+describe('nine-tool surface', () => {
   it('loads every expected definition exactly once with schemas and annotations', () => {
     expect(tools.map((definition) => definition.name)).toEqual([
       'gnomad_get_variant',
       'gnomad_list_gene_variants',
       'gnomad_get_gene_constraint',
       'gnomad_get_coverage',
+      'gnomad_get_variant_cooccurrence',
       'gnomad_search_clinvar',
       'gnomad_dataframe_query',
       'gnomad_dataframe_describe',
       'gnomad_dataframe_drop',
     ]);
-    expect(new Set(tools.map((definition) => definition.name)).size).toBe(8);
+    expect(new Set(tools.map((definition) => definition.name)).size).toBe(9);
 
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(40);
@@ -55,6 +58,7 @@ describe('eight-tool surface', () => {
       gnomadListGeneVariants,
       gnomadGetGeneConstraint,
       gnomadGetCoverage,
+      gnomadGetVariantCooccurrence,
     ]) {
       const schema = z.toJSONSchema(definition.output) as {
         properties?: Record<string, unknown>;
@@ -70,6 +74,7 @@ describe('eight-tool surface', () => {
       gnomadListGeneVariants,
       gnomadGetGeneConstraint,
       gnomadGetCoverage,
+      gnomadGetVariantCooccurrence,
     ]) {
       expect(definition.description).toContain(
         'Data source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',

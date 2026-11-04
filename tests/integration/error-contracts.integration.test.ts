@@ -19,10 +19,12 @@ import { variantResource } from '@/mcp-server/resources/definitions/variant.reso
 import { gnomadGetCoverage } from '@/mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
+import { gnomadGetVariantCooccurrence } from '@/mcp-server/tools/definitions/gnomad-get-variant-cooccurrence.tool.js';
 import { gnomadListGeneVariants } from '@/mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js';
 import { gnomadSearchClinvar } from '@/mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 import { initClinVarService } from '@/services/clinvar/clinvar-service.js';
 import { initGnomadService } from '@/services/gnomad/gnomad-service.js';
+import { liveCooccurrence } from '../helpers/live-cooccurrence.js';
 import { minimalVariant } from '../helpers/minimal-variant.js';
 import { readResourceBody, rpcErrorOf } from '../helpers/worker-resource-read.js';
 
@@ -198,8 +200,13 @@ const CONSTRAINT_METRICS = {
   oe_lof: 0.3,
   oe_lof_lower: 0.2,
   oe_lof_upper: 0.4,
+  oe_lof_percentile: 10,
   oe_mis: 0.9,
+  oe_mis_lower: 0.85,
+  oe_mis_upper: 0.95,
   oe_syn: 1,
+  oe_syn_lower: 0.9,
+  oe_syn_upper: 1.1,
   lof_z: 3,
   mis_z: 1,
   syn_z: 0,
@@ -222,6 +229,30 @@ const OUT_OF_DOMAIN_CONSTRAINT: Reply = {
         symbol: 'PCSK9',
         gnomad_constraint: { ...CONSTRAINT_METRICS, pli: 2 },
         exac_constraint: null,
+        mitochondrial_constraint: null,
+      },
+    },
+  },
+};
+
+/** An MT-TL1 constraint answer whose mitochondrial constraint names a type gnomAD's schema lacks. */
+const UNKNOWN_MITOCHONDRIAL_CONSTRAINT: Reply = {
+  status: 200,
+  body: {
+    data: {
+      gene: {
+        gene_id: 'ENSG00000209082',
+        symbol: 'MT-TL1',
+        gnomad_constraint: null,
+        exac_constraint: null,
+        mitochondrial_constraint: {
+          __typename: 'TRNAMitochondrialGeneConstraint',
+          observed: 13.634,
+          expected: 92.721,
+          oe: 0.147,
+          oe_lower: 0.085,
+          oe_upper: 0.213,
+        },
       },
     },
   },
@@ -451,6 +482,12 @@ const constraintDomainScenarios = <I>(input: I): Scenario<I>[] => [
     route: always(OUT_OF_DOMAIN_CONSTRAINT),
   },
   {
+    label: 'a mitochondrial constraint of a type gnomAD’s schema lacks',
+    reason: 'invalid_constraint_data',
+    input,
+    route: always(UNKNOWN_MITOCHONDRIAL_CONSTRAINT),
+  },
+  {
     label: 'a GraphQL error gnomAD raises for the gene',
     reason: 'graphql_error',
     input,
@@ -612,6 +649,60 @@ const coverageToolScenarios = [
   },
 ];
 
+const cooccurrenceTool: Surface<ToolInput> = {
+  name: 'gnomad_get_variant_cooccurrence',
+  errors: gnomadGetVariantCooccurrence.errors,
+  invoke: (input) => callTool(gnomadGetVariantCooccurrence, input),
+};
+
+/** A live pair gnomAD phases; the scenarios fake its answer. */
+const COOCCURRENCE_PAIR = { variants: ['1-55505647-G-T', '1-55505651-C-T'] };
+
+const cooccurrenceToolScenarios: Scenario<ToolInput>[] = [
+  {
+    label: 'an rsID',
+    reason: 'invalid_variant_id',
+    input: { variants: ['rs11591147', '1-55505651-C-T'] },
+    route: always({ status: 200, body: { data: null } }),
+  },
+  {
+    label: 'a mitochondrial ID',
+    reason: 'mitochondrial_unsupported',
+    input: { variants: ['MT-3243-A-G', '1-55505651-C-T'] },
+    route: always({ status: 200, body: { data: null } }),
+  },
+  {
+    label: 'gnomAD refusing the same ID twice',
+    reason: 'cooccurrence_unavailable',
+    input: { variants: ['1-55505647-G-T', '1-55505647-G-T'] },
+    route: always(graphqlErrors('Variants must be different', { variant_cooccurrence: null })),
+  },
+  {
+    label: 'gnomAD refusing a pair outside one gene',
+    reason: 'cooccurrence_unavailable',
+    input: { variants: ['1-55505647-G-T', '11-2181054-C-T'] },
+    route: always(
+      graphqlErrors(
+        'Variant co-occurrence is only available for variants that occur in the same gene',
+        { variant_cooccurrence: null },
+      ),
+    ),
+  },
+  {
+    label: 'a GraphQL error gnomAD raises for the pair',
+    reason: 'graphql_error',
+    input: COOCCURRENCE_PAIR,
+    route: always(graphqlErrors('Invalid variant ID', { variant_cooccurrence: null })),
+  },
+  {
+    label: 'a reply naming another pair',
+    reason: 'invalid_upstream_response',
+    input: COOCCURRENCE_PAIR,
+    route: always({ status: 200, body: liveCooccurrence('1-55505515-G-A', '1-55505537-C-G') }),
+  },
+  ...transportScenarios<ToolInput>(COOCCURRENCE_PAIR),
+];
+
 const clinvarTool: Surface<ToolInput> = {
   name: 'gnomad_search_clinvar',
   errors: gnomadSearchClinvar.errors,
@@ -730,6 +821,7 @@ contractSuite(constraintTool, constraintToolScenarios);
 contractSuite(constraintResourceSurface, constraintResourceScenarios);
 contractSuite(listTool, listToolScenarios);
 contractSuite(coverageTool, coverageToolScenarios);
+contractSuite(cooccurrenceTool, cooccurrenceToolScenarios);
 contractSuite(clinvarTool, clinvarToolScenarios);
 
 describe('gnomad://variant — ambiguous rsID on the wire', () => {
@@ -774,6 +866,7 @@ describe('upstream request counts behind the contract', () => {
     ['a stalled body', always('stalled-body'), 2],
     ['HTTP 403', always({ status: 403, text: 'Forbidden' }), 1],
     ['out-of-domain constraint metrics', always(OUT_OF_DOMAIN_CONSTRAINT), 1],
+    ['an unknown mitochondrial constraint type', always(UNKNOWN_MITOCHONDRIAL_CONSTRAINT), 1],
   ] as const)('%s → %i gnomAD request(s)', async (_label, route, count) => {
     fakeUpstream(route);
     await callTool(gnomadGetGeneConstraint, { gene: 'PCSK9' });

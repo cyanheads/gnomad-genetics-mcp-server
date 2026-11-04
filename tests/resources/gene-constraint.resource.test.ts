@@ -1,7 +1,8 @@
 /**
  * @fileoverview Behavior tests for the gnomad://gene/{dataset}/{gene}/constraint
  * resource — mirrors gnomad_get_gene_constraint, surfacing the gene_not_found
- * contract reason when no gene matches. Handler tests stub the service
+ * contract reason when no gene matches, plus subset segments, the LOEUF
+ * percentile and intervals, and mitochondrial constraint. Handler tests stub the service
  * accessor; the wire tests run the real service behind a worker handler with
  * only global fetch faked.
  * @module tests/resources/gene-constraint.resource.test
@@ -10,10 +11,12 @@
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { geneConstraintResource } from '@/mcp-server/resources/definitions/gene-constraint.resource.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import type { GeneConstraint } from '@/services/gnomad/types.js';
+import { fakeLiveConstraint } from '../helpers/live-constraint.js';
 import { readResourceBody, resourceRecordOf } from '../helpers/worker-resource-read.js';
 
 afterEach(() => {
@@ -31,8 +34,13 @@ function constraint(): GeneConstraint {
     oe_lof: 0.8,
     oe_lof_lower: 0.6,
     oe_lof_upper: 1.0,
+    oe_lof_percentile: 60,
     oe_mis: 0.9,
+    oe_mis_lower: 0.85,
+    oe_mis_upper: 0.95,
     oe_syn: 1.0,
+    oe_syn_lower: 0.9,
+    oe_syn_upper: 1.1,
     lof_z: 0.5,
     mis_z: 0.3,
     syn_z: 0.1,
@@ -43,6 +51,7 @@ function constraint(): GeneConstraint {
     obs_syn: 100,
     exp_syn: 100,
     constraint_flags: [],
+    mitochondrial_constraint: null,
   };
 }
 
@@ -115,8 +124,13 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
         oe_lof: 0.9,
         oe_lof_lower: 0.7,
         oe_lof_upper: grch37 ? 1.341 : 1.1441,
+        oe_lof_percentile: grch37 ? null : 71,
         oe_mis: 0.9,
+        oe_mis_lower: grch37 ? 0.888 : 0.8575,
+        oe_mis_upper: grch37 ? 1.044 : 0.9587,
         oe_syn: 0.9,
+        oe_syn_lower: grch37 ? 0.799 : 0.87,
+        oe_syn_upper: grch37 ? 1.03 : 1.0283,
         lof_z: 0.5,
         mis_z: 1.2,
         syn_z: 0.7,
@@ -147,6 +161,7 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
             symbol: 'PCSK9',
             gnomad_constraint: gnomad,
             exac_constraint: grch37 ? exac : null,
+            mitochondrial_constraint: null,
           },
         },
       });
@@ -173,6 +188,37 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
     },
   );
 
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it.each([
+    ['gnomad_r3_non_cancer', 'GRCh38', 'gnomAD v4.1.2', 57],
+    ['gnomad_r2_1_non_topmed', 'GRCh37', 'gnomAD v2.1.1', 26],
+  ] as const)(
+    'serves the %s subset segment from its parent’s %s table as %s, as the tool does',
+    async (dataset, referenceGenome, release, obsLof) => {
+      fakePcsk9();
+
+      const record = await readRecord(`gnomad://gene/${dataset}/PCSK9/constraint`);
+      const tool = await runToolContract(gnomadGetGeneConstraint, { gene: 'PCSK9', dataset });
+
+      expect(record).toMatchObject({
+        dataset,
+        reference_genome: referenceGenome,
+        constraint_release: release,
+        obs_lof: obsLof,
+      });
+      expect(record).toEqual(tool.structuredContent);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it('lists every dataset segment and the subset routing in its descriptions', () => {
+    const segment = geneConstraintResource.params!.shape.dataset.description ?? '';
+    for (const dataset of GNOMAD_DATASETS) {
+      expect(segment).toMatch(new RegExp(`(?<!\\w)${dataset}(?!\\w)`));
+    }
+    expect(geneConstraintResource.description).toMatch(/subsets?[^.]*parent/);
+  });
+
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/62
   it('resolves a lowercase Ensembl gene segment by its canonical stable ID', async () => {
     const sent: { query: string; variables: { gene: string } }[] = [];
@@ -192,6 +238,7 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
             symbol: 'PCSK9',
             gnomad_constraint: null,
             exac_constraint: null,
+            mitochondrial_constraint: null,
           },
         },
       });
@@ -203,5 +250,64 @@ describe('gnomad://gene constraint resource — through the real service (wire)'
     expect(record).toMatchObject({ gene_id: 'ENSG00000169174', symbol: 'PCSK9' });
     expect(sent[0]?.variables.gene).toBe('ENSG00000169174');
     expect(sent[0]?.query).toContain('gene_id: $gene');
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/69
+  it.each([
+    [
+      'gnomad_r4',
+      { oe_lof_percentile: 51, oe_mis_lower: 0.8797909484474278, oe_syn_upper: 0.9336954606632754 },
+    ],
+    ['gnomad_r2_1', { oe_lof_percentile: null, oe_mis_lower: 0.895, oe_syn_upper: 1.057 }],
+    ['exac', { oe_lof_percentile: null, oe_mis_lower: null, oe_syn_upper: null }],
+  ] as const)(
+    'returns the LOEUF percentile and intervals for BRCA1 on the %s segment, as the tool does',
+    async (dataset, expected) => {
+      fakeLiveConstraint();
+      serviceModule.initGnomadService({} as never, {} as never);
+
+      const record = await readRecord(`gnomad://gene/${dataset}/BRCA1/constraint`);
+      const tool = await runToolContract(gnomadGetGeneConstraint, { gene: 'BRCA1', dataset });
+
+      expect(record).toMatchObject(expected);
+      expect(record).toEqual(tool.structuredContent);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/69
+  it('names the LOEUF percentile and the missense/synonymous intervals in its description', () => {
+    expect(geneConstraintResource.description).toMatch(/LOEUF percentile/);
+    expect(geneConstraintResource.description).toMatch(/intervals?[^.]*missense[^.]*synonymous/);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it.each([
+    ['gnomad_r4', 'MT-CO1', 'protein', 0.042],
+    ['exac', 'MT-CO1', 'protein', 0.042],
+    ['gnomad_r2_1', 'MT-TL1', 'rna', 0.213],
+  ] as const)(
+    'returns the mitochondrial constraint on the %s segment for %s, as the tool does',
+    async (dataset, gene, kind, upper) => {
+      fakeLiveConstraint();
+      serviceModule.initGnomadService({} as never, {} as never);
+
+      const record = await readRecord(`gnomad://gene/${dataset}/${gene}/constraint`);
+      const tool = await runToolContract(gnomadGetGeneConstraint, { gene, dataset });
+
+      expect(record).toMatchObject({
+        symbol: gene,
+        pli: null,
+        mitochondrial_constraint: {
+          kind,
+          [kind === 'protein' ? 'oe_lof_upper' : 'oe_upper']: upper,
+        },
+      });
+      expect(record).toEqual(tool.structuredContent);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it('names the mitochondrial constraint in its description', () => {
+    expect(geneConstraintResource.description).toMatch(/mitochondrial_constraint/);
   });
 });

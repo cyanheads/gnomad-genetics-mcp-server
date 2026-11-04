@@ -1,0 +1,639 @@
+{
+  "_about": "Live gnomAD replies carrying filtering allele frequency (FAF) fields, captured 2026-11-04 (UTC). 'variant-faf' holds one aliased variant document's records — 1-55039974-G-T on gnomad_r4, gnomad_r4_non_ukb, gnomad_r3, and each gnomad_r3 subset; 1-55505647-G-T on gnomad_r2_1, each of its subsets, and exac; and 1-55039866-G-A (AC 0) on gnomad_r4 — each record's counts, filters, and faf95 as gnomAD returned them (the document selected no populations, hemizygote counts, consequences, or predictors). The 'list-region:<dataset>:<region>' entries are the HTTP status and body of a list document over the region with every FAF field selected, trimmed to this server's list selection (that document predates hemizygote_count).",
+  "variant-faf": {
+    "r4": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": {
+        "ac": 21634,
+        "an": 1428186,
+        "af": 0.015147886899885589,
+        "homozygote_count": 209,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.01651719,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 1866,
+        "an": 152404,
+        "af": 0.01224377312931419,
+        "homozygote_count": 17,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015429449999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": {
+        "ac": 23500,
+        "an": 1580590,
+        "homozygote_count": 226,
+        "faf95": {
+          "popmax": 0.01649444,
+          "popmax_population": "nfe"
+        }
+      }
+    },
+    "r4_non_ukb": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": {
+        "ac": 7794,
+        "an": 595088,
+        "af": 0.01309722259564972,
+        "homozygote_count": 83,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.01651719,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 1866,
+        "an": 152404,
+        "af": 0.01224377312931419,
+        "homozygote_count": 17,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015429449999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 1866,
+        "an": 152286,
+        "af": 0.012253260312832434,
+        "homozygote_count": 17,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3_cab": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 434,
+        "an": 32928,
+        "af": 0.013180272108843538,
+        "homozygote_count": 8,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3_non_cancer": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 1810,
+        "an": 148020,
+        "af": 0.012228077286853128,
+        "homozygote_count": 16,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3_non_neuro": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 1623,
+        "an": 134866,
+        "af": 0.012034167247490101,
+        "homozygote_count": 13,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3_non_topmed": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 955,
+        "an": 80842,
+        "af": 0.01181316642339378,
+        "homozygote_count": 15,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r3_non_v2": {
+      "variant_id": "1-55039974-G-T",
+      "reference_genome": "GRCh38",
+      "exome": null,
+      "genome": {
+        "ac": 1421,
+        "an": 114670,
+        "af": 0.012392081625534141,
+        "homozygote_count": 10,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.015427649999999996,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r2": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 2341,
+        "an": 196220,
+        "af": 0.011930486188971563,
+        "homozygote_count": 29,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.014400229999999995,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 441,
+        "an": 31400,
+        "af": 0.014044585987261146,
+        "homozygote_count": 8,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.013387449999999983,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r2_controls": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 1160,
+        "an": 84520,
+        "af": 0.01372456223379082,
+        "homozygote_count": 16,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.014819069999999978,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 155,
+        "an": 10880,
+        "af": 0.014246323529411764,
+        "homozygote_count": 2,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.012587689999999936,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r2_non_neuro": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 1863,
+        "an": 163544,
+        "af": 0.011391429829281416,
+        "homozygote_count": 21,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.01401681999999999,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 279,
+        "an": 21264,
+        "af": 0.01312076749435666,
+        "homozygote_count": 3,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.013225929999999962,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r2_non_cancer": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 2234,
+        "an": 187918,
+        "af": 0.01188816398641961,
+        "homozygote_count": 29,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.014343849999999995,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 441,
+        "an": 31400,
+        "af": 0.014044585987261146,
+        "homozygote_count": 8,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.013387449999999983,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "r2_non_topmed": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 2301,
+        "an": 192436,
+        "af": 0.011957222141387266,
+        "homozygote_count": 28,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.014356649999999999,
+          "popmax_population": "nfe"
+        }
+      },
+      "genome": {
+        "ac": 366,
+        "an": 26592,
+        "af": 0.013763537906137184,
+        "homozygote_count": 8,
+        "filters": [],
+        "faf95": {
+          "popmax": 0.012268209999999974,
+          "popmax_population": "nfe"
+        }
+      },
+      "joint": null
+    },
+    "exac": {
+      "variant_id": "1-55505647-G-T",
+      "reference_genome": "GRCh37",
+      "exome": {
+        "ac": 689,
+        "an": 31082,
+        "af": 0.022167170709735538,
+        "homozygote_count": 5,
+        "filters": [],
+        "faf95": null
+      },
+      "genome": null,
+      "joint": null
+    },
+    "r4_ac0": {
+      "variant_id": "1-55039866-G-A",
+      "reference_genome": "GRCh38",
+      "exome": {
+        "ac": 0,
+        "an": 1410978,
+        "af": 0,
+        "homozygote_count": 0,
+        "filters": ["AC0"],
+        "faf95": {
+          "popmax": null,
+          "popmax_population": null
+        }
+      },
+      "genome": null,
+      "joint": {
+        "ac": 0,
+        "an": 1562614,
+        "homozygote_count": 0,
+        "faf95": {
+          "popmax": null,
+          "popmax_population": null
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r4:1-55039974-55039974": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55039974-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 21634,
+                "an": 1428186,
+                "af": 0.015147886899885589,
+                "homozygote_count": 209,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "genome": {
+                "ac": 1866,
+                "an": 152404,
+                "af": 0.01224377312931419,
+                "homozygote_count": 17,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "joint": {
+                "ac": 23500,
+                "an": 1580590,
+                "homozygote_count": 226,
+                "fafmax": {
+                  "faf95_max": 0.01649444,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              }
+            },
+            {
+              "variant_id": "1-55039974-G-A",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 0,
+                "an": 1428200,
+                "af": 0,
+                "homozygote_count": 0,
+                "filters": ["AC0"],
+                "faf95": null,
+                "fafmax": null
+              },
+              "genome": null,
+              "joint": {
+                "ac": 0,
+                "an": 1580604,
+                "homozygote_count": 0,
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r4_non_ukb:1-55039974-55039974": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55039974-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 7794,
+                "an": 595088,
+                "af": 0.01309722259564972,
+                "homozygote_count": 83,
+                "filters": [],
+                "faf95": null,
+                "fafmax": {
+                  "faf95_max": 0.014582379999999999,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              },
+              "genome": {
+                "ac": 1866,
+                "an": 152404,
+                "af": 0.01224377312931419,
+                "homozygote_count": 17,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039974-G-A",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 0,
+                "an": 595100,
+                "af": 0,
+                "homozygote_count": 0,
+                "filters": ["AC0"],
+                "faf95": null,
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              },
+              "genome": null,
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r3:1-55039974-55039974": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55039974-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "ac": 1866,
+                "an": 152286,
+                "af": 0.012253260312832434,
+                "homozygote_count": 17,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r3_non_topmed:1-55039974-55039974": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55039974-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "ac": 955,
+                "an": 80842,
+                "af": 0.01181316642339378,
+                "homozygote_count": 15,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r2_1:1-55505647-55505647": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55505647-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 2341,
+                "an": 196220,
+                "af": 0.011930486188971563,
+                "homozygote_count": 29,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.014400229999999995,
+                  "popmax_population": "nfe"
+                },
+                "fafmax": null
+              },
+              "genome": {
+                "ac": 441,
+                "an": 31400,
+                "af": 0.014044585987261146,
+                "homozygote_count": 8,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.013387449999999983,
+                  "popmax_population": "nfe"
+                },
+                "fafmax": null
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:gnomad_r2_1_non_cancer:1-55505647-55505647": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55505647-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 2234,
+                "an": 187918,
+                "af": 0.01188816398641961,
+                "homozygote_count": 29,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.014343849999999995,
+                  "popmax_population": "nfe"
+                },
+                "fafmax": null
+              },
+              "genome": {
+                "ac": 441,
+                "an": 31400,
+                "af": 0.014044585987261146,
+                "homozygote_count": 8,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.013387449999999983,
+                  "popmax_population": "nfe"
+                },
+                "fafmax": null
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-region:exac:1-55505647-55505647": {
+    "status": 200,
+    "body": {
+      "data": {
+        "region": {
+          "variants": [
+            {
+              "variant_id": "1-55505647-G-T",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "flags": [],
+              "exome": {
+                "ac": 689,
+                "an": 31082,
+                "af": 0.022167170709735538,
+                "homozygote_count": 5,
+                "filters": [],
+                "faf95": null,
+                "fafmax": null
+              },
+              "genome": null,
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}

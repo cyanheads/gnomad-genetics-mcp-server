@@ -1,8 +1,9 @@
 /**
  * @fileoverview gnomad://gene/{dataset}/{gene}/constraint — the same constraint
- * record gnomad_get_gene_constraint returns, constraint_release included. The
- * gene segment is a symbol or Ensembl gene ID. Mirrors the scalar tool for
- * clients that support injectable resource context.
+ * record gnomad_get_gene_constraint returns, constraint_release and
+ * mitochondrial_constraint included. The gene segment is a symbol or Ensembl
+ * gene ID. Mirrors the scalar tool for clients that support injectable
+ * resource context.
  * @module mcp-server/resources/definitions/gene-constraint.resource
  */
 
@@ -11,16 +12,15 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { getGnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { Dataset } from '@/services/gnomad/types.js';
+import { DATASET_CHOICES } from '../../tools/shared-schemas.js';
 
 export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/constraint', {
   description:
-    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI, observed/expected ratios, and Z-scores, with constraint_release naming the release they come from. Mirrors gnomad_get_gene_constraint: the exac segment serves ExAC r0.3 constraint (pLI, Z-scores, and counts only), and gnomad_r3 serves the GRCh38 gnomAD v4.1.2 table because gnomAD publishes no v3 constraint. gnomAD recommends LOEUF < 0.45 to call a gene LoF-intolerant on v4.1.2 and LOEUF < 0.35 on v2.1.1; on exac, which has no LOEUF, pLI (>0.9 intolerant) is the intolerance measure. The gene segment is an HGNC symbol or Ensembl gene ID.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper) with CI and gnomAD’s LOEUF percentile (v4.1.2 only), observed/expected ratios with 90% intervals for missense and synonymous, and Z-scores, with constraint_release naming the release they come from. Mirrors gnomad_get_gene_constraint: the exac segment serves ExAC r0.3 constraint (pLI, Z-scores, and counts only), and gnomad_r3 serves the GRCh38 gnomAD v4.1.2 table because gnomAD publishes no v3 constraint. gnomAD publishes no subset constraint either, so a subset segment reads its parent release’s table and the record echoes the subset as dataset. gnomAD recommends LOEUF < 0.45 to call a gene LoF-intolerant on v4.1.2 and LOEUF < 0.35 on v2.1.1; on exac, which has no LOEUF, pLI (>0.9 intolerant) is the intolerance measure. A mitochondrial gene’s constraint comes back in mitochondrial_constraint (kind protein or rna, sums of maximum heteroplasmy rather than variant counts), the same table on every segment and null for a nuclear gene. The gene segment is an HGNC symbol or Ensembl gene ID.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   name: 'gnomAD gene constraint',
   mimeType: 'application/json',
   params: z.object({
-    dataset: z
-      .enum(GNOMAD_DATASETS)
-      .describe('gnomAD dataset segment: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac.'),
+    dataset: z.enum(GNOMAD_DATASETS).describe(`gnomAD dataset segment: ${DATASET_CHOICES}.`),
     gene: z.string().describe('Gene — HGNC symbol (PCSK9) or Ensembl gene ID (ENSG00000169174).'),
   }),
   errors: [
@@ -34,9 +34,9 @@ export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/c
     {
       reason: 'invalid_constraint_data',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'gnomAD returned constraint metrics outside their valid ranges, such as a pLI above 1.',
+      when: 'gnomAD returned constraint metrics outside their valid ranges, such as a pLI above 1, or a mitochondrial constraint of a shape gnomAD’s schema does not define.',
       recovery:
-        'Treat this gene’s constraint as unavailable rather than estimating it: gnomAD returns the same out-of-range metrics on every read. The GRCh37 tables (dataset segment gnomad_r2_1 or exac) are a separate source for the same gene.',
+        'Treat this gene’s constraint as unavailable rather than estimating it: gnomAD returns the same metrics on every read. For a nuclear gene, the GRCh37 tables (dataset segment gnomad_r2_1 or exac) are a separate source; a mitochondrial gene’s constraint is the same table on every segment.',
       thrownBy: 'service',
     },
     {

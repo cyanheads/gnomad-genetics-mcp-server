@@ -1,0 +1,68 @@
+{
+  "BRCA1": [
+    {
+      "clinvar_variation_id": "4845640",
+      "variant_id": "17-43045713-AG-A"
+    },
+    {
+      "clinvar_variation_id": "4842661",
+      "variant_id": "17-43071092-C-A"
+    },
+    {
+      "clinvar_variation_id": "4800824",
+      "variant_id": "17-43071095-C-T"
+    },
+    {
+      "clinvar_variation_id": "1687128",
+      "variant_id": "17-43074377-CCCAGA-C"
+    },
+    {
+      "clinvar_variation_id": "267524",
+      "variant_id": "17-43090874-GTGGGATACATACTACTGAATGCAAAGGACACCACACACACGCATGTGCACACACACACACGCTTTTTACCTGAGTGGTTAAAATGTCACTCTGAGAGGATAGCCCTGAGCAGTCTTCAGAGACGCTTGTTTCACTCTCACACCCAGATGCTGCTTCACCTTAAATAACAAAAACAGAGGTTCAGATGTAAAAGCAGACTATAAACGCTGCAACTTGCTGTGTCTTTTTCTTCTCAT-G"
+    },
+    {
+      "clinvar_variation_id": "4713084",
+      "variant_id": "17-43092191-CAT-C"
+    },
+    {
+      "clinvar_variation_id": "54221",
+      "variant_id": "17-43094167-T-TTC"
+    },
+    {
+      "clinvar_variation_id": "55393",
+      "variant_id": "17-43099814-G-A"
+    }
+  ],
+  "TTR": [
+    {
+      "clinvar_variation_id": "326544",
+      "variant_id": "18-31591842-G-A"
+    },
+    {
+      "clinvar_variation_id": "509654",
+      "variant_id": "18-31591857-C-T"
+    },
+    {
+      "clinvar_variation_id": "2610176",
+      "variant_id": "18-31592943-T-AGTCCTCGGTCAAA"
+    },
+    {
+      "clinvar_variation_id": "1712259",
+      "variant_id": "18-31595139-GA-CT"
+    }
+  ],
+  "MT-ND1": [
+    {
+      "clinvar_variation_id": "692328",
+      "variant_id": "M-3307-A-T"
+    },
+    {
+      "clinvar_variation_id": "692329",
+      "variant_id": "M-3308-T-AC"
+    },
+    {
+      "clinvar_variation_id": "9728",
+      "variant_id": "M-3308-T-C"
+    }
+  ]
+}

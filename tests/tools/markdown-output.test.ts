@@ -17,6 +17,7 @@ describe('Markdown output preserves upstream values', () => {
       target: 'A*p* [x](https://example.com) <b>',
       target_kind: 'gene' as const,
       dataset: 'gnomad_r4',
+      coverage_dataset: 'gnomad_r4',
       reference_genome: 'GRCh38',
       summaries: [
         {
@@ -80,7 +81,13 @@ describe('Markdown output preserves upstream values', () => {
     const output = {
       target: 'PCSK9*[x](https://example.com)',
       target_kind: 'gene' as const,
-      filters: { consequence_class: 'lof' as const, max_af: 0.001, pass_only: true as const },
+      filters: {
+        consequence_class: 'lof' as const,
+        lof_confidence: 'HC' as const,
+        max_af: 0.001,
+        max_faf: null,
+        pass_only: true as const,
+      },
       preview: [],
       canvas_id: '',
       table_name: '',
@@ -100,7 +107,68 @@ describe('Markdown output preserves upstream values', () => {
     expect(result.structuredContent).toEqual(output);
     const text = result.content.map((block) => ('text' in block ? block.text : '')).join('\n');
     expect(text).toContain(
-      '**Target:** gene PCSK9\\*\\[x\\](https://example.com) | **Filters:** consequence_class=lof, max_af=0.001, pass_only=true',
+      '**Target:** gene PCSK9\\*\\[x\\](https://example.com) | **Filters:** consequence_class=lof, lof_confidence=HC, max_af=0.001, pass_only=true',
+    );
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+  it("escapes a row's HGVS and rsIDs while structured output keeps them as gnomAD sent them", async () => {
+    const row = {
+      variant_id: '9-21968220-C-A',
+      af: 0.00001,
+      ac: 1,
+      an: 100_000,
+      consequence: '3_prime_UTR_variant',
+      consequence_class: 'other' as const,
+      homozygote_count: 0,
+      hemizygote_count: 0,
+      faf95_max: null,
+      faf95_max_group: null,
+      source: 'exome',
+      flags: '',
+      exome_filters: '',
+      genome_filters: null,
+      qc_status: 'pass' as const,
+      transcript_id: 'ENST00000304494',
+      consequence_transcript: 'mane_select' as const,
+      lof: null,
+      hgvsc: 'c.*9G>T',
+      hgvsp: null,
+      lof_filter: null,
+      lof_flags: 'PHYLOCSF_WEAK',
+      rsids: 'rs863224604|rs1',
+    };
+    const output = {
+      target: 'CDKN2A',
+      target_kind: 'gene' as const,
+      filters: {
+        consequence_class: null,
+        lof_confidence: null,
+        max_af: null,
+        max_faf: null,
+        pass_only: null,
+      },
+      preview: [row],
+      canvas_id: '',
+      table_name: '',
+      spilled: false,
+      total: 1,
+      truncated: false,
+      next_offset: null,
+      qc_filtered: 0,
+      dataset: 'gnomad_r4',
+      reference_genome: 'GRCh38',
+    };
+    const result = await runToolContract(
+      { ...gnomadListGeneVariants, handler: async () => output },
+      { gene: 'CDKN2A', annotations: true },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(output);
+    const text = result.content.map((block) => ('text' in block ? block.text : '')).join('\n');
+    // A null lof, hgvsp, and lof_filter render no field at all.
+    expect(text).toMatch(
+      /\| transcript ENST00000304494 \(mane_select\) \| HGVSc c\.\\\*9G>T \| LoF flags PHYLOCSF_WEAK \| rsIDs rs863224604\\\|rs1$/m,
     );
   });
 

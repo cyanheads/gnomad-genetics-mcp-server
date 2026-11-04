@@ -6,7 +6,8 @@
  * asserts which classifications survive each mapped term and an unmapped one,
  * that the significance filter composes with the star floor, how
  * normalizeSignificance() reads a term, and that each mapped term's pattern
- * scans in linear time.
+ * scans in linear time, and that the filters and star rating read the germline
+ * block beside somatic ones (#76).
  * @module tests/services/clinvar-service.test
  */
 
@@ -240,6 +241,61 @@ describe('ClinVarService.searchGene — mapped significance terms (#67)', () => 
       expect(spelled.rows).toEqual(canonical.rows);
     },
   );
+});
+
+/**
+ * Records whose somatic blocks reuse germline words (ESummary sends all three
+ * blocks; somatic oncogenicity calls include "Uncertain significance"): the
+ * filters and the star floor read the germline block alone.
+ */
+const SOMATIC_RECORDS = [
+  {
+    ...record('1', '', 1),
+    germline_classification: { description: '', review_status: '', trait_set: [] },
+    oncogenicity_classification: {
+      description: 'Uncertain significance',
+      review_status: 'reviewed by expert panel',
+      last_evaluated: '2025/02/01 00:00',
+      trait_set: [{ trait_name: 'Colorectal cancer' }],
+    },
+  },
+  {
+    ...record('2', 'Uncertain significance', 1),
+    clinical_impact_classification: {
+      description: 'Tier I - Strong',
+      review_status: 'reviewed by expert panel',
+      last_evaluated: '2025/03/01 00:00',
+      trait_set: [{ trait_name: 'Lung adenocarcinoma' }],
+    },
+  },
+];
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/76
+describe('ClinVarService.searchGene — the filters stay germline beside somatic blocks (#76)', () => {
+  it.each([
+    [{ clinicalSignificance: 'vus' }, ['2']],
+    [{ clinicalSignificance: 'uncertain significance' }, ['2']],
+    [{ minReviewStars: 2 }, []],
+    [{ minReviewStars: 1 }, ['2']],
+    [{}, ['1', '2']],
+  ])('%j keeps %j', async (filters, kept) => {
+    stubNcbi(SOMATIC_RECORDS as ReturnType<typeof record>[]);
+
+    const { rows } = await service().searchGene('KRAS', filters, createMockContext());
+
+    expect(rows.map((r) => r.clinvar_variation_id)).toEqual(kept);
+  });
+
+  it('rates stars from the germline review status, never a somatic one', async () => {
+    stubNcbi(SOMATIC_RECORDS as ReturnType<typeof record>[]);
+
+    const { rows } = await service().searchGene('KRAS', {}, createMockContext());
+
+    expect(rows.map((r) => [r.review_status, r.gold_stars])).toEqual([
+      [null, 0],
+      ['criteria provided, single submitter', 1],
+    ]);
+  });
 });
 
 describe('normalizeSignificance', () => {

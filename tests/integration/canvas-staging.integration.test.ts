@@ -32,14 +32,20 @@ import * as clinvarModule from '@/services/clinvar/clinvar-service.js';
 import type { ClinVarRow } from '@/services/clinvar/types.js';
 import * as gnomadModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService } from '@/services/gnomad/gnomad-service.js';
-import type { GeneVariantRow } from '@/services/gnomad/types.js';
+import type { AnnotatedGeneVariantRow, GeneVariantRow } from '@/services/gnomad/types.js';
 
 type CallToolResult = Awaited<ReturnType<typeof runToolContract>>;
 
-/** The first 120 rows of the server's live gnomad_r4 PCSK9 list, captured 2026-11-01 06:23 (UTC). */
-const LIVE_VARIANTS = JSON.parse(
-  readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
-) as GeneVariantRow[];
+/** The first 120 rows of the server's live gnomad_r4 PCSK9 list with annotations; the fixture's _about names the capture. */
+const LIVE_ANNOTATED_VARIANTS = (
+  JSON.parse(
+    readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
+  ) as { rows: AnnotatedGeneVariantRow[] }
+).rows;
+/** The same rows in the default shape, as the capture's call without annotations returned them. */
+const LIVE_VARIANTS: GeneVariantRow[] = LIVE_ANNOTATED_VARIANTS.map(
+  ({ hgvsc, hgvsp, lof_filter, lof_flags, rsids, ...row }) => row,
+);
 
 const realService = new GnomadService(getServerConfig());
 
@@ -89,6 +95,14 @@ function clinvarRow(i: number): ClinVarRow {
     molecular_consequences: 'missense variant',
     protein_change: `R${i}L`,
     conditions: 'Hypercholesterolemia, autosomal dominant, 3',
+    oncogenicity_classification: null,
+    oncogenicity_review_status: null,
+    oncogenicity_last_evaluated: null,
+    oncogenicity_conditions: '',
+    clinical_impact_classification: null,
+    clinical_impact_review_status: null,
+    clinical_impact_last_evaluated: null,
+    clinical_impact_conditions: '',
     submission_count: 3,
     canonical_spdi: `NC_000001.11:${55039000 + i}:G:T`,
     rsids: `rs${9000 + i}`,
@@ -331,6 +345,11 @@ const GENE_VARIANT_COLUMNS: Column[] = [
   { name: 'consequence', type: 'VARCHAR', nullable: true },
   { name: 'consequence_class', type: 'VARCHAR', nullable: false },
   { name: 'homozygote_count', type: 'BIGINT', nullable: false },
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/75
+  { name: 'hemizygote_count', type: 'BIGINT', nullable: true },
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+  { name: 'faf95_max', type: 'DOUBLE', nullable: true },
+  { name: 'faf95_max_group', type: 'VARCHAR', nullable: true },
   { name: 'source', type: 'VARCHAR', nullable: false },
   { name: 'flags', type: 'VARCHAR', nullable: false },
   { name: 'exome_filters', type: 'VARCHAR', nullable: true },
@@ -338,6 +357,18 @@ const GENE_VARIANT_COLUMNS: Column[] = [
   { name: 'qc_status', type: 'VARCHAR', nullable: false },
   { name: 'transcript_id', type: 'VARCHAR', nullable: true },
   { name: 'consequence_transcript', type: 'VARCHAR', nullable: true },
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+  { name: 'lof', type: 'VARCHAR', nullable: true },
+];
+
+/** An annotations call's table: every default column, then the five opt-in ones (#65). */
+const ANNOTATED_GENE_VARIANT_COLUMNS: Column[] = [
+  ...GENE_VARIANT_COLUMNS,
+  { name: 'hgvsc', type: 'VARCHAR', nullable: true },
+  { name: 'hgvsp', type: 'VARCHAR', nullable: true },
+  { name: 'lof_filter', type: 'VARCHAR', nullable: true },
+  { name: 'lof_flags', type: 'VARCHAR', nullable: true },
+  { name: 'rsids', type: 'VARCHAR', nullable: false },
 ];
 
 const CLINVAR_COLUMNS: Column[] = [
@@ -352,6 +383,14 @@ const CLINVAR_COLUMNS: Column[] = [
   { name: 'molecular_consequences', type: 'VARCHAR', nullable: false },
   { name: 'protein_change', type: 'VARCHAR', nullable: false },
   { name: 'conditions', type: 'VARCHAR', nullable: false },
+  { name: 'oncogenicity_classification', type: 'VARCHAR', nullable: true },
+  { name: 'oncogenicity_review_status', type: 'VARCHAR', nullable: true },
+  { name: 'oncogenicity_last_evaluated', type: 'VARCHAR', nullable: true },
+  { name: 'oncogenicity_conditions', type: 'VARCHAR', nullable: false },
+  { name: 'clinical_impact_classification', type: 'VARCHAR', nullable: true },
+  { name: 'clinical_impact_review_status', type: 'VARCHAR', nullable: true },
+  { name: 'clinical_impact_last_evaluated', type: 'VARCHAR', nullable: true },
+  { name: 'clinical_impact_conditions', type: 'VARCHAR', nullable: false },
   { name: 'submission_count', type: 'BIGINT', nullable: false },
   { name: 'canonical_spdi', type: 'VARCHAR', nullable: true },
   { name: 'rsids', type: 'VARCHAR', nullable: false },
@@ -385,6 +424,10 @@ function serveNcbi(count: number) {
   const idlist = Array.from({ length: count }, (_, i) => live[i] ?? String(8_000_000 + i));
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    // gnomAD's ClinVar mapping for the gene holds none of these records, so their null IDs stay null.
+    if (url.href === getServerConfig().gnomadApiBaseUrl) {
+      return Response.json({ data: { gene: { clinvar_variants: [] } } });
+    }
     if (url.pathname.endsWith('/esearch.fcgi')) {
       return Response.json({ esearchresult: { count: String(count), idlist } });
     }
@@ -425,6 +468,26 @@ describe('staged column types (#35, #37)', () => {
       "SELECT count(*) FILTER (WHERE consequence_transcript = 'mane_select') AS mane, count(*) FILTER (WHERE transcript_id = 'ENST00000302118') AS on_mane FROM gene_variants",
     );
     expect([transcripts.mane, transcripts.on_mane].map(Number)).toEqual([120, 120]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+  it('stages the live FAF columns with their values', async () => {
+    serveVariants(LIVE_VARIANTS);
+    const result = await call(gnomadListGeneVariants, { gene: 'PCSK9' });
+    const canvasId = sc(result).canvas_id as string;
+
+    // 33 of the fixture's 120 rows carry a FAF95, every one with its group.
+    const counts = await sql(
+      canvasId,
+      'SELECT count(*) FILTER (WHERE faf95_max IS NOT NULL) AS faf, count(*) FILTER (WHERE faf95_max_group IS NOT NULL) AS grp FROM gene_variants',
+    );
+    expect([counts.faf, counts.grp].map(Number)).toEqual([33, 33]);
+    expect(
+      await sql(
+        canvasId,
+        "SELECT faf95_max, faf95_max_group FROM gene_variants WHERE variant_id = '1-55039768-C-T'",
+      ),
+    ).toEqual({ faf95_max: 2.9e-7, faf95_max_group: 'nfe' });
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/54
@@ -524,6 +587,8 @@ describe('staged column types (#35, #37)', () => {
         serveVariants(LIVE_VARIANTS);
         canvasId = sc(await call(gnomadListGeneVariants, { gene: 'PCSK9' })).canvas_id as string;
       }
+      // Rows without an SPDI-derived ID reach gnomAD's ClinVar mapping through the real service.
+      vi.spyOn(gnomadModule, 'getGnomadService').mockReturnValue(realService);
       serveNcbi(count);
 
       const result = await call(gnomadSearchClinvar, {
@@ -550,4 +615,59 @@ describe('staged column types (#35, #37)', () => {
       expect(Number(counts.scvs)).toBeGreaterThan(0);
     },
   );
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+describe('the gene_variants table takes each call’s annotations shape (#65)', () => {
+  /** gnomad_dataframe_describe's columns for gene_variants on a canvas. */
+  async function described(canvasId: string) {
+    const result = await runToolContract(
+      gnomadDataframeDescribe,
+      { canvas_id: canvasId },
+      { context: { tenantId: 'default' } },
+    );
+    const { tables } = result.structuredContent as {
+      tables: { name: string; columns: { name: string; type: string }[] }[];
+    };
+    return tables.find((t) => t.name === 'gene_variants')?.columns;
+  }
+  const typed = (columns: Column[]) => columns.map(({ name, type }) => ({ name, type }));
+
+  it('describes an annotations table as the default columns then the five, and a repeat call without it replaces the table', async () => {
+    serveVariants(LIVE_ANNOTATED_VARIANTS);
+    const annotated = await call(gnomadListGeneVariants, { gene: 'PCSK9', annotations: true });
+    const canvasId = sc(annotated).canvas_id as string;
+
+    expect(sc(annotated)).toMatchObject({ spilled: true, table_name: 'gene_variants', total: 120 });
+    expect(ANNOTATED_GENE_VARIANT_COLUMNS.map((c) => c.name)).toEqual(
+      Object.keys(LIVE_ANNOTATED_VARIANTS[0] ?? {}),
+    );
+    expect(await described(canvasId)).toEqual(typed(ANNOTATED_GENE_VARIANT_COLUMNS));
+    expect(await columnsOf(canvasId, 'gene_variants')).toEqual(ANNOTATED_GENE_VARIANT_COLUMNS);
+    const staged = await sql(
+      canvasId,
+      "SELECT count(*) FILTER (WHERE rsids <> '') AS with_rsid, count(*) FILTER (WHERE hgvsc IS NOT NULL) AS with_hgvsc, count(*) FILTER (WHERE hgvsp IS NULL) AS no_hgvsp FROM gene_variants",
+    );
+    expect(staged).toMatchObject({ with_rsid: '42', with_hgvsc: '120', no_hgvsp: '120' });
+
+    serveVariants(LIVE_VARIANTS);
+    const repeat = await call(gnomadListGeneVariants, { gene: 'PCSK9', canvas_id: canvasId });
+
+    expect(sc(repeat)).toMatchObject({ canvas_id: canvasId, table_name: 'gene_variants' });
+    expect(await described(canvasId)).toEqual(typed(GENE_VARIANT_COLUMNS));
+    expect(await columnsOf(canvasId, 'gene_variants')).toEqual(GENE_VARIANT_COLUMNS);
+    expect(Number((await sql(canvasId, 'SELECT count(*) AS n FROM gene_variants')).n)).toBe(120);
+  });
+
+  it('stages a default call with lof and none of the five', async () => {
+    serveVariants(LIVE_VARIANTS);
+    const result = await call(gnomadListGeneVariants, { gene: 'PCSK9' });
+    const canvasId = sc(result).canvas_id as string;
+
+    const names = (await described(canvasId))?.map((c) => c.name) ?? [];
+    expect(names.at(-1)).toBe('lof');
+    for (const name of ['hgvsc', 'hgvsp', 'lof_filter', 'lof_flags', 'rsids']) {
+      expect(names).not.toContain(name);
+    }
+  });
 });

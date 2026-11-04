@@ -12,11 +12,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
-
-interface GraphqlRequest {
-  query: string;
-  variables: Record<string, unknown>;
-}
+import type { GraphqlRequest } from '../helpers/fake-gnomad-graphql.js';
+import { fakeLiveConstraint } from '../helpers/live-constraint.js';
 
 type GraphqlResponder = (request: GraphqlRequest, callIndex: number) => unknown;
 
@@ -790,7 +787,7 @@ describe('GnomadService joint frequencies (#53)', () => {
     const { requests } = await liveRecord('r4_784');
 
     expect(requests[0]?.query.replace(/\s+/g, ' ')).toContain(
-      'joint { ac an homozygote_count hemizygote_count populations { id ac an homozygote_count hemizygote_count } }',
+      'joint { ac an homozygote_count hemizygote_count faf95 { popmax popmax_population } populations { id ac an homozygote_count hemizygote_count } }',
     );
   });
 
@@ -833,7 +830,9 @@ describe('GnomadService joint frequencies (#53)', () => {
     expect(rows[0]).toMatchObject({ ac: 3, an: 1_558_598, af: 3 / 1_558_598, source: 'genome' });
     expect(rows[1]).toMatchObject({ af: null, ac: 0, an: 0, homozygote_count: 0, source: '' });
     const query = requests[0]?.query.replace(/\s+/g, ' ') ?? '';
-    expect(query).toContain('joint { ac an homozygote_count }');
+    expect(query).toContain(
+      'joint { ac an homozygote_count hemizygote_count fafmax @include(if: $jointFafmax) { faf95_max faf95_max_gen_anc } }',
+    );
     // joint.populations feeds no column and would multiply the response about 3.6×.
     expect(query).not.toMatch(/joint \{[^}]*populations/);
   });
@@ -1090,7 +1089,9 @@ describe('GnomadService QC filters (#54)', () => {
         createMockContext(),
       );
 
-      expect(record?.callsets).toEqual({ exome, genome });
+      // qcDetail selects no faf95, which reads as null (#64).
+      const noFaf = (callset: unknown) => callset && { ...(callset as object), faf95: null };
+      expect(record?.callsets).toEqual({ exome: noFaf(exome), genome: noFaf(genome) });
       expect(record?.qc_status).toBe(qcStatus);
       // The overall counts still read joint; callsets carry the per-callset view beside them.
       expect(record?.ac).toBe(QC_DETAIL[variantId].joint[0]);
@@ -1135,6 +1136,7 @@ describe('GnomadService QC filters (#54)', () => {
       homozygote_count: 0,
       hemizygote_count: 0,
       filters: null,
+      faf95: null,
     });
     expect(record?.qc_status).toBe('filtered');
   });
@@ -1352,7 +1354,7 @@ describe('GnomadService in-silico predictor mapping', () => {
   );
 });
 
-/** Live PCSK9 constraint objects per build, as `gene { gnomad_constraint exac_constraint }` returns them. */
+/** Live PCSK9 constraint objects per build, as `gene { gnomad_constraint exac_constraint mitochondrial_constraint }` returns them. */
 const PCSK9_CONSTRAINT = {
   GRCh38: {
     gnomad_constraint: {
@@ -1360,8 +1362,13 @@ const PCSK9_CONSTRAINT = {
       oe_lof: 0.9176378304213768,
       oe_lof_lower: 0.7416265467075939,
       oe_lof_upper: 1.1441346736692857,
+      oe_lof_percentile: 71,
       oe_mis: 0.906450937101462,
+      oe_mis_lower: 0.857514089563757,
+      oe_mis_upper: 0.9586561741086429,
       oe_syn: 0.9453046063830313,
+      oe_syn_lower: 0.8700186318667248,
+      oe_syn_upper: 1.028252849618702,
       lof_z: 0.5506733800624033,
       mis_z: 1.2360458676592712,
       syn_z: 0.6603188478981492,
@@ -1374,6 +1381,7 @@ const PCSK9_CONSTRAINT = {
       flags: [],
     },
     exac_constraint: null,
+    mitochondrial_constraint: null,
   },
   GRCh37: {
     gnomad_constraint: {
@@ -1382,8 +1390,13 @@ const PCSK9_CONSTRAINT = {
       // biome-ignore lint/suspicious/noApproximativeNumericConstant: gnomAD's live PCSK9 v2.1.1 LOEUF lower bound, not √½.
       oe_lof_lower: 0.707,
       oe_lof_upper: 1.341,
+      oe_lof_percentile: null,
       oe_mis: 0.9632446051921747,
+      oe_mis_lower: 0.888,
+      oe_mis_upper: 1.044,
       oe_syn: 0.9066008152125259,
+      oe_syn_lower: 0.799,
+      oe_syn_upper: 1.03,
       lof_z: 0.16232122832806772,
       mis_z: 0.2724115375371906,
       syn_z: 1.005369593751177,
@@ -1407,6 +1420,7 @@ const PCSK9_CONSTRAINT = {
       obs_syn: 111,
       exp_syn: 136.853201549,
     },
+    mitochondrial_constraint: null,
   },
 } as const;
 
@@ -1494,11 +1508,117 @@ describe('GnomadService constraint routing by dataset', () => {
       oe_lof: null,
       oe_lof_lower: null,
       oe_lof_upper: null,
+      oe_lof_percentile: null,
       oe_mis: null,
+      oe_mis_lower: null,
+      oe_mis_upper: null,
       oe_syn: null,
+      oe_syn_lower: null,
+      oe_syn_upper: null,
       constraint_flags: [],
+      mitochondrial_constraint: null,
     });
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it.each([
+    ['symbol', 'MT-CO1'],
+    ['Ensembl ID', 'ENSG00000198804'],
+  ])(
+    'selects both mitochondrial constraint members, typename included, in the by-%s document',
+    async (_label, gene) => {
+      const requests = fakePcsk9Constraint();
+      const svc = new GnomadService(getServerConfig());
+
+      await svc.getGeneConstraint(
+        gene,
+        svc.resolveDatasetContext('gnomad_r4'),
+        createMockContext(),
+      );
+
+      const query = requests[0]?.query.replace(/\s+/g, ' ') ?? '';
+      expect(query).toMatch(/mitochondrial_constraint \{ __typename /);
+      const member = (name: string) =>
+        new RegExp(`\\.\\.\\. on ${name} \\{([^}]*)\\}`).exec(query)?.[1]?.trim().split(' ') ?? [];
+      expect(member('ProteinMitochondrialGeneConstraint').sort()).toEqual(
+        ['lof', 'mis', 'syn']
+          .flatMap((c) => [`obs_${c}`, `exp_${c}`, `oe_${c}`, `oe_${c}_lower`, `oe_${c}_upper`])
+          .sort(),
+      );
+      expect(member('RNAMitochondrialGeneConstraint').sort()).toEqual(
+        ['observed', 'expected', 'oe', 'oe_lower', 'oe_upper'].sort(),
+      );
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it.each(['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac', 'gnomad_r4_non_ukb'] as const)(
+    'reads the mitochondrial constraint beside the %s table, by build',
+    async (dataset) => {
+      const requests = fakeLiveConstraint();
+      const svc = new GnomadService(getServerConfig());
+
+      const protein = await svc.getGeneConstraint(
+        'MT-CO1',
+        svc.resolveDatasetContext(dataset),
+        createMockContext(),
+      );
+      const rna = await svc.getGeneConstraint(
+        'MT-RNR1',
+        svc.resolveDatasetContext(dataset),
+        createMockContext(),
+      );
+
+      expect(requests.map((request) => request.variables.referenceGenome)).toEqual(
+        Array(2).fill(dataset === 'gnomad_r2_1' || dataset === 'exac' ? 'GRCh37' : 'GRCh38'),
+      );
+      expect(protein?.mitochondrial_constraint).toMatchObject({
+        kind: 'protein',
+        oe_lof_upper: 0.042,
+        oe_mis: 0.159,
+      });
+      expect(protein).toMatchObject({ pli: null, oe_lof_upper: null, obs_lof: null });
+      expect(rna?.mitochondrial_constraint).toEqual({
+        kind: 'rna',
+        observed: 315.935,
+        expected: 1229.075,
+        oe: 0.257,
+        oe_lower: 0.234,
+        oe_upper: 0.28,
+      });
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/69
+  it.each([
+    ['symbol', 'PCSK9'],
+    ['Ensembl ID', 'ENSG00000169174'],
+  ])(
+    'selects the LOEUF percentile and the missense/synonymous intervals in the by-%s document',
+    async (_label, gene) => {
+      const requests = fakePcsk9Constraint();
+      const svc = new GnomadService(getServerConfig());
+
+      await svc.getGeneConstraint(
+        gene,
+        svc.resolveDatasetContext('gnomad_r4'),
+        createMockContext(),
+      );
+
+      const table = /gnomad_constraint\s*\{([^}]*)\}/.exec(requests[0]?.query ?? '')?.[1] ?? '';
+      for (const field of [
+        'oe_lof_percentile',
+        'oe_mis_lower',
+        'oe_mis_upper',
+        'oe_syn_lower',
+        'oe_syn_upper',
+      ]) {
+        expect(table).toMatch(new RegExp(`\\b${field}\\b`));
+      }
+      const exac = /exac_constraint\s*\{([^}]*)\}/.exec(requests[0]?.query ?? '')?.[1] ?? '';
+      expect(exac).not.toMatch(/percentile|_lower|_upper/);
+    },
+  );
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/26
   it.each([
@@ -1525,6 +1645,7 @@ describe('GnomadService constraint routing by dataset', () => {
           symbol: 'FLG',
           gnomad_constraint: PCSK9_CONSTRAINT.GRCh37.gnomad_constraint,
           exac_constraint: null,
+          mitochondrial_constraint: null,
         },
       },
     }));
@@ -1558,6 +1679,46 @@ describe('GnomadService constraint routing by dataset', () => {
       await expect(
         svc.getGeneConstraint('NOTAGENE', svc.resolveDatasetContext(dataset), createMockContext()),
       ).resolves.toBeNull();
+    },
+  );
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+describe('GnomadService constraint routing — a subset reads its parent release’s table (#68)', () => {
+  it.each([
+    ['gnomad_r4_non_ukb', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r3_controls_and_biobanks', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r3_non_cancer', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r3_non_neuro', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r3_non_topmed', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r3_non_v2', 'GRCh38', 'gnomAD v4.1.2'],
+    ['gnomad_r2_1_controls', 'GRCh37', 'gnomAD v2.1.1'],
+    ['gnomad_r2_1_non_cancer', 'GRCh37', 'gnomAD v2.1.1'],
+    ['gnomad_r2_1_non_neuro', 'GRCh37', 'gnomAD v2.1.1'],
+    ['gnomad_r2_1_non_topmed', 'GRCh37', 'gnomAD v2.1.1'],
+  ] as const)(
+    'reads %s from the %s gnomad_constraint table as %s, echoing the subset',
+    async (dataset, referenceGenome, release) => {
+      const requests = fakePcsk9Constraint();
+      const svc = new GnomadService(getServerConfig());
+
+      const result = await svc.getGeneConstraint(
+        'PCSK9',
+        svc.resolveDatasetContext(dataset),
+        createMockContext(),
+      );
+
+      expect(requests[0]?.variables).toEqual({ gene: 'PCSK9', referenceGenome });
+      const { flags, ...metrics } = PCSK9_CONSTRAINT[referenceGenome].gnomad_constraint;
+      expect(result).toMatchObject({
+        gene_id: 'ENSG00000169174',
+        symbol: 'PCSK9',
+        dataset,
+        reference_genome: referenceGenome,
+        constraint_release: release,
+        ...metrics,
+        constraint_flags: flags,
+      });
     },
   );
 });
@@ -1596,6 +1757,7 @@ describe('GnomadService gene resolution and constraint normalization', () => {
                 symbol: resolved.symbol,
                 gnomad_constraint: null,
                 exac_constraint: null,
+                mitochondrial_constraint: null,
               }
             : null,
         },
@@ -1646,8 +1808,13 @@ describe('GnomadService gene resolution and constraint normalization', () => {
                   oe_lof: 0,
                   oe_lof_lower: 0,
                   oe_lof_upper: 0,
+                  oe_lof_percentile: 0,
                   oe_mis: 0,
+                  oe_mis_lower: 0,
+                  oe_mis_upper: 0,
                   oe_syn: 0,
+                  oe_syn_lower: 0,
+                  oe_syn_upper: 0,
                   lof_z: 0,
                   mis_z: 0,
                   syn_z: 0,
@@ -1660,6 +1827,7 @@ describe('GnomadService gene resolution and constraint normalization', () => {
                   flags: [],
                 },
             exac_constraint: null,
+            mitochondrial_constraint: null,
           },
         },
       };
@@ -1670,8 +1838,21 @@ describe('GnomadService gene resolution and constraint normalization', () => {
     const absent = await svc.getGeneConstraint('SPARSE', dsCtx, createMockContext());
     const low = await svc.getGeneConstraint('LOW', dsCtx, createMockContext());
 
-    expect(absent).toMatchObject({ pli: null, oe_lof_upper: null, obs_lof: null });
-    expect(low).toMatchObject({ pli: 0, oe_lof_upper: 0, obs_lof: 0 });
+    expect(absent).toMatchObject({
+      pli: null,
+      oe_lof_upper: null,
+      obs_lof: null,
+      oe_lof_percentile: null,
+      oe_mis_lower: null,
+    });
+    expect(low).toMatchObject({
+      pli: 0,
+      oe_lof_upper: 0,
+      obs_lof: 0,
+      oe_lof_percentile: 0,
+      oe_mis_lower: 0,
+      oe_syn_upper: 0,
+    });
   });
 });
 
@@ -1711,6 +1892,66 @@ describe('GnomadService list and coverage boundary', () => {
 
     expect(rows[0]).toMatchObject({ af: 0, ac: 0, an: 1_000 });
     expect(rows[1]).toMatchObject({ af: null, ac: 0, an: 0 });
+    // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+    // A row without lof reads it as null, and a call without annotations adds none of the five.
+    expect(rows.map((row) => row.lof)).toEqual([null, null]);
+    expect(rows.every((row) => !('hgvsc' in row) && !('rsids' in row))).toBe(true);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+  it('sends annotations on the list document only, as the call asks, and reads its absent fields as null', async () => {
+    const requests = fakeGraphql(({ query }) =>
+      query.includes('coverage(')
+        ? { data: { region: { coverage: { exome: [], genome: null } } } }
+        : {
+            data: {
+              region: {
+                variants: [
+                  {
+                    variant_id: '1-100-A-T',
+                    consequence: 'stop_gained',
+                    transcript_id: 'ENST1',
+                    lof: 'HC',
+                    flags: [],
+                    exome: { ac: 1, an: 1_000, af: 0.001, homozygote_count: 0, filters: [] },
+                    genome: null,
+                  },
+                ],
+              },
+            },
+          },
+    );
+    const svc = new GnomadService(getServerConfig());
+    const dsCtx = svc.resolveDatasetContext('gnomad_r4');
+    const region = { kind: 'region', value: '1-100-100' } as const;
+
+    const [annotated] = await svc.listGeneVariants(
+      region,
+      { annotations: true },
+      dsCtx,
+      createMockContext(),
+    );
+    const [plain] = await svc.listGeneVariants(region, {}, dsCtx, createMockContext());
+    await svc.getCoverage(region, dsCtx, createMockContext());
+
+    expect(requests.map((request) => request.variables.annotations)).toEqual([
+      true,
+      false,
+      undefined,
+    ]);
+    expect(requests[0]?.query).toContain('$annotations: Boolean!');
+    expect(requests[2]?.query).not.toContain('$annotations');
+    // gnomAD omitted the five here, so each reads as null (rsids as none), never invented.
+    expect(annotated).toMatchObject({
+      lof: 'HC',
+      hgvsc: null,
+      hgvsp: null,
+      lof_filter: null,
+      lof_flags: null,
+      rsids: '',
+    });
+    expect(plain).toMatchObject({ lof: 'HC' });
+    expect(Object.keys(plain ?? {})).not.toContain('hgvsc');
   });
 
   it('routes Ensembl gene, transcript, and region coverage with the effective build', async () => {

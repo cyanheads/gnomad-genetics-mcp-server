@@ -13,11 +13,8 @@ import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import { ClinVarService } from '@/services/clinvar/clinvar-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
-
-interface GraphqlRequest {
-  query: string;
-  variables: Record<string, unknown>;
-}
+import type { GraphqlRequest } from '../helpers/fake-gnomad-graphql.js';
+import { liveGene } from '../helpers/live-constraint.js';
 
 function variant(variantId: string, referenceGenome = 'GRCh38') {
   return {
@@ -183,8 +180,13 @@ describe('constraint metric ranges', () => {
             oe_lof: -0.1,
             oe_lof_lower: -0.2,
             oe_lof_upper: -0.05,
+            oe_lof_percentile: null,
             oe_mis: -1,
+            oe_mis_lower: null,
+            oe_mis_upper: null,
             oe_syn: -1,
+            oe_syn_lower: null,
+            oe_syn_upper: null,
             lof_z: 0,
             mis_z: 0,
             syn_z: 0,
@@ -197,6 +199,7 @@ describe('constraint metric ranges', () => {
             flags: [],
           },
           exac_constraint: null,
+          mitochondrial_constraint: null,
         },
       },
     }));
@@ -218,6 +221,7 @@ describe('constraint metric ranges', () => {
             symbol: 'PCSK9',
             gnomad_constraint: constraint,
             exac_constraint: null,
+            mitochondrial_constraint: null,
           },
         },
       }));
@@ -257,6 +261,7 @@ describe('constraint metric ranges', () => {
           symbol: 'TP53',
           gnomad_constraint: null,
           exac_constraint,
+          mitochondrial_constraint: null,
         },
       },
     }));
@@ -290,6 +295,124 @@ describe('constraint metric ranges', () => {
     await expect(
       svc.getGeneConstraint('TP53', svc.resolveDatasetContext('exac'), createMockContext()),
     ).resolves.toMatchObject({ pli: 1, lof_z: -2.5, mis_z: -18.5, syn_z: 0, obs_lof: 0 });
+  });
+
+  /** gnomAD answering BRCA1 on GRCh38 with live constraint, some fields overridden. */
+  function fakeBrca1(override: Record<string, unknown>): void {
+    const live = liveGene('GRCh38', 'BRCA1');
+    fakeGraphql(() => ({
+      data: {
+        gene: { ...live, gnomad_constraint: { ...live.gnomad_constraint, ...override } },
+      },
+    }));
+  }
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/69
+  it.each([
+    ['a LOEUF percentile above 100', { oe_lof_percentile: 101 }],
+    ['a fractional LOEUF percentile', { oe_lof_percentile: 1.5 }],
+    ['a negative LOEUF percentile', { oe_lof_percentile: -1 }],
+    ['a non-numeric LOEUF percentile', { oe_lof_percentile: '51' }],
+    ['a negative oe_mis_lower', { oe_mis_lower: -0.01 }],
+    ['a negative oe_mis_upper', { oe_mis_upper: -0.5 }],
+    ['a negative oe_syn_lower', { oe_syn_lower: -1 }],
+    ['a negative oe_syn_upper', { oe_syn_upper: -0.2 }],
+  ])('rejects gnomAD constraint with %s as invalid_constraint_data', async (_label, override) => {
+    fakeBrca1(override);
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('BRCA1', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'invalid_constraint_data' },
+    });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/69
+  it.each([0, 100])('keeps a LOEUF percentile of %i, a bound of its domain', async (percentile) => {
+    fakeBrca1({ oe_lof_percentile: percentile, oe_mis_lower: 0 });
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('BRCA1', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).resolves.toMatchObject({ oe_lof_percentile: percentile, oe_mis_lower: 0 });
+  });
+
+  type Rewrite = (live: Record<string, unknown>) => unknown;
+
+  /** gnomAD answering a mitochondrial gene on `build` with its live root, the mitochondrial object rewritten. */
+  function fakeMitochondrial(
+    symbol: 'MT-CO1' | 'MT-TL1',
+    rewrite: Rewrite,
+    build: 'GRCh38' | 'GRCh37' = 'GRCh38',
+  ): GraphqlRequest[] {
+    const { mitochondrial_constraint, ...rest } = liveGene(build, symbol);
+    const rewritten = rewrite({ ...mitochondrial_constraint });
+    const gene = rewritten === undefined ? rest : { ...rest, mitochondrial_constraint: rewritten };
+    return fakeGraphql(() => ({ data: { gene } })).requests;
+  }
+
+  const set =
+    (key: string, value: unknown): Rewrite =>
+    (live) => ({ ...live, [key]: value });
+  const without =
+    (key: string): Rewrite =>
+    ({ [key]: _dropped, ...rest }) =>
+      rest;
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it.each([
+    ['an unknown __typename', 'MT-TL1', set('__typename', 'TRNAMitochondrialGeneConstraint')],
+    ['no __typename', 'MT-TL1', without('__typename')],
+    ['a negative rna value', 'MT-TL1', set('oe_lower', -0.01)],
+    ['a negative protein value', 'MT-CO1', set('obs_lof', -1)],
+    ['a null protein value', 'MT-CO1', set('oe_mis', null)],
+    ['a protein arm missing oe_syn_upper', 'MT-CO1', without('oe_syn_upper')],
+    ['an rna arm missing oe', 'MT-TL1', without('oe')],
+    [
+      'an rna typename over the protein fields',
+      'MT-CO1',
+      set('__typename', 'RNAMitochondrialGeneConstraint'),
+    ],
+    ['a non-object value', 'MT-TL1', () => 0.147],
+    ['the key absent', 'MT-TL1', () => undefined],
+  ] as const)(
+    'rejects mitochondrial constraint with %s as invalid_constraint_data, in one request',
+    async (_label, symbol, rewrite) => {
+      const requests = fakeMitochondrial(symbol, rewrite);
+      const svc = new GnomadService(getServerConfig());
+
+      await expect(
+        svc.getGeneConstraint(symbol, svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'invalid_constraint_data', retryable: false },
+      });
+      expect(requests).toHaveLength(1);
+    },
+  );
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it('validates the mitochondrial constraint on exac too, whose build serves the same table', async () => {
+    fakeMitochondrial('MT-CO1', set('oe_lof', -0.5), 'GRCh37');
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('MT-CO1', svc.resolveDatasetContext('exac'), createMockContext()),
+    ).rejects.toMatchObject({ data: { reason: 'invalid_constraint_data' } });
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+  it('keeps zero-valued mitochondrial metrics as zero', async () => {
+    fakeMitochondrial('MT-TL1', (live) => ({ ...live, observed: 0, oe: 0, oe_lower: 0 }));
+    const svc = new GnomadService(getServerConfig());
+
+    await expect(
+      svc.getGeneConstraint('MT-TL1', svc.resolveDatasetContext('gnomad_r4'), createMockContext()),
+    ).resolves.toMatchObject({
+      mitochondrial_constraint: { kind: 'rna', observed: 0, oe: 0, oe_lower: 0, oe_upper: 0.213 },
+    });
   });
 });
 

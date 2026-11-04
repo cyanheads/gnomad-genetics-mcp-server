@@ -18,7 +18,7 @@ const pending = (signal: AbortSignal | null | undefined) =>
     signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
   });
 const context = () => createMockContext();
-const dataset = { dataset: 'gnomad_r4', reference_genome: 'GRCh38' } as const;
+const dataset = { dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' } as const;
 
 describe('upstream call deadlines', () => {
   beforeEach(() => vi.useFakeTimers());

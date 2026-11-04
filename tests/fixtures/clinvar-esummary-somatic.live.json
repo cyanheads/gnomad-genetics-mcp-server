@@ -1,0 +1,347 @@
+{
+  "header": {
+    "type": "esummary",
+    "version": "0.3"
+  },
+  "result": {
+    "uids": ["3116215", "4880485"],
+    "3116215": {
+      "uid": "3116215",
+      "obj_type": "Indel",
+      "accession": "VCV003116215",
+      "accession_version": "VCV003116215.2",
+      "title": "NM_004985.5(KRAS):c.180_181delinsAA (p.Gln61Lys)",
+      "variation_set": [
+        {
+          "measure_id": "3272834",
+          "variation_xrefs": [
+            {
+              "db_source": "ClinGen",
+              "db_id": "CA645572098"
+            },
+            {
+              "db_source": "dbSNP",
+              "db_id": "2141510126"
+            }
+          ],
+          "variation_name": "NM_004985.5(KRAS):c.180_181delinsAA (p.Gln61Lys)",
+          "cdna_change": "c.180_181delinsAA",
+          "aliases": [],
+          "variation_loc": [
+            {
+              "status": "current",
+              "assembly_name": "GRCh38",
+              "chr": "12",
+              "band": "12p12.1",
+              "start": "25227343",
+              "stop": "25227344",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "25227343",
+              "display_stop": "25227344",
+              "assembly_acc_ver": "GCF_000001405.38",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            },
+            {
+              "status": "previous",
+              "assembly_name": "GRCh37",
+              "chr": "12",
+              "band": "12p12.1",
+              "start": "25380277",
+              "stop": "25380278",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "25380277",
+              "display_stop": "25380278",
+              "assembly_acc_ver": "GCF_000001405.25",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            }
+          ],
+          "variant_type": "Indel",
+          "canonical_spdi": "NC_000012.12:25227342:GA:TT",
+          "common_name": ""
+        }
+      ],
+      "supporting_submissions": {
+        "scv": ["SCV004896301", "SCV007105398", "SCV007105416", "SCV007105421", "SCV007593781"],
+        "rcv": ["RCV004412079", "RCV006695763", "RCV006254398", "RCV006254400", "RCV006254399"]
+      },
+      "germline_classification": {
+        "description": "Conflicting classifications of pathogenicity",
+        "last_evaluated": "2025/11/11 00:00",
+        "review_status": "criteria provided, conflicting classifications",
+        "fda_recognized_database": "",
+        "trait_set": [
+          {
+            "trait_xrefs": [],
+            "trait_name": "Autosomal dominant KRAS-related disorders"
+          },
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "MedGen",
+                "db_id": "CN230736"
+              }
+            ],
+            "trait_name": "Cardiovascular phenotype"
+          }
+        ]
+      },
+      "clinical_impact_classification": {
+        "description": "Tier I - Strong",
+        "last_evaluated": "2024/10/24 00:00",
+        "review_status": "criteria provided, single submitter",
+        "fda_recognized_database": "",
+        "trait_set": [
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "Orphanet",
+                "db_id": "146"
+              },
+              {
+                "db_source": "MedGen",
+                "db_id": "C0238463"
+              },
+              {
+                "db_source": "MeSH",
+                "db_id": "D000077273"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0005075"
+              },
+              {
+                "db_source": "Human Phenotype Ontology",
+                "db_id": "HP:0002895"
+              }
+            ],
+            "trait_name": "Papillary thyroid carcinoma"
+          },
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "MedGen",
+                "db_id": "C1997217"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0021637"
+              }
+            ],
+            "trait_name": "Low grade glioma"
+          },
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "Orphanet",
+                "db_id": "251612"
+              },
+              {
+                "db_source": "MedGen",
+                "db_id": "C0334583"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0016691"
+              },
+              {
+                "db_source": "Human Phenotype Ontology",
+                "db_id": "HP:0033680"
+              }
+            ],
+            "trait_name": "Pilocytic astrocytoma"
+          }
+        ]
+      },
+      "oncogenicity_classification": {
+        "description": "",
+        "last_evaluated": "1/01/01 00:00",
+        "review_status": "",
+        "fda_recognized_database": "",
+        "trait_set": []
+      },
+      "record_status": "",
+      "gene_sort": "KRAS",
+      "chr_sort": "12",
+      "location_sort": "00000000000025227343",
+      "variation_set_name": "",
+      "variation_set_id": "",
+      "genes": [
+        {
+          "symbol": "KRAS",
+          "geneid": "3845",
+          "strand": "-",
+          "source": "submitted"
+        }
+      ],
+      "molecular_consequence_list": ["missense variant"],
+      "protein_change": "Q61K",
+      "fda_recognized_database": ""
+    },
+    "4880485": {
+      "uid": "4880485",
+      "obj_type": "single nucleotide variant",
+      "accession": "VCV004880485",
+      "accession_version": "VCV004880485.2",
+      "title": "NM_000546.6(TP53):c.810T>G (p.Phe270Leu)",
+      "variation_set": [
+        {
+          "measure_id": "363474",
+          "variation_xrefs": [
+            {
+              "db_source": "dbSNP",
+              "db_id": "1057519987"
+            }
+          ],
+          "variation_name": "NM_000546.6(TP53):c.810T>G (p.Phe270Leu)",
+          "cdna_change": "c.810T>G",
+          "aliases": [],
+          "variation_loc": [
+            {
+              "status": "current",
+              "assembly_name": "GRCh38",
+              "chr": "17",
+              "band": "17p13.1",
+              "start": "7673810",
+              "stop": "7673810",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "7673810",
+              "display_stop": "7673810",
+              "assembly_acc_ver": "GCF_000001405.38",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            },
+            {
+              "status": "previous",
+              "assembly_name": "GRCh37",
+              "chr": "17",
+              "band": "17p13.1",
+              "start": "7577128",
+              "stop": "7577128",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "7577128",
+              "display_stop": "7577128",
+              "assembly_acc_ver": "GCF_000001405.25",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            }
+          ],
+          "variant_type": "single nucleotide variant",
+          "canonical_spdi": "NC_000017.11:7673809:A:C",
+          "common_name": ""
+        }
+      ],
+      "supporting_submissions": {
+        "scv": ["SCV007657038", "SCV008104091"],
+        "rcv": ["RCV006742958", "RCV007096467"]
+      },
+      "germline_classification": {
+        "description": "Likely pathogenic",
+        "last_evaluated": "2026/07/14 00:00",
+        "review_status": "criteria provided, single submitter",
+        "fda_recognized_database": "",
+        "trait_set": [
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "Orphanet",
+                "db_id": "145"
+              },
+              {
+                "db_source": "MedGen",
+                "db_id": "C0677776"
+              },
+              {
+                "db_source": "MeSH",
+                "db_id": "D061325"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0003582"
+              }
+            ],
+            "trait_name": "Hereditary breast ovarian cancer syndrome"
+          }
+        ]
+      },
+      "clinical_impact_classification": {
+        "description": "",
+        "last_evaluated": "1/01/01 00:00",
+        "review_status": "",
+        "fda_recognized_database": "",
+        "trait_set": []
+      },
+      "oncogenicity_classification": {
+        "description": "Likely oncogenic",
+        "last_evaluated": "2026/10/16 00:00",
+        "review_status": "criteria provided, single submitter",
+        "fda_recognized_database": "",
+        "trait_set": [
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "MedGen",
+                "db_id": "C0027651"
+              },
+              {
+                "db_source": "MeSH",
+                "db_id": "D009369"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0005070"
+              },
+              {
+                "db_source": "Human Phenotype Ontology",
+                "db_id": "HP:0002664"
+              },
+              {
+                "db_source": "Human Phenotype Ontology",
+                "db_id": "HP:0003008"
+              },
+              {
+                "db_source": "Human Phenotype Ontology",
+                "db_id": "HP:0006741"
+              }
+            ],
+            "trait_name": "Neoplasm"
+          }
+        ]
+      },
+      "record_status": "",
+      "gene_sort": "TP53",
+      "chr_sort": "17",
+      "location_sort": "00000000000007673810",
+      "variation_set_name": "",
+      "variation_set_id": "",
+      "genes": [
+        {
+          "symbol": "TP53",
+          "geneid": "7157",
+          "strand": "-",
+          "source": "submitted"
+        }
+      ],
+      "molecular_consequence_list": ["missense variant"],
+      "protein_change": "F138L, F231L, F270L, F111L",
+      "fda_recognized_database": ""
+    }
+  }
+}

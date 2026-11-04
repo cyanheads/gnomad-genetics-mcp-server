@@ -3,6 +3,7 @@
  * transcript / region: mean & median depth and the fraction of samples over
  * depth thresholds (1/5/10/15/20/25/30/50/100×). Disambiguates a true absent
  * variant from an uncallable position before concluding "not seen in gnomAD."
+ * A subset dataset reads its parent release's coverage, named in coverage_dataset.
  * @module mcp-server/tools/definitions/gnomad-get-coverage.tool
  */
 
@@ -84,7 +85,7 @@ const CoverageSummarySchema = z
 export const gnomadGetCoverage = tool('gnomad_get_coverage', {
   title: 'gnomad-genetics-mcp-server: get coverage',
   description:
-    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. gnomAD reports coverage in buckets: 1 bp for a region spanning under 850 bp, wider for larger targets (bucket_size), and a gene or transcript is summarized over its exons ±75 bp, not its introns. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. gnomAD reports coverage in buckets: 1 bp for a region spanning under 850 bp, wider for larger targets (bucket_size), and a gene or transcript is summarized over its exons ±75 bp, not its introns. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. gnomAD publishes no coverage for subsets, so a subset dataset reads its parent release (gnomad_r4_non_ukb reads gnomad_r4) over all the parent’s samples: coverage_dataset names the release read, and a notice says so. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -130,6 +131,11 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       .array(CoverageSummarySchema)
       .describe('Per-track coverage summaries (exome and/or genome).'),
     dataset: z.string().describe('Effective gnomAD dataset.'),
+    coverage_dataset: z
+      .string()
+      .describe(
+        'The gnomAD release the coverage was read from: dataset itself for a release, the parent release for a subset (gnomad_r4 for gnomad_r4_non_ukb, gnomad_r3 for the gnomad_r3 subsets, gnomad_r2_1 for the gnomad_r2_1 subsets), since gnomAD publishes no subset coverage.',
+      ),
     reference_genome: z.string().describe('Effective reference build.'),
   }),
   enrichment: {
@@ -137,7 +143,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       .string()
       .optional()
       .describe(
-        'Disclosure of missing target bases, missing supported tracks, or an explicitly requested unsupported track. Missing data leaves callability unknown.',
+        'Disclosure that a subset dataset was read from its parent release, and of missing target bases, missing supported tracks, or an explicitly requested unsupported track. Missing data leaves callability unknown.',
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -154,7 +160,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'reference_genome was supplied but does not match the dataset.',
       recovery:
-        'Omit reference_genome to let it derive, or pass the build matching the dataset (v4/v3=GRCh38, v2.1/ExAC=GRCh37).',
+        'Omit reference_genome to let it derive, or pass the build matching the dataset (gnomad_r4, gnomad_r3, and their subsets are GRCh38; gnomad_r2_1, its subsets, and exac are GRCh37).',
       thrownBy: 'service',
     },
     {
@@ -251,25 +257,32 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     if (input.coverage_source) {
       summaries = summaries.filter((s) => s.source === input.coverage_source);
     }
+    // gnomAD publishes coverage for the four releases only; getCoverage reads a subset's parent.
+    const coverageDataset = dsCtx.parent;
     const supported = {
       gnomad_r4: ['exome', 'genome'],
       gnomad_r3: ['genome'],
       gnomad_r2_1: ['exome', 'genome'],
       exac: ['exome'],
     } as const;
-    const requested = input.coverage_source ? [input.coverage_source] : supported[dsCtx.dataset];
+    const requested = input.coverage_source ? [input.coverage_source] : supported[coverageDataset];
     const notices: string[] = [];
+    if (coverageDataset !== dsCtx.dataset) {
+      notices.push(
+        `gnomAD publishes no coverage for subsets: these figures are ${coverageDataset}'s, over all of its samples, not ${dsCtx.dataset}'s alone.`,
+      );
+    }
     for (const source of requested) {
-      if (!(supported[dsCtx.dataset] as readonly string[]).includes(source)) {
+      if (!(supported[coverageDataset] as readonly string[]).includes(source)) {
         notices.push(
-          `The ${source} coverage track is not supported in ${dsCtx.dataset}. Callability is unknown from this track.`,
+          `The ${source} coverage track is not supported in ${coverageDataset}. Callability is unknown from this track.`,
         );
         continue;
       }
       const summary = summaries.find((item) => item.source === source);
       if (!summary) {
         notices.push(
-          `No ${source} coverage data for ${target.kind} "${target.value}" in ${dsCtx.dataset}. This supported track returned no target records; callability is unknown, not measured zero depth.`,
+          `No ${source} coverage data for ${target.kind} "${target.value}" in ${coverageDataset}. This supported track returned no target records; callability is unknown, not measured zero depth.`,
         );
       } else if (summary.missing_positions > 0) {
         notices.push(
@@ -291,6 +304,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       target_kind: target.kind,
       summaries,
       dataset: dsCtx.dataset,
+      coverage_dataset: coverageDataset,
       reference_genome: dsCtx.reference_genome,
     };
   },
@@ -300,7 +314,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     const num = (v: number | null) => (v != null ? v.toFixed(1) : 'Not available');
     const lines = [
       `**Coverage — ${result.target_kind}:** ${escapeMarkdownInline(result.target)}`,
-      `**Dataset:** ${result.dataset} (${result.reference_genome})`,
+      `**Dataset:** ${result.dataset} (${result.reference_genome})${result.coverage_dataset === result.dataset ? '' : ` | **Coverage dataset:** ${result.coverage_dataset}`}`,
     ];
     for (const s of result.summaries) {
       lines.push('', `### ${s.source} (${s.positions} positions)`);

@@ -34,6 +34,13 @@ const HEAVY = fixture('clinvar-esummary-heavy.live.json');
  * Pathogenic, 54221 "not provided".
  */
 const PLACEHOLDER = fixture('clinvar-esummary-placeholder.live.json');
+/**
+ * Real records carrying a germline and a somatic classification (captured
+ * 2026-11-03), `allele_freq_set` trimmed: KRAS 3116215 (Conflicting germline,
+ * clinical impact Tier I - Strong) and TP53 4880485 (Likely pathogenic germline,
+ * Likely oncogenic).
+ */
+const SOMATIC = fixture('clinvar-esummary-somatic.live.json');
 
 function requestUrl(input: string | URL | Request): URL {
   if (input instanceof URL) return input;
@@ -272,6 +279,14 @@ describe('ClinVarService E-utilities boundary', () => {
       molecular_consequences: '',
       protein_change: '',
       conditions: '',
+      oncogenicity_classification: null,
+      oncogenicity_review_status: null,
+      oncogenicity_last_evaluated: null,
+      oncogenicity_conditions: '',
+      clinical_impact_classification: null,
+      clinical_impact_review_status: null,
+      clinical_impact_last_evaluated: null,
+      clinical_impact_conditions: '',
       submission_count: 0,
       canonical_spdi: null,
       rsids: '',
@@ -688,6 +703,149 @@ describe('ClinVarService no-date placeholder and blank germline values (#61)', (
     [{ clinicalSignificance: 'pathogenic', minReviewStars: 0 }, ['1687128', '4845640']],
   ])('filters %j keep %j', async (filters, kept) => {
     fakeNcbi(esearchBody(['4852577', '1687128', '4845640']), records);
+
+    const { rows } = await search('BRCA1', filters);
+
+    expect(rows.map((r) => r.clinvar_variation_id)).toEqual(kept);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/76
+describe('ClinVarService oncogenicity and clinical-impact classifications (#76)', () => {
+  const records: Record<string, unknown> = {
+    ...LIVE.result,
+    ...PLACEHOLDER.result,
+    ...SOMATIC.result,
+  };
+  /** The eight somatic fields of a row with no somatic classification. */
+  const NO_SOMATIC = {
+    oncogenicity_classification: null,
+    oncogenicity_review_status: null,
+    oncogenicity_last_evaluated: null,
+    oncogenicity_conditions: '',
+    clinical_impact_classification: null,
+    clinical_impact_review_status: null,
+    clinical_impact_last_evaluated: null,
+    clinical_impact_conditions: '',
+  };
+  const somaticOf = (row: Record<string, unknown> | undefined) =>
+    Object.fromEntries(Object.keys(NO_SOMATIC).map((key) => [key, row?.[key]]));
+
+  it.each([
+    [
+      '4849514',
+      {
+        ...NO_SOMATIC,
+        oncogenicity_classification: 'Likely oncogenic',
+        oncogenicity_review_status: 'no assertion criteria provided',
+        oncogenicity_conditions: 'Ovarian cancer',
+      },
+      { clinical_significance: null, conditions: '' },
+    ],
+    [
+      '4852577',
+      {
+        ...NO_SOMATIC,
+        clinical_impact_classification: 'Tier III - Unknown',
+        clinical_impact_review_status: 'no assertion criteria provided',
+        clinical_impact_conditions: 'Familial cancer of breast',
+      },
+      { clinical_significance: null, conditions: '' },
+    ],
+    [
+      '3116215',
+      {
+        ...NO_SOMATIC,
+        clinical_impact_classification: 'Tier I - Strong',
+        clinical_impact_review_status: 'criteria provided, single submitter',
+        clinical_impact_last_evaluated: '2024/10/24 00:00',
+        clinical_impact_conditions:
+          'Papillary thyroid carcinoma; Low grade glioma; Pilocytic astrocytoma',
+      },
+      {
+        clinical_significance: 'Conflicting classifications of pathogenicity',
+        review_status: 'criteria provided, conflicting classifications',
+        gold_stars: 1,
+        last_evaluated: '2025/11/11 00:00',
+        conditions: 'Autosomal dominant KRAS-related disorders; Cardiovascular phenotype',
+      },
+    ],
+    [
+      '4880485',
+      {
+        ...NO_SOMATIC,
+        oncogenicity_classification: 'Likely oncogenic',
+        oncogenicity_review_status: 'criteria provided, single submitter',
+        oncogenicity_last_evaluated: '2026/10/16 00:00',
+        oncogenicity_conditions: 'Neoplasm',
+      },
+      {
+        clinical_significance: 'Likely pathogenic',
+        review_status: 'criteria provided, single submitter',
+        gold_stars: 1,
+        conditions: 'Hereditary breast ovarian cancer syndrome',
+      },
+    ],
+    ['2878', NO_SOMATIC, { clinical_significance: 'Benign/Likely benign', gold_stars: 2 }],
+  ])(
+    'VariationID %s carries its somatic blocks beside the germline one',
+    async (uid, somatic, germline) => {
+      fakeNcbi(esearchBody([uid]), records);
+
+      const { rows } = await search('ANY', {});
+
+      expect(rows).toHaveLength(1);
+      expect(somaticOf(rows[0])).toEqual(somatic);
+      expect(rows[0]).toMatchObject(germline);
+    },
+  );
+
+  it.each([
+    ['both somatic blocks', ['oncogenicity_classification', 'clinical_impact_classification']],
+    ['the oncogenicity block', ['oncogenicity_classification']],
+    ['the clinical-impact block', ['clinical_impact_classification']],
+  ])('reads a record missing %s as no somatic classification', async (_label, omitted) => {
+    const live = { ...(LIVE.result['2878'] as Record<string, unknown>) };
+    for (const key of omitted) delete live[key];
+    fakeNcbi(esearchBody(['2878']), { '2878': live });
+
+    const { rows } = await search('ANY', {});
+
+    expect(somaticOf(rows[0])).toEqual(NO_SOMATIC);
+    expect(rows[0]?.clinical_significance).toBe('Benign/Likely benign');
+  });
+
+  it('reads a null block, a blank date, and a nameless trait as unknown', async () => {
+    fakeNcbi(esearchBody(['1']), {
+      '1': {
+        ...summaryRecord('1'),
+        oncogenicity_classification: null,
+        clinical_impact_classification: {
+          description: 'Tier II - Potential',
+          review_status: '',
+          last_evaluated: '',
+          trait_set: [{ trait_name: null }, {}, { trait_name: 'Melanoma' }],
+        },
+      },
+    });
+
+    const { rows } = await search('ANY', {});
+
+    expect(somaticOf(rows[0])).toEqual({
+      ...NO_SOMATIC,
+      clinical_impact_classification: 'Tier II - Potential',
+      clinical_impact_conditions: 'Melanoma',
+    });
+  });
+
+  // The filters stay germline: the somatic blocks select and drop nothing.
+  it.each([
+    [{}, ['4849514', '4852577', '3116215', '4880485']],
+    [{ minReviewStars: 1 }, ['3116215', '4880485']],
+    [{ clinicalSignificance: 'pathogenic' }, ['4880485']],
+    [{ clinicalSignificance: 'conflicting' }, ['3116215']],
+  ])('filters %j keep %j by their germline classification', async (filters, kept) => {
+    fakeNcbi(esearchBody(['4849514', '4852577', '3116215', '4880485']), records);
 
     const { rows } = await search('BRCA1', filters);
 

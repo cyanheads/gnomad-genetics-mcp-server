@@ -124,14 +124,26 @@ export function normalizeSignificance(value: string | undefined): string | undef
 }
 
 /**
+ * The gene symbol a search sends: `"` dropped (the term quotes the phrase
+ * itself) and trimmed; '' when nothing is left. The tool sends the same symbol
+ * to gnomAD's ClinVar mapping, so both upstreams read one gene.
+ */
+export function clinvarGeneSymbol(gene: string): string {
+  return gene.replace(/"/g, '').trim();
+}
+
+/**
  * Build the ESearch term. The gene goes out as a quoted phrase, so query
  * syntax in it — parentheses, brackets, a trailing `OR` — stays inside the
  * `[gene]` field instead of detaching the tag and searching all fields. The
  * significance clause comes from significanceMatch(). The star floor goes out
  * as an OR of the exact review-status values at or above it; a floor of 0
  * admits every status, including ones the star map does not know, so it adds
- * no clause. The post-fetch filters in searchGene() stay authoritative over
- * both filter clauses. `symbol` arrives with `"` already removed.
+ * no clause. ClinVar's review-status index also matches the review status of
+ * an oncogenicity or clinical-impact classification, so the floor clause
+ * admits records whose germline rating is under the floor. The post-fetch
+ * filters in searchGene() stay authoritative over both filter clauses.
+ * `symbol` arrives as clinvarGeneSymbol() returns it.
  */
 function buildEsearchTerm(
   symbol: string,
@@ -185,7 +197,8 @@ const SPDI = /^([^:]+):(\d+):([ACGT]*):([ACGT]*)$/;
  * differing at their first and last base (SNVs, MNVs, delins). Canonical SPDI
  * repeat-expands deletions, insertions, and duplications and drops the VCF
  * anchor base, and mitochondrial and non-GRCh38 accessions have no gnomAD ID
- * here — all of those return null.
+ * here — all of those return null. gnomad_search_clinvar fills the indel IDs
+ * from gnomAD's ClinVar mapping, which keeps the anchor base.
  */
 function grch38VariantId(spdi: string | null): string | null {
   const match = spdi ? SPDI.exec(spdi) : null;
@@ -239,6 +252,26 @@ const ClassificationSchema = z
   })
   .passthrough();
 
+/**
+ * One ESummary classification block as a row reads it. ESummary sends the
+ * germline, oncogenicity, and clinical-impact blocks on every record; a kind
+ * the record lacks carries "" for its description and review status and the
+ * NO_EVALUATION_DATE literal for its date, which all read as null, as does a
+ * block left out. Conditions are the block's trait names, `; `-joined.
+ */
+function readClassification(block: z.infer<typeof ClassificationSchema> | null | undefined) {
+  const date = block?.last_evaluated;
+  return {
+    classification: block?.description || null,
+    reviewStatus: block?.review_status || null,
+    lastEvaluated: date && date !== NO_EVALUATION_DATE ? date : null,
+    conditions: (block?.trait_set ?? [])
+      .map((trait) => trait.trait_name)
+      .filter((name): name is string => !!name)
+      .join('; '),
+  };
+}
+
 const EsummaryRecord = z
   .object({
     uid: z.string(),
@@ -248,6 +281,8 @@ const EsummaryRecord = z
     protein_change: z.string().nullable().optional(),
     molecular_consequence_list: z.array(z.string()).nullable().optional(),
     germline_classification: ClassificationSchema.nullable().optional(),
+    oncogenicity_classification: ClassificationSchema.nullable().optional(),
+    clinical_impact_classification: ClassificationSchema.nullable().optional(),
     variation_set: z
       .array(
         z
@@ -339,10 +374,12 @@ export class ClinVarService {
 
   /**
    * Search one window of ClinVar candidates for a gene. `offset`/`limit` page
-   * the ESearch ID list. A mapped significance term and the star floor are in
-   * the ESearch term, so their windows are dense; an unmapped term matches
-   * across all fields, and the post-fetch filters, which stay authoritative,
-   * can leave its window shorter than `limit`.
+   * the ESearch ID list. A mapped significance term is in the ESearch term as
+   * exactly the germline classifications its pattern keeps, so its window is
+   * dense. The star floor is in the term too, but its clause also matches
+   * somatic review statuses, and an unmapped term matches across all fields,
+   * so the post-fetch filters, which stay authoritative, can leave either
+   * window shorter than `limit`.
    */
   async searchGene(
     gene: string,
@@ -360,7 +397,7 @@ export class ClinVarService {
      * field for "gene" — all of ClinVar — so a gene of nothing but quotes and
      * whitespace matches no record, without a request.
      */
-    const symbol = gene.replace(/"/g, '').trim();
+    const symbol = clinvarGeneSymbol(gene);
     if (!symbol) {
       return { rows: [], totalFound: 0, truncated: false, nextOffset: null, unavailableIds: [] };
     }
@@ -380,10 +417,12 @@ export class ClinVarService {
       unavailableIds.push(...batch.unavailable);
     }
     /**
-     * Both filters are enforced here, post-fetch, and compose when both are
-     * set; the ESearch clauses only select candidates. A mapped term's
-     * property clause selects what its pattern keeps, but an unmapped phrase
-     * matches across all fields and leaks other classifications.
+     * Both filters are enforced here, post-fetch, on the germline
+     * classification, and compose when both are set; the ESearch clauses only
+     * select candidates. A mapped term's property clause selects what its
+     * pattern keeps, but an unmapped phrase matches across all fields and leaks
+     * other classifications, and the star-floor clause admits a record on a
+     * somatic review status alone.
      */
     let filtered = rows;
     if (significance) {
@@ -520,11 +559,9 @@ export class ClinVarService {
   }
 
   private normalize(r: z.infer<typeof EsummaryRecord>): ClinVarRow {
-    const cls = r.germline_classification ?? undefined;
-    const conditions = (cls?.trait_set ?? [])
-      .map((t) => (t as { trait_name?: string | null }).trait_name)
-      .filter((n): n is string => n != null && n !== '')
-      .join('; ');
+    const germline = readClassification(r.germline_classification);
+    const oncogenicity = readClassification(r.oncogenicity_classification);
+    const impact = readClassification(r.clinical_impact_classification);
     const scv = r.supporting_submissions?.scv ?? [];
     // Identifiers describe one allele: multi-allele records (haplotypes,
     // compound genotypes) carry no single SPDI or rsID set, so they stay empty.
@@ -537,23 +574,29 @@ export class ClinVarService {
       }
     }
     /**
-     * A record with no germline classification carries "" for its description
-     * and review status, and every classification without an evaluation date
-     * carries the NO_EVALUATION_DATE literal; all three read as unknown.
+     * The germline block keeps the unprefixed fields, the star rating, and the
+     * filters; the somatic blocks carry their own fields and no star rating.
      */
     return {
       clinvar_variation_id: r.uid,
       accession: r.accession ?? '',
       title: r.title ?? '',
       obj_type: r.obj_type ?? '',
-      clinical_significance: cls?.description || null,
-      review_status: cls?.review_status || null,
-      gold_stars: starsForReviewStatus(cls?.review_status),
-      last_evaluated:
-        cls?.last_evaluated === NO_EVALUATION_DATE ? null : (cls?.last_evaluated ?? null),
+      clinical_significance: germline.classification,
+      review_status: germline.reviewStatus,
+      gold_stars: starsForReviewStatus(germline.reviewStatus),
+      last_evaluated: germline.lastEvaluated,
       molecular_consequences: (r.molecular_consequence_list ?? []).join('; '),
       protein_change: r.protein_change ?? '',
-      conditions,
+      conditions: germline.conditions,
+      oncogenicity_classification: oncogenicity.classification,
+      oncogenicity_review_status: oncogenicity.reviewStatus,
+      oncogenicity_last_evaluated: oncogenicity.lastEvaluated,
+      oncogenicity_conditions: oncogenicity.conditions,
+      clinical_impact_classification: impact.classification,
+      clinical_impact_review_status: impact.reviewStatus,
+      clinical_impact_last_evaluated: impact.lastEvaluated,
+      clinical_impact_conditions: impact.conditions,
       submission_count: scv.length,
       canonical_spdi: canonicalSpdi,
       rsids: [...rsids].join(';'),

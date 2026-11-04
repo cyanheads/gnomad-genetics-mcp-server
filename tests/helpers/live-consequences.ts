@@ -1,7 +1,7 @@
 /**
  * @fileoverview Live gnomAD transcript-consequence records, captured 2026-11-01
- * (UTC) with the server's own query documents: the transcript_consequences of
- * four variant records, and gene list replies with the gene's MANE Select and
+ * (UTC; lof_filter, lof_flags, and lof_curations 2026-11-04) with the server's
+ * own query documents: the transcript_consequences of four variant records, and gene list replies with the gene's MANE Select and
  * canonical transcript IDs. Shared by the service and tool tests of the
  * consequence-transcript fields.
  * @module tests/helpers/live-consequences
@@ -23,6 +23,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.406G>T',
     hgvsp: 'p.Glu136Ter',
     lof: 'LC',
+    lof_filter: 'END_TRUNC',
+    lof_flags: 'PHYLOCSF_WEAK',
   },
   {
     gene_id: 'ENSG00000147889',
@@ -34,6 +36,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*9G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -45,6 +49,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*9G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -56,6 +62,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*173G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -67,6 +75,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*9G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -78,6 +88,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*50G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -89,6 +101,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*9G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -100,6 +114,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*124G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000264545',
@@ -111,6 +127,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.348-61213C>A',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000147889',
@@ -122,6 +140,8 @@ export const CDKN2A_STOP_GAINED_R4 = [
     hgvsc: 'c.*403G>T',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
 ];
 
@@ -240,7 +260,10 @@ export const CDKN2B_AS1_INTRON_R4 = [
   },
 ];
 
-/** transcript_consequences of gnomad_r2_1 1-55516888-G-GA: GRCh37, so no MANE status on any entry. */
+/**
+ * transcript_consequences of gnomad_r2_1 1-55516888-G-GA: GRCh37, so no MANE
+ * status on any entry; LOFTEE calls the frameshift on the first entry HC.
+ */
 export const PCSK9_FRAMESHIFT_R2_1 = [
   {
     gene_id: 'ENSG00000169174',
@@ -252,6 +275,8 @@ export const PCSK9_FRAMESHIFT_R2_1 = [
     hgvsc: 'c.547_548insA',
     hgvsp: 'p.Gly183GlufsTer23',
     lof: 'HC',
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000169174',
@@ -263,6 +288,8 @@ export const PCSK9_FRAMESHIFT_R2_1 = [
     hgvsc: 'c.524-1063_524-1062insA',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000169174',
@@ -274,6 +301,8 @@ export const PCSK9_FRAMESHIFT_R2_1 = [
     hgvsc: 'c.-77-1063_-77-1062insA',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
   },
   {
     gene_id: 'ENSG00000169174',
@@ -285,6 +314,61 @@ export const PCSK9_FRAMESHIFT_R2_1 = [
     hgvsc: 'n.282_283insA',
     hgvsp: null,
     lof: null,
+    lof_filter: null,
+    lof_flags: null,
+  },
+];
+
+/**
+ * lof_curations of gnomad_r2_1 1-55516888-G-GA: one curation overturning
+ * LOFTEE's HC call. gnomAD answers 9-21968220-C-A's and 11-2181088-G-T's with
+ * null.
+ */
+export const PCSK9_FRAMESHIFT_R2_1_CURATIONS = [
+  {
+    gene_id: 'ENSG00000169174',
+    gene_symbol: 'PCSK9',
+    verdict: 'Not LoF',
+    flags: [
+      'Low Relative Mean Pext/Pext Does Not Support Splicing',
+      'Minority Of Transcripts',
+      'Weak Exon Conservation',
+    ],
+    project: 'metabolic_conditions_genes',
+  },
+];
+
+/**
+ * The first two of the seven transcript_consequences of gnomad_r2_1
+ * 11-2181088-G-T, captured 2026-11-04 (UTC): stop_gained on INS's canonical
+ * entry first, LOFTEE LC with filter END_TRUNC.
+ */
+export const INS_STOP_GAINED_R2_1 = [
+  {
+    gene_id: 'ENSG00000254647',
+    gene_symbol: 'INS',
+    transcript_id: 'ENST00000397262',
+    major_consequence: 'stop_gained',
+    is_mane_select: null,
+    is_canonical: true,
+    hgvsc: 'c.327C>A',
+    hgvsp: 'p.Cys109Ter',
+    lof: 'LC',
+    lof_filter: 'END_TRUNC',
+    lof_flags: null,
+  },
+  {
+    gene_id: 'ENSG00000254647',
+    gene_symbol: 'INS',
+    transcript_id: 'ENST00000250971',
+    major_consequence: 'stop_gained',
+    is_mane_select: null,
+    is_canonical: null,
+    hgvsc: 'c.327C>A',
+    hgvsp: 'p.Cys109Ter',
+    lof: 'LC',
+    lof_filter: 'END_TRUNC',
+    lof_flags: null,
   },
 ];
 
@@ -341,6 +425,46 @@ export const CDKN2A_R2_1_GENE = {
     },
   ],
 };
+
+/**
+ * The gnomad_r2_1 row of region 1-55505647-55505647 as gnomAD answers a list
+ * document with `$annotations` true, captured 2026-11-04 (UTC): the five
+ * annotations fields describe transcript_id. Answered with `$annotations`
+ * false, the same row carries none of them (PCSK9_R2_1_REGION_ROW).
+ */
+export const PCSK9_R2_1_REGION_ANNOTATED_ROW = {
+  variant_id: '1-55505647-G-T',
+  consequence: 'missense_variant',
+  transcript_id: 'ENST00000302118',
+  flags: [],
+  lof: null,
+  hgvsc: 'c.137G>T',
+  hgvsp: 'p.Arg46Leu',
+  lof_filter: null,
+  lof_flags: null,
+  rsids: ['rs11591147'],
+  exome: {
+    ac: 2341,
+    an: 196220,
+    af: 0.011930486188971563,
+    homozygote_count: 29,
+    hemizygote_count: 0,
+    filters: [],
+  },
+  genome: {
+    ac: 441,
+    an: 31400,
+    af: 0.014044585987261146,
+    homozygote_count: 8,
+    hemizygote_count: 0,
+    filters: [],
+  },
+  joint: null,
+};
+
+/** The same row answered with `$annotations` false: the five keys absent, every other key identical. */
+export const PCSK9_R2_1_REGION_ROW = (({ hgvsc, hgvsp, lof_filter, lof_flags, rsids, ...row }) =>
+  row)(PCSK9_R2_1_REGION_ANNOTATED_ROW);
 
 /** The gnomad_r4 row of intergenic region 4-45000004-45000004: no consequence, no transcript. */
 export const INTERGENIC_R4_ROW = {

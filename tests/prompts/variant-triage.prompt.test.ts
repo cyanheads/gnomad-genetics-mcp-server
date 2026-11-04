@@ -172,9 +172,24 @@ describe('gnomad_variant_triage prompt', () => {
     expect(text).not.toContain('dataset:');
   });
 
-  it('lists the four supported datasets in the dataset description', () => {
-    const description = variantTriagePrompt.args!.shape.dataset.description ?? '';
-    for (const dataset of GNOMAD_DATASETS) expect(description).toContain(dataset);
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it('lists every supported dataset, subsets included, in both dataset descriptions', () => {
+    const field = variantTriagePrompt.args!.shape.dataset;
+    const descriptions = [field.description ?? '', field.unwrap().options[1].description ?? ''];
+    for (const description of descriptions) {
+      for (const dataset of GNOMAD_DATASETS) {
+        expect(description).toMatch(new RegExp(`(?<!\\w)${dataset}(?!\\w)`));
+      }
+    }
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it('ties each LOEUF threshold to a parent release and its subsets', async () => {
+    const text = await renderText({ variant: 'rs11591147', dataset: 'gnomad_r2_1_non_cancer' });
+    const constraintStep = text.split('\n').find((line) => line.startsWith('2. ')) ?? '';
+
+    expect(constraintStep).toMatch(/< 0\.45 for gnomAD v4\.1\.2[^;]*gnomad_r3, and their subsets/);
+    expect(constraintStep).toMatch(/< 0\.35 for gnomAD v2\.1\.1 \(gnomad_r2_1 and its subsets\)/);
   });
 
   it('advertises only variant as a required argument', () => {
@@ -268,5 +283,18 @@ describe('gnomad_variant_triage identifier normalization (#62)', () => {
     );
     const text = await renderText({ variant: 'RS505151' });
     expect(text).toContain('gnomad_get_variant(variants: ["RS505151"])');
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+describe('gnomad_variant_triage prompt — the filtering allele frequency (#64)', () => {
+  it('names faf95, not raw AF, as the value step 1 compares against a disease threshold', async () => {
+    const text = await renderText({ variant: '1-55039974-G-T' });
+
+    const step1 = text.slice(text.indexOf('1. **Population frequency.**'), text.indexOf('\n2. '));
+    expect(step1).toContain(
+      "Compare `faf95` (gnomAD's filtering allele frequency, the lower 95% confidence bound of the highest non-bottlenecked group AF), not raw AF, against the disease's frequency threshold (e.g. ACMG/AMP BA1 or BS1)",
+    );
+    expect(step1).toContain('a null `faf95` gives nothing to compare, not a pass');
   });
 });

@@ -93,4 +93,24 @@ describe('createApp wiring', () => {
     expect(instructions).toMatch(/gnomAD/);
     expect(instructions).not.toContain('gnomad_dataframe_');
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/71
+  it('registers gnomad_get_variant_cooccurrence and scopes the dataset/build sentence to the tools that take them', {
+    timeout: 30_000,
+  }, async () => {
+    await import('@/index.js');
+
+    const options = createApp.mock.calls[0]?.[0] as {
+      instructions: string;
+      tools: { name: string }[];
+    };
+    expect(options.tools.map((definition) => definition.name)).toContain(
+      'gnomad_get_variant_cooccurrence',
+    );
+    expect(options.instructions).toContain('every gnomAD-data tool echoes both in output');
+    expect(options.instructions).toContain(
+      'gnomad_get_variant_cooccurrence takes neither: gnomAD serves co-occurrence on gnomad_r2_1 (GRCh37) only',
+    );
+    expect(options.instructions).not.toContain('both are echoed in output');
+  });
 });

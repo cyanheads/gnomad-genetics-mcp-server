@@ -11,11 +11,13 @@
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getServerConfig } from '@/config/server-config.js';
+import { GNOMAD_DATASETS, getServerConfig } from '@/config/server-config.js';
 import { variantResource } from '@/mcp-server/resources/definitions/variant.resource.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import type { VariantRecord } from '@/services/gnomad/types.js';
+import { fakeFafVariants } from '../helpers/live-faf.js';
+import { SUBSET_REPLIES } from '../helpers/live-subsets.js';
 import { minimalVariant } from '../helpers/minimal-variant.js';
 import { readResourceBody, resourceRecordOf, rpcErrorOf } from '../helpers/worker-resource-read.js';
 
@@ -34,6 +36,7 @@ function record(variantId: string): VariantRecord {
     af: 0.001,
     homozygote_count: 0,
     hemizygote_count: null,
+    faf95: null,
     populations: [],
     joint_populations: [],
     callsets: {
@@ -44,6 +47,7 @@ function record(variantId: string): VariantRecord {
         homozygote_count: 0,
         hemizygote_count: null,
         filters: [],
+        faf95: null,
       },
       genome: null,
     },
@@ -52,8 +56,14 @@ function record(variantId: string): VariantRecord {
     qc_status: 'pass',
     consequence: null,
     transcript_id: null,
+    hgvsc: null,
+    hgvsp: null,
+    lof: null,
+    lof_filter: null,
+    lof_flags: null,
     primary_transcript: null,
     gene_symbol: null,
+    lof_curations: [],
     in_silico: [],
     clinvar: null,
     clinvar_unavailable: false,
@@ -68,7 +78,8 @@ describe('gnomad://variant resource', () => {
   });
   it('returns the population record for a resolved variant', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => ({
         ...record('1-55051215-G-GA'),
         clinvar_unavailable: true,
@@ -92,7 +103,8 @@ describe('gnomad://variant resource', () => {
   it('canonicalizes chr prefixes and allele case before lookup', async () => {
     const getVariant = vi.fn(async () => record('1-55051215-G-GA'));
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant,
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
@@ -117,7 +129,8 @@ describe('gnomad://variant resource', () => {
   it('rejects invalid coordinate bounds before lookup', async () => {
     const getVariant = vi.fn();
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant,
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
@@ -134,7 +147,8 @@ describe('gnomad://variant resource', () => {
 
   it('throws ctx.fail("variant_not_found") when the variant is absent', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => null),
       liftoverCandidates: vi.fn(async () => new Map<string, string[]>()),
     };
@@ -159,7 +173,7 @@ describe('gnomad://variant resource', () => {
     const liftoverCandidates = vi.fn(async () => new Map([['1-55039974-G-T', ['1-55505647-G-T']]]));
     const fake = {
       resolveDatasetContext: () =>
-        ({ dataset: 'gnomad_r2_1', reference_genome: 'GRCh37' }) as const,
+        ({ dataset: 'gnomad_r2_1', parent: 'gnomad_r2_1', reference_genome: 'GRCh37' }) as const,
       getVariant,
       liftoverCandidates,
     };
@@ -475,4 +489,76 @@ describe('gnomad://variant resource — through the real service (wire)', () => 
     expect(record).toMatchObject({ variant_id: '1-55039974-G-T', dataset: 'gnomad_r4' });
     expect(sent[0]).toEqual(variables);
   });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it('reads a gnomad_r4_non_ukb segment as sent, with the record the tool returns', async () => {
+    const live = SUBSET_REPLIES['variant:gnomad_r4_non_ukb:1-55039974-G-T'];
+    const sent: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { variables: Record<string, unknown> };
+      sent.push(request.variables);
+      if (!live) throw new Error('Unmocked gnomAD document');
+      return Response.json(live.body, { status: live.status });
+    });
+    serviceModule.initGnomadService({} as never, {} as never);
+
+    const record = await readRecord('gnomad://variant/gnomad_r4_non_ukb/1-55039974-G-T');
+    const tool = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55039974-G-T'],
+      dataset: 'gnomad_r4_non_ukb',
+    });
+
+    expect(sent[0]).toEqual({
+      variantId: '1-55039974-G-T',
+      dataset: 'gnomad_r4_non_ukb',
+      referenceGenome: 'GRCh38',
+    });
+    expect(record).toMatchObject({ dataset: 'gnomad_r4_non_ukb', ac: 9660, an: 747492 });
+    expect(record).toEqual((tool.structuredContent as { found: unknown[] }).found[0]);
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+  it('lists every dataset value in its segment description', () => {
+    const segment = variantResource.params!.shape.dataset.description ?? '';
+    for (const dataset of GNOMAD_DATASETS) {
+      expect(segment).toMatch(new RegExp(`(?<!\\w)${dataset}(?!\\w)`));
+    }
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+describe('gnomad://variant resource — the filtering allele frequency (#64)', () => {
+  const readRecord = async (uri: string) =>
+    resourceRecordOf(await readResourceBody(variantResource, uri));
+
+  it('says in its description that a gnomad_r4 or gnomad_r3 subset reads faf95 null, since it carries no notice', () => {
+    expect(variantResource.description).toContain('the filtering allele frequency (faf95)');
+    expect(variantResource.description).toContain(
+      "On a gnomad_r4 or gnomad_r3 subset, faf95 and each callset's faf95 are null: gnomAD's record there carries the parent release's FAF, not the subset's, and a resource carries no notice to say so — read the parent's segment for its faf95.",
+    );
+  });
+
+  it.each([
+    [
+      'gnomad_r4',
+      { value: 0.01649444, group: 'nfe', source: 'joint' },
+      { value: 0.01651719, group: 'nfe' },
+    ],
+    ['gnomad_r4_non_ukb', null, null],
+  ] as const)(
+    'returns the faf95 gnomad_get_variant returns on %s',
+    async (dataset, faf95, exomeFaf95) => {
+      fakeFafVariants();
+      serviceModule.initGnomadService({} as never, {} as never);
+
+      const record = await readRecord(`gnomad://variant/${dataset}/1-55039974-G-T`);
+      const tool = await runToolContract(gnomadGetVariant, {
+        variants: ['1-55039974-G-T'],
+        dataset,
+      });
+
+      expect(record).toMatchObject({ dataset, faf95, callsets: { exome: { faf95: exomeFaf95 } } });
+      expect(record).toEqual((tool.structuredContent as { found: unknown[] }).found[0]);
+    },
+  );
 });

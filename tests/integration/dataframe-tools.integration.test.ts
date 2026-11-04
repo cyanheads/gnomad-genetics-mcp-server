@@ -532,13 +532,15 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
   });
 
   it('returns a full default SELECT * page of live gnomAD rows alike on both surfaces', async () => {
-    // The server's live gnomad_r4 PCSK9 rows, captured 2026-11-01 06:23 (UTC).
-    const live = JSON.parse(
-      readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
-    ) as Record<string, unknown>[];
+    // The server's live gnomad_r4 PCSK9 rows with annotations (#65); the fixture's _about names the capture.
+    const live = (
+      JSON.parse(
+        readFileSync(new URL('../fixtures/pcsk9-gene-variants.live.json', import.meta.url), 'utf8'),
+      ) as { rows: Record<string, unknown>[] }
+    ).rows;
     const instance = await canvas.acquire(canvasId, context());
     await instance.drop('gene_variants');
-    // The column types gnomad_list_gene_variants stages with (BIGINT counts read back as strings).
+    // The column types an annotations call stages with (BIGINT counts read back as strings).
     await instance.registerTable('gene_variants', live, {
       schema: [
         { name: 'variant_id', type: 'VARCHAR', nullable: false },
@@ -548,6 +550,9 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
         { name: 'consequence', type: 'VARCHAR' },
         { name: 'consequence_class', type: 'VARCHAR', nullable: false },
         { name: 'homozygote_count', type: 'BIGINT', nullable: false },
+        { name: 'hemizygote_count', type: 'BIGINT' },
+        { name: 'faf95_max', type: 'DOUBLE' },
+        { name: 'faf95_max_group', type: 'VARCHAR' },
         { name: 'source', type: 'VARCHAR', nullable: false },
         { name: 'flags', type: 'VARCHAR', nullable: false },
         { name: 'exome_filters', type: 'VARCHAR' },
@@ -555,6 +560,12 @@ describe('gnomad_dataframe_query paging over a real canvas', () => {
         { name: 'qc_status', type: 'VARCHAR', nullable: false },
         { name: 'transcript_id', type: 'VARCHAR' },
         { name: 'consequence_transcript', type: 'VARCHAR' },
+        { name: 'lof', type: 'VARCHAR' },
+        { name: 'hgvsc', type: 'VARCHAR' },
+        { name: 'hgvsp', type: 'VARCHAR' },
+        { name: 'lof_filter', type: 'VARCHAR' },
+        { name: 'lof_flags', type: 'VARCHAR' },
+        { name: 'rsids', type: 'VARCHAR', nullable: false },
       ],
     });
 

@@ -1,0 +1,136 @@
+{
+  "header": {
+    "type": "esummary",
+    "version": "0.3"
+  },
+  "result": {
+    "uids": ["4713084"],
+    "4713084": {
+      "uid": "4713084",
+      "obj_type": "Microsatellite",
+      "accession": "VCV004713084",
+      "accession_version": "VCV004713084.1",
+      "title": "NM_007294.4(BRCA1):c.3338_3339del (p.Glu1112_Tyr1113insTer)",
+      "variation_set": [
+        {
+          "measure_id": "4828492",
+          "variation_xrefs": [],
+          "variation_name": "NM_007294.4(BRCA1):c.3338_3339del (p.Glu1112_Tyr1113insTer)",
+          "cdna_change": "c.3338_3339del",
+          "aliases": [],
+          "variation_loc": [
+            {
+              "status": "current",
+              "assembly_name": "GRCh38",
+              "chr": "17",
+              "band": "17q21.31",
+              "start": "43092192",
+              "stop": "43092193",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "43092192",
+              "display_stop": "43092193",
+              "assembly_acc_ver": "GCF_000001405.38",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            },
+            {
+              "status": "previous",
+              "assembly_name": "GRCh37",
+              "chr": "17",
+              "band": "17q21.31",
+              "start": "41244209",
+              "stop": "41244210",
+              "inner_start": "",
+              "inner_stop": "",
+              "outer_start": "",
+              "outer_stop": "",
+              "display_start": "41244209",
+              "display_stop": "41244210",
+              "assembly_acc_ver": "GCF_000001405.25",
+              "annotation_release": "",
+              "alt": "",
+              "ref": ""
+            }
+          ],
+          "variant_type": "Microsatellite",
+          "canonical_spdi": "NC_000017.11:43092191:ATAT:AT",
+          "common_name": ""
+        }
+      ],
+      "supporting_submissions": {
+        "scv": ["SCV007381616"],
+        "rcv": ["RCV006500744"]
+      },
+      "germline_classification": {
+        "description": "Pathogenic",
+        "last_evaluated": "2025/02/15 00:00",
+        "review_status": "criteria provided, single submitter",
+        "fda_recognized_database": "",
+        "trait_set": [
+          {
+            "trait_xrefs": [
+              {
+                "db_source": "Orphanet",
+                "db_id": "145"
+              },
+              {
+                "db_source": "MedGen",
+                "db_id": "C0677776"
+              },
+              {
+                "db_source": "MeSH",
+                "db_id": "D061325"
+              },
+              {
+                "db_source": "MONDO",
+                "db_id": "MONDO:0003582"
+              }
+            ],
+            "trait_name": "Hereditary breast ovarian cancer syndrome"
+          }
+        ]
+      },
+      "clinical_impact_classification": {
+        "description": "",
+        "last_evaluated": "1/01/01 00:00",
+        "review_status": "",
+        "fda_recognized_database": "",
+        "trait_set": []
+      },
+      "oncogenicity_classification": {
+        "description": "",
+        "last_evaluated": "1/01/01 00:00",
+        "review_status": "",
+        "fda_recognized_database": "",
+        "trait_set": []
+      },
+      "record_status": "",
+      "gene_sort": "BRCA1",
+      "chr_sort": "17",
+      "location_sort": "00000000000043092192",
+      "variation_set_name": "",
+      "variation_set_id": "",
+      "genes": [
+        {
+          "symbol": "BRCA1",
+          "geneid": "672",
+          "strand": "-",
+          "source": "submitted"
+        },
+        {
+          "symbol": "LOC126862571",
+          "geneid": "126862571",
+          "strand": "+",
+          "source": "submitted"
+        }
+      ],
+      "molecular_consequence_list": ["nonsense", "intron variant"],
+      "protein_change": "",
+      "fda_recognized_database": ""
+    }
+  }
+}

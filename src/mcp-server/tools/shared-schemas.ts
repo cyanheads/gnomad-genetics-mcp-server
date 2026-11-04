@@ -11,12 +11,20 @@ import { GNOMAD_DATASETS } from '@/config/server-config.js';
 import { normalizeIdentifier } from '@/services/gnomad/identifier-normalization.js';
 import type { GenomeTarget } from '@/services/gnomad/types.js';
 
+/**
+ * Every dataset value by parent release and build. Resource URI segments and
+ * prompt arguments carry no schema on the wire, so their descriptions list
+ * the values; this one sentence serves them and datasetField alike.
+ */
+export const DATASET_CHOICES =
+  'gnomad_r4 and its subset gnomad_r4_non_ukb (GRCh38); gnomad_r3 and its subsets gnomad_r3_controls_and_biobanks, gnomad_r3_non_cancer, gnomad_r3_non_neuro, gnomad_r3_non_topmed, gnomad_r3_non_v2 (GRCh38); gnomad_r2_1 and its subsets gnomad_r2_1_controls, gnomad_r2_1_non_cancer, gnomad_r2_1_non_neuro, gnomad_r2_1_non_topmed (GRCh37); exac (GRCh37)';
+
 /** Dataset selector — defaults applied in the service from server config. */
 export const datasetField = z
   .enum(GNOMAD_DATASETS)
   .optional()
   .describe(
-    'gnomAD dataset: gnomad_r4 (GRCh38, default), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), exac (GRCh37). Echoed in output.',
+    `gnomAD dataset, default gnomad_r4: ${DATASET_CHOICES}. A subset keeps only part of its parent release's samples (non_cancer leaves out cancer-study samples, non_ukb UK Biobank's) and can leave a callset unchanged: gnomad_r4_non_ukb genome counts equal gnomad_r4's, and gnomad_r2_1_non_cancer genome counts equal gnomad_r2_1's. No subset publishes joint data, and gnomAD publishes no subset coverage or constraint, so those come from the parent. Echoed in output.`,
   );
 
 /** Reference build selector — derived from dataset when omitted; must be coherent if both given. */
@@ -24,7 +32,7 @@ export const referenceGenomeField = z
   .enum(['GRCh38', 'GRCh37'])
   .optional()
   .describe(
-    'Reference build. Derived from dataset when omitted (v4/v3=GRCh38, v2.1/ExAC=GRCh37). If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.',
+    'Reference build. Derived from dataset when omitted: GRCh38 for gnomad_r4, gnomad_r3, and their subsets; GRCh37 for gnomad_r2_1, its subsets, and exac. If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.',
   );
 
 /**

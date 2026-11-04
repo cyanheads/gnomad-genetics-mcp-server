@@ -44,7 +44,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     gene_id: z.string().describe('Ensembl gene ID resolved for the gene.'),
     symbol: z.string().describe('HGNC gene symbol.'),
     pli: z.number().nullable().describe('pLI — probability of LoF intolerance; >0.9 intolerant.'),
-    // … remaining flat constraint fields, all nullable
+    // … remaining nuclear constraint fields (all nullable) and mitochondrial_constraint (a kind-tagged union, null for a nuclear gene)
     constraint_flags: z.array(z.string()).describe('Caveat flags gnomAD attaches to the constraint.'),
   }),
   // Typed error contract — ctx.fail('gene_not_found', …) is type-checked against this union.
@@ -107,6 +107,7 @@ export const geneConstraintResource = resource('gnomad://gene/{dataset}/{gene}/c
 ```ts
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 import { GNOMAD_DATASETS } from '@/config/server-config.js';
+import { DATASET_CHOICES } from '../../tools/shared-schemas.js';
 
 export const variantTriagePrompt = prompt('gnomad_variant_triage', {
   description: 'Guided rare-disease variant-triage workflow over gnomAD: frequency → constraint → coverage.',
@@ -116,7 +117,7 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
     gene: z.string().trim().optional().describe('Gene symbol or Ensembl ID for the constraint step.'),
     // Prompt arguments carry no schema on the wire — the description lists the values.
     dataset: z.union([z.literal(''), z.enum(GNOMAD_DATASETS)]).optional()
-      .describe('gnomAD dataset: gnomad_r4, gnomad_r3, gnomad_r2_1, or exac. Blank uses the server default.'),
+      .describe(`gnomAD dataset to use: ${DATASET_CHOICES}. Omit or leave blank to use the server default.`),
   }),
   generate: (args) => [
     { role: 'user', content: { type: 'text', text: `Triage variant ${args.variant} for rare-disease causality…` } },
@@ -132,7 +133,15 @@ export const variantTriagePrompt = prompt('gnomad_variant_triage', {
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
-export const GNOMAD_DATASETS = ['gnomad_r4', 'gnomad_r3', 'gnomad_r2_1', 'exac'] as const;
+// gnomAD's 14 DatasetId values; each one's parent release and build live in the gnomad service's lineage table.
+export const GNOMAD_DATASETS = [
+  'gnomad_r4', 'gnomad_r4_non_ukb',
+  'gnomad_r3', 'gnomad_r3_controls_and_biobanks', 'gnomad_r3_non_cancer',
+  'gnomad_r3_non_neuro', 'gnomad_r3_non_topmed', 'gnomad_r3_non_v2',
+  'gnomad_r2_1', 'gnomad_r2_1_controls', 'gnomad_r2_1_non_neuro',
+  'gnomad_r2_1_non_cancer', 'gnomad_r2_1_non_topmed',
+  'exac',
+] as const;
 
 const ServerConfigSchema = z.object({
   gnomadApiBaseUrl: z.string().url().default('https://gnomad.broadinstitute.org/api'),
@@ -276,7 +285,7 @@ src/
       canvas-staging.ts                      # stageRows() fit-vs-spill staging shared by the two row tools
       count-limit.ts                         # limit input schema + clamp notice (GNOMAD_CLAMP_LIMITS)
       definitions/
-        gnomad-get-variant.tool.ts           # 5 gnomAD tools + 3 canvas dataframe tools
+        gnomad-get-variant.tool.ts           # 6 gnomAD tools + 3 canvas dataframe tools
         …
     resources/definitions/
       variant.resource.ts                    # gnomad://variant/{dataset}/{variantId}

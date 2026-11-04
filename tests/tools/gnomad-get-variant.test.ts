@@ -2,7 +2,9 @@
  * @fileoverview Behavior tests for the gnomad_get_variant handler — batch
  * partial success: a resolved variant, an absent variant, a malformed ID, and a
  * service throw all coexist in one call, each failure carrying its typed reason
- * and recovery hint. Handler tests stub the service accessor; the failed[]
+ * and recovery hint. It also covers the filtering allele frequency (faf95) and
+ * its subset notice, HGVS and LOFTEE fields with LoF curations, and subset
+ * datasets. Handler tests stub the service accessor; the failed[]
  * reason tests run the real service with only global fetch faked.
  * @module tests/tools/gnomad-get-variant.test
  */
@@ -13,18 +15,24 @@ import {
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig, resetServerConfig } from '@/config/server-config.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
-import type { VariantRecord } from '@/services/gnomad/types.js';
+import type { Dataset, VariantRecord } from '@/services/gnomad/types.js';
+import type { GraphqlRequest } from '../helpers/fake-gnomad-graphql.js';
 import {
   CDKN2A_ARF_STOP_GAINED_R4,
   CDKN2A_STOP_GAINED_R4,
   CDKN2B_AS1_INTRON_R4,
+  INS_STOP_GAINED_R2_1,
   PCSK9_FRAMESHIFT_R2_1,
+  PCSK9_FRAMESHIFT_R2_1_CURATIONS,
 } from '../helpers/live-consequences.js';
+import { fakeFafVariants } from '../helpers/live-faf.js';
+import { SUBSET_REPLIES } from '../helpers/live-subsets.js';
 import { minimalVariant } from '../helpers/minimal-variant.js';
 
 /** Real service for genuine dataset/build derivation; network method overridden per-test. */
@@ -38,6 +46,11 @@ function declared(reason: string): string | undefined {
 function textOf(blocks: readonly unknown[]): string {
   return (blocks as { text?: string }[]).map((block) => block.text ?? '').join('\n');
 }
+
+// Unmocked fetch rejects, so the no-fetch checks that spy on fetch bare never reach the network.
+beforeEach(() => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -55,6 +68,7 @@ function record(variantId: string): VariantRecord {
     af: 0.01,
     homozygote_count: 0,
     hemizygote_count: null,
+    faf95: null,
     populations: [
       {
         id: 'nfe',
@@ -75,6 +89,7 @@ function record(variantId: string): VariantRecord {
         homozygote_count: 0,
         hemizygote_count: null,
         filters: [],
+        faf95: null,
       },
       genome: null,
     },
@@ -83,8 +98,14 @@ function record(variantId: string): VariantRecord {
     qc_status: 'pass',
     consequence: 'missense_variant',
     transcript_id: 'ENST1',
+    hgvsc: null,
+    hgvsp: null,
+    lof: null,
+    lof_filter: null,
+    lof_flags: null,
     primary_transcript: null,
     gene_symbol: 'GENE1',
+    lof_curations: [],
     in_silico: [{ id: 'revel_max', value: 0.5, annotation: null }],
     clinvar: null,
     clinvar_unavailable: false,
@@ -94,7 +115,8 @@ function record(variantId: string): VariantRecord {
 describe('gnomad_get_variant handler', () => {
   it('partitions a batch into found and failed with partial success', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async (id: string) => {
         if (id === '1-100-A-T') return record(id);
         if (id === '1-200-A-T') return null; // absent in dataset
@@ -134,7 +156,8 @@ describe('gnomad_get_variant handler', () => {
 
   it('fails the call on an error that carries no declared reason instead of recording it per item', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async (id: string) => {
         if (id === '1-100-A-T') return record(id);
         throw new TypeError('normalizer bug');
@@ -153,7 +176,8 @@ describe('gnomad_get_variant handler', () => {
   it('rethrows an item failure once the request is cancelled instead of reporting it per item', async () => {
     const controller = new AbortController();
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => {
         controller.abort();
         throw serviceUnavailable('gnomAD is unavailable or rate-limited.', {
@@ -176,7 +200,8 @@ describe('gnomad_get_variant handler', () => {
     let active = 0;
     let peak = 0;
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async (id: string) => {
         active += 1;
         peak = Math.max(peak, active);
@@ -212,7 +237,8 @@ describe('gnomad_get_variant handler', () => {
       '1-100-A-T': 5,
     };
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async (id: string) => {
         await new Promise((r) => setTimeout(r, delays[id] ?? 0));
         if (id === '1-200-A-T') return null; // absent in dataset → failed[]
@@ -239,7 +265,8 @@ describe('gnomad_get_variant handler', () => {
 
   it('renders found and failed records in format() for content[] parity', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => record('1-100-A-T')),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
@@ -277,7 +304,8 @@ describe('gnomad_get_variant handler', () => {
 
   it('renders every failed item with its ID, message, and rsID candidates in format()', async () => {
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async (id: string) => {
         if (id === 'rs5') {
           throw validationError(
@@ -318,7 +346,8 @@ describe('gnomad_get_variant handler', () => {
   it('distinguishes unavailable ClinVar from an ordinary absent entry on both surfaces', async () => {
     const unavailable = { ...record('1-100-A-T'), clinvar: null, clinvar_unavailable: true };
     const fake = {
-      resolveDatasetContext: () => ({ dataset: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
+      resolveDatasetContext: () =>
+        ({ dataset: 'gnomad_r4', parent: 'gnomad_r4', reference_genome: 'GRCh38' }) as const,
       getVariant: vi.fn(async () => unavailable),
     };
     vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(fake as never);
@@ -369,6 +398,7 @@ describe('gnomad_get_variant handler', () => {
       af: null,
       homozygote_count: 0,
       hemizygote_count: null,
+      faf95: null,
       populations: [],
       joint_populations: [],
       callsets: { exome: null, genome: null },
@@ -377,8 +407,14 @@ describe('gnomad_get_variant handler', () => {
       qc_status: 'filtered',
       consequence: null,
       transcript_id: null,
+      hgvsc: null,
+      hgvsp: null,
+      lof: null,
+      lof_filter: null,
+      lof_flags: null,
       primary_transcript: null,
       gene_symbol: null,
+      lof_curations: [],
       in_silico: [],
       clinvar: null,
       clinvar_unavailable: false,
@@ -404,6 +440,9 @@ describe('gnomad_get_variant handler', () => {
     expect(text).toContain('AF Not available');
     expect(text).toContain('ClinVar:** no entry');
     expect(text.split('\n')).toContain('**Primary transcript:** Not available');
+    // No transcript and no curation: neither a consequence-transcript line nor a curation section.
+    expect(text).not.toContain('**Consequence transcript:**');
+    expect(text).not.toContain('**LoF curations:**');
   });
 
   it('accepts a full batch of 25 IDs but rejects 26 at parse time', () => {
@@ -462,7 +501,7 @@ describe('gnomad_get_variant handler', () => {
     expect(liftoverCandidates).toHaveBeenCalledOnce();
     expect(liftoverCandidates).toHaveBeenCalledWith(
       ['1-55039974-G-T', 'rs999', '1-55039975-A-C'],
-      { dataset: 'gnomad_r2_1', reference_genome: 'GRCh37' },
+      { dataset: 'gnomad_r2_1', parent: 'gnomad_r2_1', reference_genome: 'GRCh37' },
       expect.anything(),
       { startedAt: getVariant.mock.calls[0]?.[3]?.startedAt },
     );
@@ -511,11 +550,6 @@ describe('gnomad_get_variant handler', () => {
     expect(liftoverCandidates).not.toHaveBeenCalled();
   });
 });
-
-interface GraphqlRequest {
-  query: string;
-  variables: Record<string, unknown>;
-}
 
 /** A fetch that stays pending until its signal aborts, as a stalled upstream does. */
 function hang(init: RequestInit | undefined): Promise<Response> {
@@ -1515,6 +1549,8 @@ describe('gnomad_get_variant QC status (#54)', () => {
       'af',
       'homozygote_count',
       'hemizygote_count',
+      // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+      'faf95',
       'populations',
       'joint_populations',
       'callsets',
@@ -1523,8 +1559,15 @@ describe('gnomad_get_variant QC status (#54)', () => {
       'qc_status',
       'consequence',
       'transcript_id',
+      // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+      'hgvsc',
+      'hgvsp',
+      'lof',
+      'lof_filter',
+      'lof_flags',
       'primary_transcript',
       'gene_symbol',
+      'lof_curations',
       'in_silico',
       'clinvar',
       'clinvar_unavailable',
@@ -1542,6 +1585,7 @@ describe('gnomad_get_variant QC status (#54)', () => {
           homozygote_count: 0,
           hemizygote_count: null,
           filters: null,
+          faf95: null,
         },
         genome: null,
       },
@@ -1587,11 +1631,13 @@ describe('gnomad_get_variant primary transcript (#57)', () => {
       hgvsc: 'c.*9G>T',
       hgvsp: null,
       lof: null,
+      lof_filter: null,
+      lof_flags: null,
     });
     const lines = textOf(result.content).split('\n');
     expect(lines).toContain('**Gene:** CDKN2A | **Consequence:** stop_gained');
     expect(lines).toContain(
-      '**Primary transcript:** ENST00000304494 | MANE Select yes | consequence 3_prime_UTR_variant | HGVSc c.\\*9G>T | HGVSp none | LoF none',
+      '**Primary transcript:** ENST00000304494 | MANE Select yes | consequence 3_prime_UTR_variant | HGVSc c.\\*9G>T | HGVSp none | LoF none | LoF filter none | LoF flags none',
     );
   });
 
@@ -1614,7 +1660,7 @@ describe('gnomad_get_variant primary transcript (#57)', () => {
       consequence: 'intron_variant',
     });
     expect(textOf(result.content).split('\n')).toContain(
-      '**Primary transcript:** ENST00000302118 | MANE Select not reported | consequence intron_variant | HGVSc c.524-1063_524-1062insA | HGVSp none | LoF none',
+      '**Primary transcript:** ENST00000302118 | MANE Select not reported | consequence intron_variant | HGVSc c.524-1063_524-1062insA | HGVSp none | LoF none | LoF filter none | LoF flags none',
     );
   });
 
@@ -1631,6 +1677,8 @@ describe('gnomad_get_variant primary transcript (#57)', () => {
               hgvsc: 'c.10C>T',
               hgvsp: 'p.Gln4Ter',
               lof: 'HC',
+              lof_filter: null,
+              lof_flags: 'SINGLE_EXON',
             },
           },
         ],
@@ -1641,7 +1689,7 @@ describe('gnomad_get_variant primary transcript (#57)', () => {
     );
 
     expect(text.split('\n')).toContain(
-      '**Primary transcript:** ENST2 | MANE Select no | consequence stop_gained | HGVSc c.10C>T | HGVSp p.Gln4Ter | LoF HC',
+      '**Primary transcript:** ENST2 | MANE Select no | consequence stop_gained | HGVSc c.10C>T | HGVSp p.Gln4Ter | LoF HC | LoF filter none | LoF flags SINGLE_EXON',
     );
   });
 
@@ -1814,5 +1862,405 @@ describe('gnomad_get_variant identifier normalization (#62)', () => {
 
       expect(requests[0]?.variables).toEqual({ rsid: 'RS505151', dataset: 'gnomad_r4' });
     });
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+describe('gnomad_get_variant on a subset dataset (#68)', () => {
+  const operationOf = (query: string) => /query\s+(\w+)/.exec(query)?.[1];
+
+  /**
+   * Answer each document with gnomAD's live reply on the subset (2026-11-03),
+   * keyed `<operation>:<dataset or build>:<ID>`; the ClinVar hop of an rsID
+   * lookup, which these cases do not read, answers with no entry. Anything else
+   * is rejected. Returns every request sent.
+   */
+  function serveSubset(replies: Record<string, string>): GraphqlRequest[] {
+    const requests: GraphqlRequest[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as GraphqlRequest;
+      requests.push(request);
+      const { variables } = request;
+      const operation = operationOf(request.query);
+      if (operation === 'GnomadClinvar') return Response.json({ data: { clinvar_variant: null } });
+      const key = `${operation}:${String(variables.dataset ?? variables.referenceGenome)}:${String(variables.variantId ?? variables.rsid ?? variables.v0)}`;
+      const fixture = replies[key] && SUBSET_REPLIES[replies[key]];
+      if (!fixture) throw new Error(`Unmocked gnomAD document ${key}`);
+      return Response.json(fixture.body, { status: fixture.status });
+    });
+    initGnomadService({} as never, {} as never);
+    return requests;
+  }
+
+  it('sends gnomad_r4_non_ukb as given and sums the callsets, which carry no joint record', async () => {
+    const requests = serveSubset({
+      'GnomadVariant:gnomad_r4_non_ukb:1-55039974-G-T': 'variant:gnomad_r4_non_ukb:1-55039974-G-T',
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55039974-G-T'],
+      dataset: 'gnomad_r4_non_ukb',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.variables)).toEqual([
+      { variantId: '1-55039974-G-T', dataset: 'gnomad_r4_non_ukb', referenceGenome: 'GRCh38' },
+    ]);
+    const out = gnomadGetVariant.output.parse(result.structuredContent);
+    expect(out).toMatchObject({
+      dataset: 'gnomad_r4_non_ukb',
+      reference_genome: 'GRCh38',
+      failed: [],
+    });
+    expect(out.found[0]).toMatchObject({
+      variant_id: '1-55039974-G-T',
+      dataset: 'gnomad_r4_non_ukb',
+      ac: 9660,
+      an: 747492,
+      callsets: { exome: { ac: 7794, an: 595088 }, genome: { ac: 1866, an: 152404 } },
+      joint_populations: [],
+    });
+    expect(textOf(result.content)).toContain('**Dataset:** gnomad_r4_non_ukb | **Build:** GRCh38');
+    expect(textOf(result.content)).toContain('**Overall:** AC 9660 / AN 747492');
+  });
+
+  it('fails a variant absent from gnomad_r4_non_ukb as variant_not_found', async () => {
+    const requests = serveSubset({
+      'GnomadVariant:gnomad_r4_non_ukb:1-55039846-C-G': 'variant:gnomad_r4_non_ukb:1-55039846-C-G',
+      'GnomadLiftover:GRCh37:1-55039846-C-G': 'liftover:GRCh37-source:1-55039846-C-G',
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55039846-C-G'],
+      dataset: 'gnomad_r4_non_ukb',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      found: [],
+      failed: [
+        {
+          variant: '1-55039846-C-G',
+          reason: 'variant_not_found',
+          recovery: declared('variant_not_found'),
+        },
+      ],
+    });
+    expect(requests).toHaveLength(2);
+  });
+
+  it('resolves rs505151 on gnomad_r2_1_non_cancer to its GRCh37 variant', async () => {
+    const requests = serveSubset({
+      'GnomadVariantByRsid:gnomad_r2_1_non_cancer:rs505151': 'rsid:gnomad_r2_1_non_cancer:rs505151',
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['rs505151'],
+      dataset: 'gnomad_r2_1_non_cancer',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests[0]?.variables).toEqual({ rsid: 'rs505151', dataset: 'gnomad_r2_1_non_cancer' });
+    expect(result.structuredContent).toMatchObject({
+      dataset: 'gnomad_r2_1_non_cancer',
+      reference_genome: 'GRCh37',
+      found: [{ variant_id: '1-55529187-G-A', dataset: 'gnomad_r2_1_non_cancer' }],
+    });
+  });
+
+  it('describes joint data as gnomad_r4 only, gnomad_r4_non_ukb and the other subsets summed', () => {
+    const shape = (
+      gnomadGetVariant.output.shape.found as unknown as {
+        element: { shape: Record<string, { description?: string }> };
+      }
+    ).element.shape;
+    for (const field of ['ac', 'an', 'joint_populations']) {
+      expect(shape[field]?.description).toMatch(/gnomad_r4_non_ukb/);
+    }
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/64
+describe('gnomad_get_variant filtering allele frequency (#64)', () => {
+  const operationOf = (query: string) => /query\s+(\w+)/.exec(query)?.[1];
+  /** gnomAD's live records (fakeFafVariants) through the real service and tool. */
+  function lookup(variant: string, dataset: Dataset, options?: { clinvarFails: boolean }) {
+    const requests = fakeFafVariants(options);
+    initGnomadService({} as never, {} as never);
+    return {
+      requests,
+      result: runToolContract(gnomadGetVariant, { variants: [variant], dataset }),
+    };
+  }
+  const subsetNotice = (dataset: string, parent: string, listPointer: boolean) =>
+    `faf95 is null on ${dataset} records: gnomAD's variant record for a ${parent} subset carries ${parent}'s filtering allele frequency, not the subset's. Look the variant up on ${parent} for that release's faf95${listPointer ? `, or list it with gnomad_list_gene_variants on ${dataset}, whose faf95_max is the subset's own` : ''}.`;
+
+  it('carries the joint FAF95 and each callset’s own on both surfaces', async () => {
+    const { result } = lookup('1-55039974-G-T', 'gnomad_r4');
+
+    const settled = await result;
+    const [found] = gnomadGetVariant.output.parse(settled.structuredContent).found;
+    expect(found?.faf95).toEqual({ value: 0.01649444, group: 'nfe', source: 'joint' });
+    expect(found?.callsets.exome?.faf95).toEqual({ value: 0.01651719, group: 'nfe' });
+    expect(found?.callsets.genome?.faf95).toEqual({ value: 0.015429449999999996, group: 'nfe' });
+    const callsetAf = (ac: number, an: number) => `${ac / an} (${(ac / an).toExponential(3)})`;
+    const lines = textOf(settled.content).split('\n');
+    expect(lines).toContain(
+      '**FAF95 (filtering AF):** 0.01649444 (1.649e-2) | group nfe | source joint',
+    );
+    expect(lines).toContain(
+      `- exome: AC 21634 / AN 1428186 | AF ${callsetAf(21_634, 1_428_186)} | hom 209 | filters none (passed) | FAF95 0.01651719 (nfe)`,
+    );
+    expect(lines).toContain(
+      `- genome: AC 1866 / AN 152404 | AF ${callsetAf(1_866, 152_404)} | hom 17 | filters none (passed) | FAF95 0.015429449999999996 (nfe)`,
+    );
+    expect((settled.structuredContent as { notice?: string }).notice).toBeUndefined();
+  });
+
+  it('renders a null FAF95 as not available and leaves it off a callset line', async () => {
+    const { result } = lookup('1-55505647-G-T', 'exac');
+
+    const settled = await result;
+    const [found] = gnomadGetVariant.output.parse(settled.structuredContent).found;
+    expect(found).toMatchObject({
+      faf95: null,
+      callsets: { exome: { faf95: null }, genome: null },
+    });
+    const lines = textOf(settled.content).split('\n');
+    expect(lines).toContain('**FAF95 (filtering AF):** Not available');
+    expect(lines.find((line) => line.startsWith('- exome:'))).toMatch(
+      /\| filters none \(passed\)$/,
+    );
+  });
+
+  it('renders a FAF95 gnomAD names no group for as not reported', () => {
+    const text = textOf(
+      gnomadGetVariant.format?.({
+        found: [
+          {
+            ...record('1-100-A-T'),
+            faf95: { value: 0.002, group: null, source: 'exome' },
+            callsets: {
+              exome: {
+                ac: 10,
+                an: 1000,
+                af: 0.01,
+                homozygote_count: 0,
+                hemizygote_count: null,
+                filters: [],
+                faf95: { value: 0.002, group: null },
+              },
+              genome: null,
+            },
+          },
+        ],
+        failed: [],
+        dataset: 'gnomad_r2_1',
+        reference_genome: 'GRCh37',
+      }) ?? [],
+    );
+
+    const lines = text.split('\n');
+    expect(lines).toContain(
+      '**FAF95 (filtering AF):** 0.002 (2.000e-3) | group not reported | source exome',
+    );
+    expect(lines).toContain(
+      '- exome: AC 10 / AN 1000 | AF 0.01 (1.000e-2) | hom 0 | filters none (passed) | FAF95 0.002',
+    );
+  });
+
+  it('joins the subset FAF notice and a ClinVar-unavailable notice on one call, on both surfaces', async () => {
+    const { requests, result } = lookup('1-55039974-G-T', 'gnomad_r4_non_ukb', {
+      clinvarFails: true,
+    });
+
+    const settled = await result;
+    expect(settled.isError).toBeFalsy();
+    const [found] = gnomadGetVariant.output.parse(settled.structuredContent).found;
+    expect(found).toMatchObject({
+      faf95: null,
+      clinvar: null,
+      clinvar_unavailable: true,
+      callsets: { exome: { ac: 7794, faf95: null }, genome: { ac: 1866, faf95: null } },
+    });
+    const notice = `${subsetNotice('gnomad_r4_non_ukb', 'gnomad_r4', true)} ClinVar annotation was unavailable for: 1-55039974-G-T. Population data is complete.`;
+    expect((settled.structuredContent as { notice?: string }).notice).toBe(notice);
+    expect(textOf(settled.content)).toContain(escapeMarkdownInline(notice));
+    expect(requests.map((request) => operationOf(request.query))).toEqual([
+      'GnomadVariant',
+      'GnomadVariantOnly',
+      'GnomadClinvar',
+    ]);
+  });
+
+  it.each([
+    ['gnomad_r3_non_topmed', 'gnomad_r3', false],
+    ['gnomad_r3_controls_and_biobanks', 'gnomad_r3', false],
+    ['gnomad_r4_non_ukb', 'gnomad_r4', true],
+  ] as const)(
+    'names %s’s parent %s alone when ClinVar answers',
+    async (dataset, parent, listPointer) => {
+      const { result } = lookup('1-55039974-G-T', dataset);
+
+      const settled = await result;
+      expect((settled.structuredContent as { notice?: string }).notice).toBe(
+        subsetNotice(dataset, parent, listPointer),
+      );
+      expect(gnomadGetVariant.output.parse(settled.structuredContent).found[0]?.faf95).toBeNull();
+    },
+  );
+
+  it.each([
+    ['gnomad_r2_1_non_cancer', '1-55505647-G-T'],
+    ['exac', '1-55505647-G-T'],
+    ['gnomad_r3', '1-55039974-G-T'],
+  ] as const)(
+    'raises no FAF notice on %s, whose record carries its own',
+    async (dataset, variant) => {
+      const { result } = lookup(variant, dataset);
+
+      expect(((await result).structuredContent as { notice?: string }).notice).toBeUndefined();
+    },
+  );
+
+  it('raises no FAF notice on a subset call that found nothing', async () => {
+    const replies: Record<string, string> = {
+      GnomadVariant: 'variant:gnomad_r4_non_ukb:1-55039846-C-G',
+      GnomadLiftover: 'liftover:GRCh37-source:1-55039846-C-G',
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as GraphqlRequest;
+      const key = replies[operationOf(request.query) ?? ''];
+      const fixture = key && SUBSET_REPLIES[key];
+      if (!fixture) throw new Error(`Unmocked gnomAD document ${request.query.slice(0, 60)}`);
+      return Response.json(fixture.body, { status: fixture.status });
+    });
+    initGnomadService({} as never, {} as never);
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55039846-C-G'],
+      dataset: 'gnomad_r4_non_ukb',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      found: [],
+      failed: [{ reason: 'variant_not_found' }],
+    });
+    expect((result.structuredContent as { notice?: string }).notice).toBeUndefined();
+  });
+
+  it('describes the subset FAF notice and the FAF threshold test', () => {
+    const shape = gnomadGetVariant.output.shape.found.element.shape;
+
+    expect(gnomadGetVariant.enrichment?.notice?.description).toMatch(
+      /subset.*filtering allele frequency/,
+    );
+    expect(shape.faf95.description).toMatch(/BA1 or BS1/);
+    expect(shape.faf95.description).toMatch(/gnomad_r4 or gnomad_r3 subset/);
+    expect(gnomadGetVariant.description).toMatch(/faf95/);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
+describe('gnomad_get_variant HGVS and LOFTEE fields (#65)', () => {
+  const out = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    gnomadGetVariant.output.parse(result.structuredContent);
+
+  it('returns 9-21968220-C-A’s LC call on its consequence transcript and none on the MANE Select, on both surfaces', async () => {
+    serveVariant({
+      ...minimalVariant('9-21968220-C-A'),
+      transcript_consequences: CDKN2A_STOP_GAINED_R4,
+      lof_curations: null,
+    });
+
+    const result = await runToolContract(gnomadGetVariant, { variants: ['9-21968220-C-A'] });
+
+    const [found] = out(result).found;
+    expect(found).toMatchObject({
+      transcript_id: 'ENST00000579122',
+      hgvsc: 'c.406G>T',
+      hgvsp: 'p.Glu136Ter',
+      lof: 'LC',
+      lof_filter: 'END_TRUNC',
+      lof_flags: 'PHYLOCSF_WEAK',
+      lof_curations: [],
+      primary_transcript: { lof: null, lof_filter: null, lof_flags: null },
+    });
+    const lines = textOf(result.content).split('\n');
+    expect(lines).toContain(
+      '**Consequence transcript:** ENST00000579122 | HGVSc c.406G>T | HGVSp p.Glu136Ter | LoF LC | LoF filter END_TRUNC | LoF flags PHYLOCSF_WEAK',
+    );
+    expect(lines).toContain(
+      '**Primary transcript:** ENST00000304494 | MANE Select yes | consequence 3_prime_UTR_variant | HGVSc c.\\*9G>T | HGVSp none | LoF none | LoF filter none | LoF flags none',
+    );
+    expect(lines).not.toContain('**LoF curations:**');
+  });
+
+  it('returns 1-55516888-G-GA’s HC call and its one curation on gnomad_r2_1, on both surfaces', async () => {
+    serveVariant({
+      ...minimalVariant('1-55516888-G-GA', 'GRCh37'),
+      transcript_consequences: PCSK9_FRAMESHIFT_R2_1,
+      lof_curations: PCSK9_FRAMESHIFT_R2_1_CURATIONS,
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['1-55516888-G-GA'],
+      dataset: 'gnomad_r2_1',
+    });
+
+    const [found] = out(result).found;
+    expect(found?.lof).toBe('HC');
+    expect(found?.lof_curations).toEqual([
+      {
+        gene_id: 'ENSG00000169174',
+        gene_symbol: 'PCSK9',
+        verdict: 'Not LoF',
+        flags: [
+          'Low Relative Mean Pext/Pext Does Not Support Splicing',
+          'Minority Of Transcripts',
+          'Weak Exon Conservation',
+        ],
+        project: 'metabolic_conditions_genes',
+      },
+    ]);
+    const lines = textOf(result.content).split('\n');
+    expect(lines).toContain(
+      '**Consequence transcript:** ENST00000452118 | HGVSc c.547_548insA | HGVSp p.Gly183GlufsTer23 | LoF HC | LoF filter none | LoF flags none',
+    );
+    const curations = lines.indexOf('**LoF curations:**');
+    expect(curations).toBeGreaterThan(-1);
+    expect(lines[curations + 1]).toBe(
+      '- PCSK9 (ENSG00000169174): Not LoF | project metabolic_conditions_genes | flags Low Relative Mean Pext/Pext Does Not Support Splicing, Minority Of Transcripts, Weak Exon Conservation',
+    );
+  });
+
+  it('returns 11-2181088-G-T’s canonical primary transcript as LC with its END_TRUNC filter, on both surfaces', async () => {
+    serveVariant({
+      ...minimalVariant('11-2181088-G-T', 'GRCh37'),
+      transcript_consequences: INS_STOP_GAINED_R2_1,
+    });
+
+    const result = await runToolContract(gnomadGetVariant, {
+      variants: ['11-2181088-G-T'],
+      dataset: 'gnomad_r2_1',
+    });
+
+    expect(out(result).found[0]?.primary_transcript).toMatchObject({
+      transcript_id: 'ENST00000397262',
+      lof: 'LC',
+      lof_filter: 'END_TRUNC',
+      lof_flags: null,
+    });
+    expect(textOf(result.content).split('\n')).toContain(
+      '**Primary transcript:** ENST00000397262 | MANE Select not reported | consequence stop_gained | HGVSc c.327C>A | HGVSp p.Cys109Ter | LoF LC | LoF filter END_TRUNC | LoF flags none',
+    );
+  });
+
+  it('describes the record fields as transcript_id’s, beside primary_transcript', () => {
+    const shape = gnomadGetVariant.output.shape.found.element.shape;
+    for (const name of ['hgvsc', 'hgvsp', 'lof', 'lof_filter', 'lof_flags'] as const) {
+      expect(shape[name].description).toMatch(/describes transcript_id/);
+    }
+    expect(shape.lof_curations.description).toMatch(/empty when gnomAD has none/);
+    expect(Object.keys(shape)).not.toContain('is_mane_select');
   });
 });

@@ -2,7 +2,8 @@
  * @fileoverview Behavior tests for the gnomad_get_coverage handler — both-track
  * happy path, the coverage_source filter, the invalid_target contract (zero or
  * two targets), the incoherent_build pair rejection, the empty-coverage
- * notice, and format(). Most cases stub the network method and use the real
+ * notice, a subset dataset reading its parent release (coverage_dataset), and
+ * format(). Most cases stub the network method and use the real
  * dataset/build derivation and target resolution; the bucket-resolution cases
  * run the real service against live gnomAD responses faked at the fetch seam.
  * @module tests/tools/gnomad-get-coverage.test
@@ -17,6 +18,7 @@ import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { CoverageSummary } from '@/services/gnomad/types.js';
 import { fakeCoverage, LIVE_COVERAGE } from '../helpers/fake-gnomad-coverage.js';
+import { fakeSubsetCoverage } from '../helpers/live-subsets.js';
 
 const realService = new GnomadService(getServerConfig());
 
@@ -165,6 +167,7 @@ describe('gnomad_get_coverage handler', () => {
         target_kind: 'gene',
         summaries: [],
         dataset: 'gnomad_r4',
+        coverage_dataset: 'gnomad_r4',
         reference_genome: 'GRCh38',
       }) ?? []
     )
@@ -180,6 +183,7 @@ describe('gnomad_get_coverage handler', () => {
         target_kind: 'gene',
         summaries: [summary('exome'), { ...summary('genome'), bucket_count: 7, bucket_size: 15 }],
         dataset: 'gnomad_r4',
+        coverage_dataset: 'gnomad_r4',
         reference_genome: 'GRCh38',
       }) ?? []
     )
@@ -300,6 +304,7 @@ describe('gnomad_get_coverage over live gnomAD coverage buckets (#45)', () => {
         },
       ],
       dataset: 'gnomad_r4',
+      coverage_dataset: 'gnomad_r4',
       reference_genome: 'GRCh38',
     });
     expect(textOf(result)).toBe(
@@ -643,4 +648,88 @@ describe('gnomad_get_coverage unknown gene or transcript (#56)', () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({ summaries: [], target_kind: 'region' });
   });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/68
+describe('gnomad_get_coverage on a subset dataset (#68)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const region = '1-55039974-55039974';
+
+  function useRealService() {
+    vi.spyOn(serviceModule, 'getGnomadService').mockReturnValue(realService);
+    return fakeSubsetCoverage();
+  }
+
+  it('reads gnomad_r4 for gnomad_r4_non_ukb, naming it in coverage_dataset and a notice on both surfaces', async () => {
+    const requests = useRealService();
+
+    const subset = await runToolContract(gnomadGetCoverage, {
+      region,
+      dataset: 'gnomad_r4_non_ukb',
+    });
+    const parent = await runToolContract(gnomadGetCoverage, { region, dataset: 'gnomad_r4' });
+
+    expect(subset.isError).toBeFalsy();
+    expect(requests.map((request) => request.variables.dataset)).toEqual([
+      'gnomad_r4',
+      'gnomad_r4',
+    ]);
+    const notice =
+      "gnomAD publishes no coverage for subsets: these figures are gnomad_r4's, over all of its samples, not gnomad_r4_non_ukb's alone.";
+    const out = gnomadGetCoverage.output.parse(subset.structuredContent);
+    expect(out).toEqual({
+      target: region,
+      target_kind: 'region',
+      summaries: gnomadGetCoverage.output.parse(parent.structuredContent).summaries,
+      dataset: 'gnomad_r4_non_ukb',
+      coverage_dataset: 'gnomad_r4',
+      reference_genome: 'GRCh38',
+    });
+    expect(out.summaries).toHaveLength(2);
+    expect(subset.structuredContent).toMatchObject({ notice });
+    expect(textOf(subset)).toContain(
+      '**Dataset:** gnomad_r4_non_ukb (GRCh38) | **Coverage dataset:** gnomad_r4',
+    );
+    expect(textOf(subset)).toContain(notice);
+  });
+
+  it('names gnomad_r3 for an unsupported exome track on gnomad_r3_non_topmed, beside the parent notice', async () => {
+    const requests = useRealService();
+
+    const result = await runToolContract(gnomadGetCoverage, {
+      region,
+      dataset: 'gnomad_r3_non_topmed',
+      coverage_source: 'exome',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.variables.dataset)).toEqual(['gnomad_r3']);
+    expect(result.structuredContent).toMatchObject({
+      summaries: [],
+      dataset: 'gnomad_r3_non_topmed',
+      coverage_dataset: 'gnomad_r3',
+      notice:
+        "gnomAD publishes no coverage for subsets: these figures are gnomad_r3's, over all of its samples, not gnomad_r3_non_topmed's alone. The exome coverage track is not supported in gnomad_r3. Callability is unknown from this track.",
+    });
+  });
+
+  it.each([
+    ['gnomad_r4', ['exome', 'genome']],
+    ['gnomad_r3', ['genome']],
+    ['gnomad_r2_1', ['exome', 'genome']],
+    ['exac', ['exome']],
+  ] as const)(
+    'echoes coverage_dataset equal to dataset with no notice on %s',
+    async (dataset, tracks) => {
+      stubService(async () => tracks.map((source) => summary(source)));
+
+      const result = await runToolContract(gnomadGetCoverage, { gene: 'PCSK9', dataset });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ dataset, coverage_dataset: dataset });
+      expect(result.structuredContent).not.toHaveProperty('notice');
+      expect(textOf(result)).not.toContain('Coverage dataset');
+    },
+  );
 });

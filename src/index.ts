@@ -21,6 +21,7 @@ import { gnomadDataframeQuery } from './mcp-server/tools/definitions/gnomad-data
 import { gnomadGetCoverage } from './mcp-server/tools/definitions/gnomad-get-coverage.tool.js';
 import { gnomadGetGeneConstraint } from './mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import { gnomadGetVariant } from './mcp-server/tools/definitions/gnomad-get-variant.tool.js';
+import { gnomadGetVariantCooccurrence } from './mcp-server/tools/definitions/gnomad-get-variant-cooccurrence.tool.js';
 import { gnomadListGeneVariants } from './mcp-server/tools/definitions/gnomad-list-gene-variants.tool.js';
 import { gnomadSearchClinvar } from './mcp-server/tools/definitions/gnomad-search-clinvar.tool.js';
 import { setCanvas } from './services/canvas-accessor.js';
@@ -45,6 +46,7 @@ await createApp({
     gnomadGetGeneConstraint,
     gnomadListGeneVariants,
     gnomadGetCoverage,
+    gnomadGetVariantCooccurrence,
     gnomadSearchClinvar,
     gnomadDataframeQuery,
     gnomadDataframeDescribe,
@@ -52,7 +54,7 @@ await createApp({
   ],
   resources: [variantResource, geneConstraintResource],
   prompts: [variantTriagePrompt],
-  instructions: `Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; both are echoed in output. Per-ancestry allele frequencies are never collapsed to a single global AF. A coordinate ID carries no build: an absent one that also lifts over from the other build fails as variant_not_found_other_build with the lifted IDs in candidates, so settle the build first. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this).${canvasGuidance} The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
+  instructions: `Population genetics over gnomAD. dataset (gnomad_r4 default, GRCh38) and reference_genome are distinct, coherent parameters — keep the build aligned with ensembl coordinates; every gnomAD-data tool echoes both in output. gnomad_get_variant_cooccurrence takes neither: gnomAD serves co-occurrence on gnomad_r2_1 (GRCh37) only, so pass it GRCh37 IDs. Per-ancestry allele frequencies are never collapsed to a single global AF. A coordinate ID carries no build: an absent one that also lifts over from the other build fails as variant_not_found_other_build with the lifted IDs in candidates, so settle the build first. An absent variant is uninterpretable without gnomad_get_coverage — confirm the position is callable before concluding true absence (the gnomad_variant_triage prompt chains this).${canvasGuidance} The gnomAD API is community-funded and rate-limited — calls are concurrency-capped and back off.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   // No per-session state and no ctx.requestInput gate, so the HTTP session store earns nothing.
   sessionMode: 'stateless',
   setup(core) {

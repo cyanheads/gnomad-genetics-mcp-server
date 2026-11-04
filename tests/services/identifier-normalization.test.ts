@@ -198,6 +198,7 @@ function serveGnomad(): void {
             symbol: 'PCSK9',
             gnomad_constraint: null,
             exac_constraint: null,
+            mitochondrial_constraint: null,
           },
         },
       });

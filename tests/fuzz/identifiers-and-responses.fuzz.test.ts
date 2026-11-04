@@ -7,7 +7,7 @@
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerConfig } from '@/config/server-config.js';
 import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-get-gene-constraint.tool.js';
 import { gnomadGetVariant } from '@/mcp-server/tools/definitions/gnomad-get-variant.tool.js';
@@ -18,6 +18,11 @@ import {
 } from '@/mcp-server/tools/shared-schemas.js';
 import { ClinVarService } from '@/services/clinvar/clinvar-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
+
+// Unmocked fetch rejects, so the no-fetch check that spies on fetch bare never reaches the network.
+beforeEach(() => {
+  vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -120,6 +125,7 @@ describe('gene parser fuzz', () => {
               symbol: 'PCSK9',
               gnomad_constraint: null,
               exac_constraint: null,
+              mitochondrial_constraint: null,
             },
           },
         }),
@@ -295,4 +301,87 @@ describe('ClinVar response-envelope fuzz', () => {
       svc.searchGene('PCSK9', { offset: 0, limit: 10 }, createMockContext()),
     ).resolves.toMatchObject({ totalFound: 12, truncated: true, nextOffset: 10 });
   });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/73
+describe('mitochondrial constraint shape fuzz', () => {
+  const PROTEIN = ['lof', 'mis', 'syn'].flatMap((c) => [
+    `obs_${c}`,
+    `exp_${c}`,
+    `oe_${c}`,
+    `oe_${c}_lower`,
+    `oe_${c}_upper`,
+  ]);
+  const RNA = ['observed', 'expected', 'oe', 'oe_lower', 'oe_upper'];
+  const TYPENAMES = {
+    protein: 'ProteinMitochondrialGeneConstraint',
+    rna: 'RNAMitochondrialGeneConstraint',
+    unknown: 'MitochondrialGeneConstraint',
+    absent: undefined,
+  } as const;
+  const FIELD_SETS = {
+    protein: PROTEIN,
+    rna: RNA,
+    both: [...PROTEIN, ...RNA],
+    none: [],
+  } as const;
+  const VALUES = { valid: 0.5, zero: 0, negative: -0.001, null: null, string: '0.5' } as const;
+
+  const cases = Object.entries(TYPENAMES).flatMap(([typename, __typename]) =>
+    Object.entries(FIELD_SETS).flatMap(([fieldSet, fields]) =>
+      Object.entries(VALUES).map(([value, raw]) => ({
+        typename,
+        __typename,
+        fieldSet,
+        fields,
+        value,
+        raw,
+      })),
+    ),
+  );
+
+  it.each(cases)(
+    'typename $typename, $fieldSet fields, $value values: one arm with only its own fields, or invalid_constraint_data',
+    async ({ typename, __typename, fieldSet, fields, value, raw }) => {
+      const mitochondrial = Object.fromEntries([
+        ...(__typename ? [['__typename', __typename]] : []),
+        ...fields.map((field) => [field, raw]),
+      ]);
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        Response.json({
+          data: {
+            gene: {
+              gene_id: 'ENSG00000209082',
+              symbol: 'MT-TL1',
+              gnomad_constraint: null,
+              exac_constraint: null,
+              mitochondrial_constraint: mitochondrial,
+            },
+          },
+        }),
+      );
+      const svc = new GnomadService(getServerConfig());
+
+      const outcome = await svc
+        .getGeneConstraint('MT-TL1', svc.resolveDatasetContext('gnomad_r4'), createMockContext())
+        .then(
+          (record) => ({ record }),
+          (error: { data?: { reason?: string } }) => ({ reason: error.data?.reason }),
+        );
+
+      const own = typename === 'protein' ? PROTEIN : typename === 'rna' ? RNA : null;
+      const valid =
+        own !== null &&
+        (fieldSet === typename || fieldSet === 'both') &&
+        (value === 'valid' || value === 'zero');
+      if (!valid) {
+        expect(outcome).toEqual({ reason: 'invalid_constraint_data' });
+        return;
+      }
+      expect('record' in outcome && outcome.record?.mitochondrial_constraint).toEqual({
+        kind: typename,
+        ...Object.fromEntries(own.map((field) => [field, raw])),
+      });
+    },
+  );
 });
