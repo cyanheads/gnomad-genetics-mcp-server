@@ -206,6 +206,16 @@ describe('gnomad dataframe tools with a real canvas', () => {
       'FROM gene_variants SELECT variant_id ORDER BY variant_id',
       [{ variant_id: '1-100-A-T' }, { variant_id: '1-101-G-GA' }],
     ],
+    [
+      'a constant range() series',
+      'SELECT CAST(range AS INTEGER) AS n FROM range(3) ORDER BY n',
+      [{ n: 0 }, { n: 1 }, { n: 2 }],
+    ],
+    [
+      'a constant generate_series() spine',
+      'SELECT CAST(generate_series AS INTEGER) AS n FROM generate_series(1, 3) ORDER BY n',
+      [{ n: 1 }, { n: 2 }, { n: 3 }],
+    ],
   ])('runs a read-only statement with %s', async (_label, sql, rows) => {
     const result = await gnomadDataframeQuery.handler(
       gnomadDataframeQuery.input.parse({ canvas_id: canvasId, sql }),
@@ -227,6 +237,17 @@ describe('gnomad dataframe tools with a real canvas', () => {
     ['DROP TABLE never_staged', JsonRpcErrorCode.ValidationError, 'non_select_statement'],
     ['SELECT 1; SELECT 2', JsonRpcErrorCode.ValidationError, 'multi_statement'],
     ['SELECT * FROM never_staged', JsonRpcErrorCode.NotFound, 'missing_table'],
+    [
+      'SELECT * FROM gene_variants, range(length(variant_id))',
+      JsonRpcErrorCode.ValidationError,
+      'plan_operator_not_allowed',
+    ],
+    ['SELECT * FROM range(0, 10, 0)', JsonRpcErrorCode.ValidationError, 'sql_execution_error'],
+    [
+      'PIVOT gene_variants ON consequence_class USING count(*)',
+      JsonRpcErrorCode.ValidationError,
+      'non_select_statement',
+    ],
   ])('rejects %s through the canvas gate', async (sql, code, reason) => {
     await expect(
       gnomadDataframeQuery.handler(
@@ -246,6 +267,8 @@ describe('gnomad dataframe tools with a real canvas', () => {
     "SELECT current_setting('memory_limit')",
     'SELECT * FROM duckdb_tables()',
     'PIVOT gene_variants ON consequence_class USING count(*)',
+    'SELECT * FROM gene_variants, range(length(variant_id))',
+    'SELECT * FROM range(0, 10, 0)',
     nestQuery('SELECT variant_id FROM gene_variants', 5),
   ])('refuses %s exactly as a direct canvas query does', async (sql) => {
     const refusal = await failureOf(() =>
@@ -379,7 +402,7 @@ describe('gnomad dataframe tools with a real canvas', () => {
   });
 });
 
-/** Rows past the fixture's 1,000-row cap, so the cap is reachable without range(). */
+/** Rows past the fixture's 1,000-row cap. */
 const NUMBERS = 1_250;
 
 /** Characters of row JSON one page may carry. */

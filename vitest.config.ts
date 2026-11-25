@@ -12,11 +12,21 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 
 const alias = { '@/': new URL('./src/', import.meta.url).pathname };
 
+/**
+ * Vitest 5.1's forks pool calls `child.channel.unref()`, which Bun's child-process
+ * IPC channel lacks, so under `bun --bun` no fork starts. Bun runs each file on its
+ * own worker thread instead; Node keeps the base config's forks. Threads inherit the
+ * coordinator's time zone, so a test that switches TZ or spawns its own worker thread
+ * would need forks; none here does.
+ */
+const bunPool = process.versions.bun ? { pool: 'threads' as const } : {};
+
 export default mergeConfig(
   coreConfig,
   defineConfig({
     resolve: { alias },
     test: {
+      ...bunPool,
       projects: [
         {
           extends: true,
