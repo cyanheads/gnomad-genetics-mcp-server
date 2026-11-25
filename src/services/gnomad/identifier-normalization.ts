@@ -42,8 +42,11 @@ const REWRITES: Record<IdentifierKind, (value: string) => string> = {
   },
 };
 
-/** Created on first use: a module-load call would bind the no-op meter OpenTelemetry starts with. */
-let rewrites: ReturnType<typeof createCounter> | undefined;
+const rewrites = createCounter(
+  'gnomad.identifiers.normalized',
+  'Identifier spellings rewritten to their canonical form before validation',
+  '{rewrites}',
+);
 
 /**
  * The spelling of `value` this server validates and sends upstream: the
@@ -67,11 +70,6 @@ export function normalizeIdentifier(
       operation: 'normalizeIdentifier',
       additionalContext: { kind, from: value, to: rewritten },
     }),
-  );
-  rewrites ??= createCounter(
-    'gnomad.identifiers.normalized',
-    'Identifier spellings rewritten to their canonical form before validation',
-    '{rewrites}',
   );
   rewrites.add(1, { kind });
   return rewritten;

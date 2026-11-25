@@ -1,7 +1,7 @@
 /**
  * @fileoverview Unit tests for the identifier-normalization seam — the full
  * table of one-reading rewrites per kind and the spellings each leaves alone,
- * the GNOMAD_NORMALIZE_IDS off switch, the log line and lazily created counter
+ * the GNOMAD_NORMALIZE_IDS off switch, the log line and count
  * an applied rewrite emits (exactly once per call on every surface that
  * normalizes), and linear time in the input length on caller-sized text.
  * @module tests/services/identifier-normalization.test
@@ -139,22 +139,23 @@ describe('normalizeIdentifier', () => {
     expect(counter.add).toHaveBeenCalledWith(1, { kind: 'transcript' });
   });
 
-  it('creates its counter on the first rewrite, not at import or on a canonical input', async () => {
+  it('creates its counter once, at import, and counts only applied rewrites', async () => {
     vi.resetModules();
     createCounter.mockClear();
     const fresh = await import('@/services/gnomad/identifier-normalization.js');
-
-    fresh.normalizeIdentifier('gene', 'ENSG00000169174');
-    expect(createCounter).not.toHaveBeenCalled();
-
-    fresh.normalizeIdentifier('gene', 'ensg00000169174');
-    fresh.normalizeIdentifier('rsid', 'RS1');
     expect(createCounter).toHaveBeenCalledOnce();
     expect(createCounter).toHaveBeenCalledWith(
       'gnomad.identifiers.normalized',
       expect.any(String),
       '{rewrites}',
     );
+
+    fresh.normalizeIdentifier('gene', 'ENSG00000169174');
+    expect(counter.add).not.toHaveBeenCalled();
+
+    fresh.normalizeIdentifier('gene', 'ensg00000169174');
+    fresh.normalizeIdentifier('rsid', 'RS1');
+    expect(createCounter).toHaveBeenCalledOnce();
     expect(counter.add.mock.calls).toEqual([
       [1, { kind: 'gene' }],
       [1, { kind: 'rsid' }],

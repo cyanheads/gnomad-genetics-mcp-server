@@ -51,8 +51,11 @@ export function limitSchema(spec: CountLimit, lead: string) {
     );
 }
 
-/** Created on first clamp: a counter made at import binds the no-op meter OpenTelemetry starts with. */
-let clamped: ReturnType<typeof createCounter> | undefined;
+const clamped = createCounter(
+  'gnomad.input.limit_clamped',
+  'Requests whose limit was lowered to the cap',
+  '{requests}',
+);
 
 /**
  * `requested` lowered to `spec.cap`. A clamp writes one info log line, adds one
@@ -70,11 +73,6 @@ export function clampLimit(
     requested,
     applied: spec.cap,
   });
-  clamped ??= createCounter(
-    'gnomad.input.limit_clamped',
-    'Requests whose limit was lowered to the cap',
-    '{requests}',
-  );
   clamped.add(1, { [ATTR_MCP_TOOL_NAME]: spec.tool });
   return {
     applied: spec.cap,

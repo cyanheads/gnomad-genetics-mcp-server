@@ -3,7 +3,7 @@
  * each paged tool's own suite proves only its wiring. GNOMAD_CLAMP_LIMITS, read
  * when a schema is built, picks the mode: clamping (the default) advertises a
  * default and a minimum with no maximum and lowers an over-cap value to the cap
- * with a notice, a log line, and a lazily created counter; strict advertises the
+ * with a notice, a log line, and a count; strict advertises the
  * cap as the maximum and rejects anything above it.
  * @module tests/tools/count-limit.test
  */
@@ -132,22 +132,23 @@ describe('clampLimit', () => {
     expect(clampLimit(createMockContext(), SPEC, 5_000)).toMatchObject({ applied: 3_000 });
   });
 
-  it('creates its counter on the first clamp, not at import or for a value within the cap', async () => {
+  it('creates its counter once, at import, and counts only the clamps', async () => {
     vi.resetModules();
     const fresh = await import('@/mcp-server/tools/count-limit.js');
-    const ctx = createMockContext();
-
-    fresh.clampLimit(ctx, SPEC, 25);
-    expect(createCounter).not.toHaveBeenCalled();
-
-    fresh.clampLimit(ctx, SPEC, 4_000);
-    fresh.clampLimit(ctx, SPEC, 9_000);
     expect(createCounter).toHaveBeenCalledOnce();
     expect(createCounter).toHaveBeenCalledWith(
       'gnomad.input.limit_clamped',
       expect.any(String),
       '{requests}',
     );
+    const ctx = createMockContext();
+
+    fresh.clampLimit(ctx, SPEC, 25);
+    expect(counter.add).not.toHaveBeenCalled();
+
+    fresh.clampLimit(ctx, SPEC, 4_000);
+    fresh.clampLimit(ctx, SPEC, 9_000);
+    expect(createCounter).toHaveBeenCalledOnce();
     expect(counter.add).toHaveBeenCalledTimes(2);
   });
 });
