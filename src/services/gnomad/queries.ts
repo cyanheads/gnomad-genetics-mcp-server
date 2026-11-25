@@ -6,9 +6,13 @@
  * service reads `chrom` to refuse them rather than report absence. The gene and
  * transcript coverage documents also carry `exons`, which bound the summarized
  * coverage buckets, and the gene list documents the gene's MANE Select and
- * canonical transcript IDs. Every list document takes `@include` flags that
+ * canonical transcript IDs. The gene and transcript list documents select the
+ * target's gene once, at the root; the region document selects each row's.
+ * Every list document takes `@include` flags that
  * select only the FAF fields the dataset's rows read, and an `annotations`
- * flag that selects the opt-in HGVS, LOFTEE, and rsID columns. The liftover document
+ * flag that selects the opt-in HGVS, LOFTEE, and rsID columns; each also has a
+ * `populations` form that selects the genetic-ancestry groups of the records
+ * the dataset's rows read, and is otherwise the same document. The liftover document
  * is built per request, one alias per absent coordinate ID, at most 25 of
  * them. The gene ClinVar-mapping document fills gnomad_search_clinvar's GRCh38
  * variant IDs. Field names are grounded against the live schema
@@ -218,10 +222,24 @@ query GnomadGeneConstraintById($gene: String!, $referenceGenome: ReferenceGenome
   gene(gene_id: $gene, reference_genome: $referenceGenome) { ${GENE_CONSTRAINT_SELECTION} }
 }` as const;
 
+/** A record's genetic-ancestry groups on the `populations` form, gated by `flag`; nothing on the default form. */
+const listPopulations = (
+  populations: boolean,
+  flag: '$jointPopulations' | '$callsetPopulations',
+) => (populations ? ` populations @include(if: ${flag}) { id ac an }` : '');
+
+const listCallsetFields = (populations: boolean) =>
+  `ac an af homozygote_count hemizygote_count filters faf95 @include(if: $callsetFaf95) { popmax popmax_population } fafmax @include(if: $callsetFafmax) { faf95_max faf95_max_gen_anc }${listPopulations(populations, '$callsetPopulations')}`;
+
 /**
  * Shared selection for a flattened gene/region/transcript variant list element.
- * `joint` carries the totals alone: its `populations` feed no list column and
- * would multiply the response about 3.6× (PCSK9 on gnomad_r4, as of November 2026).
+ * A record's `populations` (`{ id ac an }` per genetic-ancestry group, plus an
+ * `id: ""` entry holding the record's own totals) are selected only by the
+ * `populations` form of a document, gated per record on the datasets whose
+ * rows read it (the service's listRowPopulations): joint on gnomad_r4, each
+ * callset elsewhere. The default form selects none: on gnomad_r4 the joint
+ * groups take PCSK9's reply 1.91× (1,793,326 → 3,433,212 bytes, as of November
+ * 2026), and callset groups there set no row.
  * Every record carries its zygosity counts — `hemizygote_count` beside
  * `homozygote_count`, read from the same record as ac and an. Each callset
  * carries its QC `filters`; joint's are not selected (see VARIANT_SELECTION).
@@ -236,12 +254,16 @@ query GnomadGeneConstraintById($gene: String!, $referenceGenome: ReferenceGenome
  * none on the gnomad_r3 family or exac. Every gnomad_r4 row carries joint
  * data, so callset FAF there never sets a row and would add about 3.7 MB to
  * TTN's reply (as of November 2026); the list joint type has no `faf95`.
+ *
+ * `rowGene` selects each row's `gene_id` and `gene_symbol`, the gene of
+ * transcript_id, on the region document alone: a region can span several
+ * genes. Every gene or transcript list row is on the target's gene, which
+ * those documents select once at the root instead; on each row it would add
+ * 227,200 bytes (12.7%) to PCSK9's gnomad_r4 reply (as of November 2026).
  */
-const LIST_CALLSET_FIELDS = `ac an af homozygote_count hemizygote_count filters faf95 @include(if: $callsetFaf95) { popmax popmax_population } fafmax @include(if: $callsetFafmax) { faf95_max faf95_max_gen_anc }`;
-
-const VARIANT_LIST_SELECTION = `
+const variantListSelection = (rowGene: boolean, populations: boolean) => `
 variants(dataset: $dataset) {
-  variant_id
+  variant_id${rowGene ? '\n  gene_id\n  gene_symbol' : ''}
   consequence
   transcript_id
   lof
@@ -251,41 +273,49 @@ variants(dataset: $dataset) {
   lof_flags @include(if: $annotations)
   rsids @include(if: $annotations)
   flags
-  exome { ${LIST_CALLSET_FIELDS} }
-  genome { ${LIST_CALLSET_FIELDS} }
-  joint { ac an homozygote_count hemizygote_count fafmax @include(if: $jointFafmax) { faf95_max faf95_max_gen_anc } }
+  exome { ${listCallsetFields(populations)} }
+  genome { ${listCallsetFields(populations)} }
+  joint { ac an homozygote_count hemizygote_count fafmax @include(if: $jointFafmax) { faf95_max faf95_max_gen_anc }${listPopulations(populations, '$jointPopulations')} }
 }`;
 
-/** The variables every list document declares beside its target, dataset, and build. */
-const LIST_VARIABLES =
-  '$jointFafmax: Boolean!, $callsetFafmax: Boolean!, $callsetFaf95: Boolean!, $annotations: Boolean!';
+/** The variables a list document declares beside its target, dataset, and build. */
+const listVariables = (populations: boolean) =>
+  `$jointFafmax: Boolean!, $callsetFafmax: Boolean!, $callsetFaf95: Boolean!, $annotations: Boolean!${populations ? ', $jointPopulations: Boolean!, $callsetPopulations: Boolean!' : ''}`;
 
 /**
- * The gene list documents also select the gene's MANE Select and canonical
- * transcript IDs, which mark each row's consequence transcript as gnomAD's gene
- * table does.
+ * The four list documents in one form. The gene documents also select the
+ * gene's own ID and symbol, which every row carries, and its MANE Select and
+ * canonical transcript IDs, which mark each row's consequence transcript as
+ * gnomAD's gene table does.
  */
-const GENE_VARIANTS_SELECTION = `chrom canonical_transcript_id mane_select_transcript { ensembl_id } ${VARIANT_LIST_SELECTION}`;
+function variantListQueries(populations: boolean) {
+  const variables = listVariables(populations);
+  const geneSelection = `chrom gene_id symbol canonical_transcript_id mane_select_transcript { ensembl_id } ${variantListSelection(false, populations)}`;
+  return {
+    geneBySymbol: `
+query GnomadGeneVariantsBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${variables}) {
+  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${geneSelection} }
+}`,
+    geneById: `
+query GnomadGeneVariantsById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${variables}) {
+  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${geneSelection} }
+}`,
+    transcript: `
+query GnomadTranscriptVariants($transcriptId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${variables}) {
+  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { chrom gene_id gene { symbol } ${variantListSelection(false, populations)} }
+}`,
+    region: `
+query GnomadRegionVariants($chrom: String!, $start: Int!, $stop: Int!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${variables}) {
+  region(chrom: $chrom, start: $start, stop: $stop, reference_genome: $referenceGenome) { ${variantListSelection(true, populations)} }
+}`,
+  } as const;
+}
 
-export const GENE_VARIANTS_BY_SYMBOL_QUERY = `
-query GnomadGeneVariantsBySymbol($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${LIST_VARIABLES}) {
-  gene(gene_symbol: $gene, reference_genome: $referenceGenome) { ${GENE_VARIANTS_SELECTION} }
-}` as const;
-
-export const GENE_VARIANTS_BY_ID_QUERY = `
-query GnomadGeneVariantsById($gene: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${LIST_VARIABLES}) {
-  gene(gene_id: $gene, reference_genome: $referenceGenome) { ${GENE_VARIANTS_SELECTION} }
-}` as const;
-
-export const TRANSCRIPT_VARIANTS_QUERY = `
-query GnomadTranscriptVariants($transcriptId: String!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${LIST_VARIABLES}) {
-  transcript(transcript_id: $transcriptId, reference_genome: $referenceGenome) { chrom ${VARIANT_LIST_SELECTION} }
-}` as const;
-
-export const REGION_VARIANTS_QUERY = `
-query GnomadRegionVariants($chrom: String!, $start: Int!, $stop: Int!, $dataset: DatasetId!, $referenceGenome: ReferenceGenomeId!, ${LIST_VARIABLES}) {
-  region(chrom: $chrom, start: $start, stop: $stop, reference_genome: $referenceGenome) { ${VARIANT_LIST_SELECTION} }
-}` as const;
+/** The list documents by form: `populations` selects each read record's genetic-ancestry groups, `default` none. */
+export const VARIANT_LIST_QUERIES = {
+  default: variantListQueries(false),
+  populations: variantListQueries(true),
+} as const;
 
 /** Shared coverage selection — gnomAD's exome and genome histogram buckets. */
 const COVERAGE_SELECTION = `

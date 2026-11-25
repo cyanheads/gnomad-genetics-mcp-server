@@ -36,6 +36,11 @@ import {
  */
 const MAX_VARIANT_BATCH = getVariantBatchCap();
 
+/**
+ * The per-group and per-callset count vectors read as the record's overall
+ * counts do, so their fields are labels; the overall fields carry the null and
+ * X/Y rules once.
+ */
 const PopulationFreq = z
   .object({
     id: z
@@ -43,71 +48,48 @@ const PopulationFreq = z
       .describe(
         'Genetic-ancestry group: afr, amr, asj, eas, fin, mid, nfe, sas, ami (genomes only), and the catch-all group — remaining on gnomad_r4 and gnomad_r4_non_ukb, oth on every other dataset.',
       ),
-    source: z
-      .enum(['exome', 'genome'])
-      .describe('Which gnomAD callset this group vector came from.'),
+    source: z.enum(['exome', 'genome']).describe('The callset this vector comes from.'),
     ac: z.number().describe('Allele count in this group.'),
-    an: z.number().describe('Allele number (called chromosomes) in this group.'),
-    af: z.number().nullable().describe('Allele frequency (ac/an); null when an is 0.'),
+    an: z.number().describe('Allele number in this group.'),
+    af: z.number().nullable().describe('Allele frequency in this group.'),
     homozygote_count: z.number().describe('Homozygote count in this group.'),
-    hemizygote_count: z
-      .number()
-      .nullable()
-      .describe('Hemizygote count in this group (0 off X/Y); null when gnomAD reports none.'),
+    hemizygote_count: z.number().nullable().describe('Hemizygote count in this group.'),
   })
-  .describe('One genetic-ancestry group AC/AN/AF vector.');
+  .describe("One genetic-ancestry group's counts in one callset.");
 
-const JointPopulationFreq = PopulationFreq.omit({ source: true }).describe(
-  "One genetic-ancestry group's AC/AN/AF in gnomAD's joint exome + genome data.",
-);
+const JointPopulationFreq = PopulationFreq.omit({ source: true })
+  .extend({ id: z.string().describe('Genetic-ancestry group, as in populations.') })
+  .describe("One genetic-ancestry group's counts in gnomAD's joint exome + genome data.");
 
-const QcStatus = z
-  .enum(['pass', 'filtered'])
-  .describe(
-    "gnomAD's QC verdict, by its browser's rule: pass when at least one callset carrying the variant passed QC (empty filters); filtered when none did — gnomAD's browser hides these by default.",
-  );
+const QcStatus = z.enum(['pass', 'filtered']).describe("gnomAD's QC verdict for the variant.");
 
 const Faf95 = z.object({
-  value: z
-    .number()
-    .describe(
-      "The FAF95: the lower bound of the 95% confidence interval of the group's allele frequency.",
-    ),
+  value: z.number().describe('FAF95 value (0–1).'),
   group: z
     .string()
     .nullable()
-    .describe(
-      'Genetic-ancestry group the value comes from (e.g. nfe); null when gnomAD names none.',
-    ),
+    .describe('Its ancestry group (e.g. nfe); null when gnomAD names none.'),
 });
 
 const Callset = z
   .object({
-    ac: z.number().describe('Allele count in this callset alone.'),
-    an: z.number().describe('Allele number in this callset alone.'),
-    af: z
-      .number()
-      .nullable()
-      .describe("This callset's allele frequency, ac/an; null when an is 0."),
+    ac: z.number().describe('Allele count in this callset.'),
+    an: z.number().describe('Allele number in this callset.'),
+    af: z.number().nullable().describe('Allele frequency in this callset.'),
     homozygote_count: z.number().describe('Homozygote count in this callset.'),
-    hemizygote_count: z
-      .number()
-      .nullable()
-      .describe('Hemizygote count in this callset (0 off X/Y); null when gnomAD reports none.'),
+    hemizygote_count: z.number().nullable().describe('Hemizygote count in this callset.'),
     filters: z
       .array(z.string())
       .nullable()
       .describe(
-        "QC filters gnomAD applied to this callset's call — on gnomad_r4 AC0 (no high-quality carrier after genotype QC), AS_VQSR, InbreedingCoeff; the set varies by dataset (RF on gnomad_r2_1). Empty when the call passed QC; null when gnomAD returned no filter list.",
+        'QC filters on this call; empty when it passed, null when gnomAD returned no list.',
       ),
     faf95: Faf95.nullable().describe(
-      "This callset's own filtering allele frequency (GroupMax FAF95, as the record's faf95). Null when gnomAD reports none, as for AC 0 and singleton variants and on exac, and on a gnomad_r4 or gnomad_r3 subset, whose variant record carries the parent release's FAF, not the subset's.",
+      "This callset's own FAF95; null on the same terms as the record's faf95.",
     ),
   })
   .nullable()
-  .describe(
-    "One callset's own counts and QC filters; null when that callset does not carry the variant (absent from source).",
-  );
+  .describe('Null when this callset does not carry the variant.');
 
 const InSilico = z
   .object({
@@ -120,13 +102,13 @@ const InSilico = z
       .number()
       .nullable()
       .describe(
-        'Predictor score; null when not provided for this variant, or when gnomAD gave text with no number (the text is then in annotation).',
+        'Predictor score; null when not provided, or when gnomAD gave text with no number (then in annotation).',
       ),
     annotation: z
       .string()
       .nullable()
       .describe(
-        'Text gnomAD attaches to the score — on gnomad_r3, the SpliceAI event (e.g. acceptor_gain, no_consequence). Holds the raw text when value is null for lack of a number; null for a plain score.',
+        'Text gnomAD attaches to the score — on gnomad_r3, the SpliceAI event (e.g. acceptor_gain) — or the raw text when value is null for lack of a number; null for a plain score.',
       ),
   })
   .describe('One in-silico predictor score.');
@@ -136,15 +118,14 @@ const ClinVar = z
     clinical_significance: z
       .string()
       .nullable()
-      .describe(
-        'ClinVar clinical significance (e.g. Pathogenic, Likely benign); null when no entry.',
-      ),
+      .describe('ClinVar clinical significance (e.g. Pathogenic, Likely benign).'),
     review_status: z.string().nullable().describe('ClinVar review status text.'),
     gold_stars: z.number().nullable().describe('ClinVar 0–4 star review rating.'),
     clinvar_variation_id: z.string().nullable().describe('ClinVar VariationID.'),
   })
-  .describe('Joined ClinVar significance from gnomAD. Null when the variant has no ClinVar entry.');
+  .describe('ClinVar significance as gnomAD joins it.');
 
+/** The primary transcript's fields mirror the record's consequence fields, which carry the examples. */
 const PrimaryTranscript = z
   .object({
     transcript_id: z.string().describe('Ensembl transcript ID (unversioned).'),
@@ -152,42 +133,17 @@ const PrimaryTranscript = z
       .boolean()
       .nullable()
       .describe(
-        "True when this is the gene's MANE Select transcript. For the canonical entry standing in: null where gnomAD reports no MANE status — a gene without a MANE Select (such as a lncRNA) on any dataset, and every gene on a GRCh37 dataset (gnomad_r2_1, its subsets, and exac) — else false.",
+        "True for the gene's MANE Select transcript. For a canonical entry, false, or null where gnomAD reports no MANE status: a gene without a MANE Select (such as a lncRNA), and every gene on a GRCh37 dataset.",
       ),
     consequence: z
       .string()
       .nullable()
       .describe('Most severe VEP consequence term on this transcript; null when none.'),
-    hgvsc: z
-      .string()
-      .nullable()
-      .describe(
-        'HGVS coding or transcript notation on this transcript (e.g. c.*9G>T); null when none.',
-      ),
-    hgvsp: z
-      .string()
-      .nullable()
-      .describe(
-        'HGVS protein notation on this transcript (e.g. p.Glu136Ter); null when gnomAD gives none, as for a UTR or intronic change.',
-      ),
-    lof: z
-      .string()
-      .nullable()
-      .describe(
-        "LOFTEE's loss-of-function call on this transcript (e.g. HC high-confidence, LC low-confidence); null when it made none.",
-      ),
-    lof_filter: z
-      .string()
-      .nullable()
-      .describe(
-        'The LOFTEE filter that made the call on this transcript low-confidence (e.g. END_TRUNC); null when none.',
-      ),
-    lof_flags: z
-      .string()
-      .nullable()
-      .describe(
-        "LOFTEE's flags on the call on this transcript, as gnomAD writes them (e.g. PHYLOCSF_WEAK); null when none.",
-      ),
+    hgvsc: z.string().nullable().describe('HGVSc on this transcript; null when none.'),
+    hgvsp: z.string().nullable().describe('HGVSp on this transcript; null when none.'),
+    lof: z.string().nullable().describe("LOFTEE's call on this transcript; null when none."),
+    lof_filter: z.string().nullable().describe('LOFTEE filter on that call; null when none.'),
+    lof_flags: z.string().nullable().describe('LOFTEE flags on that call; null when none.'),
   })
   .describe("The variant's consequence on its gene's primary transcript.");
 
@@ -207,67 +163,45 @@ const LofCuration = z
   })
   .describe("One of gnomAD's manual loss-of-function curations of the variant.");
 
-/** A field describing transcript_id, the transcript consequence is on. */
-const consequenceTranscriptField = (description: string) =>
-  z
-    .string()
-    .nullable()
-    .describe(
-      `${description} It describes transcript_id, which can be a minor isoform; primary_transcript carries the MANE Select (else canonical) view.`,
-    );
-
 const VariantRecordSchema = z
   .object({
     variant_id: z.string().describe('Resolved chrom-pos-ref-alt variant ID.'),
     rsids: z.array(z.string()).describe('dbSNP rsIDs for this variant.'),
-    reference_genome: z.string().describe('Reference build the record is on (GRCh38 or GRCh37).'),
+    reference_genome: z.string().describe('Reference build the record is on.'),
     dataset: z.string().describe('Effective gnomAD dataset.'),
-    ac: z
-      .number()
-      .describe(
-        "Overall allele count — gnomAD's joint exome + genome count on gnomad_r4, the sum across carried callset(s) on every other dataset, gnomad_r4_non_ukb and the other subsets included, since none publishes joint data.",
-      ),
+    ac: z.number().describe('Overall allele count.'),
     an: z
       .number()
       .describe(
-        "Overall allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant; on every other dataset (no joint data — gnomad_r4_non_ukb and every other subset, gnomad_r3, gnomad_r2_1, exac), the sum across carried callset(s), a callset that failed QC included — callsets carries each one's own AN and filters.",
+        "Overall allele number. On gnomad_r4, gnomAD's joint AN over every callable sample in both callsets, including a callset that does not carry the variant.",
       ),
-    af: z
-      .number()
-      .nullable()
-      .describe('Overall allele frequency, ac/an from the same source; null when an is 0.'),
-    homozygote_count: z
-      .number()
-      .describe('Overall homozygote count, from the same source as ac and an.'),
+    af: z.number().nullable().describe('Overall allele frequency, ac/an; null when an is 0.'),
+    homozygote_count: z.number().describe('Overall homozygote count.'),
     hemizygote_count: z
       .number()
       .nullable()
-      .describe(
-        'Overall hemizygote count, from the same source as ac and an (0 off X/Y); null when gnomAD reports none.',
-      ),
+      .describe('Overall hemizygote count (0 off X/Y); null when gnomAD reports none.'),
     faf95: Faf95.extend({
       source: z
         .enum(['joint', 'exome', 'genome'])
-        .describe("The record value comes from: gnomAD's joint data, or that callset."),
+        .describe("Where the value comes from: gnomAD's joint data, or that callset."),
     })
       .nullable()
       .describe(
-        "gnomAD's filtering allele frequency (GroupMax FAF95): the lower bound of the 95% confidence interval of a genetic-ancestry group's AF, from the group with the highest bound, over non-bottlenecked groups only — the value to test against a disease threshold such as ACMG/AMP BA1 or BS1, which raw AF is not. Read from gnomAD's joint data wherever it publishes a joint record (gnomad_r4), even when that value is null; elsewhere the higher of the callsets' faf95, which source names. Null when gnomAD reports none, as for AC 0 and singleton variants and on exac, and on a gnomad_r4 or gnomad_r3 subset, whose variant record carries the parent release's FAF (a notice names the parent); gnomad_list_gene_variants' faf95_max carries gnomad_r4_non_ukb's own.",
+        "gnomAD's filtering allele frequency (GroupMax FAF95): the lower bound of the 95% confidence interval of a genetic-ancestry group's AF, from the group with the highest bound, over non-bottlenecked groups only. From the joint data on gnomad_r4, even when that value is null; elsewhere the higher of the callsets' faf95, which source names. Null for AC 0 and singleton variants, on exac, and on a gnomad_r4 or gnomad_r3 subset, whose record carries the parent release's FAF (a notice names the parent; gnomad_list_gene_variants' faf95_max is gnomad_r4_non_ukb's own).",
       ),
     populations: z
       .array(PopulationFreq)
       .describe(
-        'Per-ancestry frequency vector of each carrying callset — never collapsed to a single global AF.',
+        'Per-ancestry counts of each carrying callset — never collapsed to a single global AF.',
       ),
     joint_populations: z
       .array(JointPopulationFreq)
-      .describe(
-        "Per-ancestry frequency vector of gnomAD's joint exome + genome data, over the same samples as the overall an. Empty on every dataset but gnomad_r4: gnomad_r4_non_ukb and every other subset, gnomad_r3, gnomad_r2_1, and exac publish no joint data.",
-      ),
+      .describe("Per-ancestry counts in gnomAD's joint data, over the same samples as an."),
     callsets: z
       .object({ exome: Callset, genome: Callset })
       .describe(
-        "Each callset's own AC/AN/AF and QC filters, beside the overall counts (which read gnomAD's joint record on gnomad_r4). A variant can fail QC in one callset and pass in the other.",
+        "Each callset's own counts and QC filters. A variant can fail QC in one callset and pass in the other. Filter names vary by dataset: on gnomad_r4 AC0 (no high-quality carrier after genotype QC), AS_VQSR, and InbreedingCoeff; RF on gnomad_r2_1.",
       ),
     source: z
       .array(z.enum(['exome', 'genome']))
@@ -278,31 +212,44 @@ const VariantRecordSchema = z
       .string()
       .nullable()
       .describe(
-        "The most severe VEP consequence term across the variant's transcripts, as gnomAD reports it; it can sit on a non-primary isoform, so read it beside primary_transcript. Null when none.",
+        "The most severe VEP consequence term across the variant's transcripts, as gnomAD reports it; null when none.",
       ),
     transcript_id: z
       .string()
       .nullable()
       .describe(
-        "Ensembl transcript ID (unversioned) the consequence is on — not necessarily the gene's MANE Select or canonical transcript; null when none.",
+        "Ensembl transcript ID (unversioned) the consequence is on, which hgvsc, hgvsp, lof, lof_filter, and lof_flags also describe; not necessarily the gene's MANE Select or canonical transcript — it can be a minor isoform, so read it beside primary_transcript. Null when none.",
       ),
-    hgvsc: consequenceTranscriptField(
-      'HGVS coding or transcript notation of the consequence (e.g. c.406G>T); null when none.',
-    ),
-    hgvsp: consequenceTranscriptField(
-      'HGVS protein notation of the consequence (e.g. p.Glu136Ter); null when gnomAD gives none, as for a UTR or intronic change.',
-    ),
-    lof: consequenceTranscriptField(
-      "LOFTEE's loss-of-function call on the consequence — HC high-confidence, LC low-confidence, or OS other splice; null when it made none.",
-    ),
-    lof_filter: consequenceTranscriptField(
-      'The LOFTEE filter that made that call low-confidence (e.g. END_TRUNC); null when none.',
-    ),
-    lof_flags: consequenceTranscriptField(
-      "LOFTEE's flags on that call, as gnomAD writes them (e.g. PHYLOCSF_WEAK); null when none.",
-    ),
+    hgvsc: z
+      .string()
+      .nullable()
+      .describe('HGVS coding or transcript notation (e.g. c.406G>T); null when none.'),
+    hgvsp: z
+      .string()
+      .nullable()
+      .describe(
+        'HGVS protein notation (e.g. p.Glu136Ter); null when gnomAD gives none, as for a UTR or intronic change.',
+      ),
+    lof: z
+      .string()
+      .nullable()
+      .describe(
+        "LOFTEE's loss-of-function call — HC high-confidence, LC low-confidence, or OS other splice; null when it made none.",
+      ),
+    lof_filter: z
+      .string()
+      .nullable()
+      .describe(
+        'The LOFTEE filter that made that call low-confidence (e.g. END_TRUNC); null when none.',
+      ),
+    lof_flags: z
+      .string()
+      .nullable()
+      .describe(
+        "LOFTEE's flags on that call, as gnomAD writes them (e.g. PHYLOCSF_WEAK); null when none.",
+      ),
     primary_transcript: PrimaryTranscript.nullable().describe(
-      "The consequence on the primary transcript of the consequence's gene: its MANE Select entry, else its canonical entry, from the transcript consequences gnomAD returns. Null when gnomAD lists neither entry for that gene — the variant lies outside both transcripts, e.g. on an exon only minor isoforms carry (CDKN2A's p14ARF exon 1β) — or when the variant has no transcript consequence.",
+      "The consequence on the gene's primary transcript: its MANE Select entry, else its canonical entry. Null when the variant has no transcript consequence or lies outside both transcripts (e.g. on CDKN2A's p14ARF exon 1β, which only minor isoforms carry).",
     ),
     gene_symbol: z
       .string()
@@ -314,11 +261,11 @@ const VariantRecordSchema = z
         "gnomAD's manual loss-of-function curations of this variant, which can overturn a LOFTEE call; empty when gnomAD has none.",
       ),
     in_silico: z.array(InSilico).describe('In-silico predictor scores present for this variant.'),
-    clinvar: ClinVar.nullable().describe('ClinVar annotation, or null when no entry exists.'),
+    clinvar: ClinVar.nullable().describe('Null when the variant has no ClinVar entry.'),
     clinvar_unavailable: z
       .boolean()
       .describe(
-        'True when the ClinVar lookup failed or ran out of its time budget, so clinvar is null for want of an answer; false when it succeeded, with or without an entry.',
+        'True when the ClinVar lookup failed or ran out of time, so clinvar is null for want of an answer.',
       ),
   })
   .describe('Full population record for one variant.');
@@ -359,7 +306,7 @@ const FailedItem = z
       .array(z.string())
       .optional()
       .describe(
-        "Concrete variant IDs to retry: for ambiguous_rsid, the chrom-pos-ref-alt IDs the rsID maps to; for variant_not_found_other_build, the IDs this string lifts over to on the dataset's reference build when read as an ID on the other build.",
+        "Variant IDs to retry with: an ambiguous rsID's chrom-pos-ref-alt IDs, or the IDs a variant_not_found_other_build string lifts over to.",
       ),
   })
   .describe('One failed input ID, why it failed, and what to do next.');
@@ -376,26 +323,20 @@ type VariantLookupOutcome =
 
 export const gnomadGetVariant = tool('gnomad_get_variant', {
   title: 'gnomad-genetics-mcp-server: get variant',
-  description: `Fetch the full gnomAD population record for one or more variants — allele count/number/frequency overall and broken down per genetic-ancestry group, the filtering allele frequency (faf95) to test against a disease threshold such as ACMG/AMP BA1 or BS1, homozygote and hemizygote counts, quality flags, each callset's own counts and QC filters with a qc_status, the most severe transcript consequence with its HGVS and LOFTEE loss-of-function call (confidence, filter, flags) beside the same on the gene's MANE Select (else canonical) transcript, gnomAD's manual LoF curation verdicts, in-silico predictor scores, and joined ClinVar clinical significance. The "how common, is it benign" answer in one call. A qc_status of filtered means the variant failed gnomAD QC in every callset carrying it (gnomAD's browser hides these by default; AC0 means no high-quality carrier), so treat its counts as low-confidence rather than an observed frequency. Accepts a batch of up to ${MAX_VARIANT_BATCH} IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] — with its reason and a recovery hint — without failing the others. A coordinate ID carries no build: an absent one whose string also lifts over from the other build fails as variant_not_found_other_build, with the lifted IDs on the dataset's build in candidates, while a string valid on both builds can name a different variant on each, which no not-found path can see — so keep IDs on the dataset's build. variant_not_found means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
+  description: `Fetch the full gnomAD population record for one or more variants: allele count, number, and frequency overall and per genetic-ancestry group, homozygote and hemizygote counts, the filtering allele frequency (faf95) — the value to test against a disease threshold such as ACMG/AMP BA1 or BS1, which raw AF is not — quality flags, each callset's own counts and QC filters, the most severe consequence with its HGVS and LOFTEE call beside the same on the gene's MANE Select (else canonical) transcript, gnomAD's manual LoF curations, in-silico scores, and joined ClinVar significance. On gnomad_r4 the overall counts and joint_populations read gnomAD's joint exome + genome data; every other dataset, gnomad_r4_non_ukb and the other subsets included, publishes no joint data, so its overall counts sum the callsets carrying the variant, a QC-failed one included, and joint_populations is empty. qc_status follows gnomAD's browser: pass when at least one callset carrying the variant passed QC, filtered when none did — the browser hides these by default — so treat a filtered variant's counts as low-confidence rather than an observed frequency. Accepts up to ${MAX_VARIANT_BATCH} IDs with partial success: every declared reason except incoherent_build is reported per item in failed[], with its recovery hint, without failing the other IDs. A coordinate ID carries no build: an absent one whose string also lifts over from the other build fails as variant_not_found_other_build, with the lifted IDs in candidates, while a string valid on both builds can name a different variant on each, which no not-found path can see — so keep IDs on the dataset's build. variant_not_found means the variant is not in the chosen dataset — pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     variants: z
       .array(batchVariantIdField)
       .min(1)
       .max(MAX_VARIANT_BATCH)
-      .describe(
-        `1–${MAX_VARIANT_BATCH} variant IDs (chrom-pos-ref-alt or rsID) to look up in one batched call.`,
-      ),
+      .describe(`1–${MAX_VARIANT_BATCH} variant IDs to look up.`),
     dataset: datasetField,
     reference_genome: referenceGenomeField,
   }),
   output: z.object({
     found: z.array(VariantRecordSchema).describe('Variants resolved to a population record.'),
-    failed: z
-      .array(FailedItem)
-      .describe(
-        'Per-item failures, in input order: malformed IDs, variants absent from the dataset, or upstream errors — each with its reason and recovery hint.',
-      ),
+    failed: z.array(FailedItem).describe('Per-item failures, in input order.'),
     dataset: z.string().describe('Effective gnomAD dataset used for the batch.'),
     reference_genome: z.string().describe('Effective reference build used for the batch.'),
   }),
@@ -404,7 +345,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
       .string()
       .optional()
       .describe(
-        'Non-fatal notice when optional ClinVar annotation was unavailable, and when the dataset is a gnomad_r4 or gnomad_r3 subset, whose records carry no filtering allele frequency of their own (it names the parent release).',
+        "Set when ClinVar annotation was unavailable for a record, and on a subset whose records' faf95 is null, naming the parent release to read it from.",
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -420,28 +361,28 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'invalid_variant_id',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A variant ID is outside the chrom-pos-ref-alt or rsID grammar; reported per item in failed[].',
+      when: 'A variant ID is outside the chrom-pos-ref-alt or rsID grammar.',
       recovery:
         'Use chrom-pos-ref-alt with chromosome 1–22, X, or Y (optional chr prefix); a positive position; A/C/G/T alleles; or an rsID.',
     },
     {
       reason: 'variant_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'A well-formed ID is absent from the requested dataset with no liftover candidate from the other build: rsIDs are never lifted, and a liftover lookup that fails or runs out of time leaves this reason. Reported per item in failed[].',
+      when: 'A well-formed ID is absent from the dataset with no liftover candidate: rsIDs are never lifted, and a liftover lookup that fails or runs out of time leaves this reason.',
       recovery:
         "A coordinate ID carries no build, so confirm it is on the dataset's reference build, then run gnomad_get_coverage to check the position is callable before concluding true absence.",
     },
     {
       reason: 'variant_not_found_other_build',
       code: JsonRpcErrorCode.NotFound,
-      when: "A coordinate ID is absent from the requested dataset and, read as an ID on the other reference build, lifts over to the IDs in candidates on the dataset's build; reported per item in failed[].",
+      when: 'A coordinate ID is absent from the dataset and, read as an ID on the other build, lifts over to the IDs in candidates.',
       recovery:
         'This ID is absent from the dataset, and the same string also resolves on the other reference build. If the ID was written for that build, retry with a candidate. If it was not, treat it as absent and run gnomad_get_coverage to check the position is callable.',
     },
     {
       reason: 'mitochondrial_unsupported',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A variant ID names the mitochondrial chromosome (M, MT, or chrM); reported per item in failed[].',
+      when: 'A variant ID names the mitochondrial chromosome (M, MT, or chrM).',
       recovery:
         'Mitochondrial variants are outside this server; look them up in the gnomAD browser at https://gnomad.broadinstitute.org/. IDs on chromosomes 1–22, X, and Y are served.',
       thrownBy: 'service',
@@ -449,7 +390,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'ambiguous_rsid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'An rsID maps to more than one variant in the dataset; reported per item in failed[].',
+      when: 'An rsID maps to more than one variant in the dataset.',
       recovery:
         'Retry with one of the chrom-pos-ref-alt IDs in candidates, or resolve the rsID to a single variant ID with dbSNP or Ensembl.',
       thrownBy: 'service',
@@ -457,7 +398,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'graphql_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'gnomAD rejected the lookup for one ID with a GraphQL error; reported per item in failed[].',
+      when: 'gnomAD rejected the lookup for one ID with a GraphQL error.',
       recovery:
         'Check the ID against the dataset before retrying: gnomAD rejected this lookup as sent, so the same request fails again.',
       thrownBy: 'service',
@@ -465,7 +406,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'upstream_build_mismatch',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'gnomAD answered one ID with a variant on a different reference build; reported per item in failed[].',
+      when: 'gnomAD answered one ID with a variant on a different reference build.',
       recovery:
         'Treat this ID as unavailable in this dataset: retry it later, or look it up in another dataset on the same build.',
       thrownBy: 'service',
@@ -473,7 +414,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'upstream_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'gnomAD stayed unavailable or throttled through every retry for one ID; reported per item in failed[].',
+      when: 'gnomAD stayed unavailable or throttled through every retry for one ID.',
       recovery:
         'Wait a few seconds, then retry only the failed IDs. gnomAD is a community-funded API — keep batches small and request volume low.',
       thrownBy: 'service',
@@ -481,7 +422,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'gnomAD attempts timed out or the shared 45 s batch budget expired for one ID; reported per item in failed[].',
+      when: 'gnomAD attempts timed out, or the shared 45 s batch budget expired, for one ID.',
       recovery:
         'Wait a few seconds, then retry only the failed IDs, in smaller batches when several timed out.',
       thrownBy: 'service',
@@ -489,7 +430,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'upstream_access',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'gnomAD refused the request for one ID (access denied); reported per item in failed[].',
+      when: 'gnomAD refused the request for one ID (access denied).',
       recovery:
         'Do not retry: gnomAD is refusing requests from this server. Tell the user the lookup is blocked upstream and point them to https://gnomad.broadinstitute.org/.',
       thrownBy: 'service',
@@ -497,7 +438,7 @@ export const gnomadGetVariant = tool('gnomad_get_variant', {
     {
       reason: 'invalid_upstream_response',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'gnomAD kept answering one ID with a response that failed validation; reported per item in failed[].',
+      when: 'gnomAD kept answering one ID with a response that failed validation.',
       recovery:
         'Wait a few seconds, then retry only the failed IDs; gnomAD returned a response this server could not validate.',
       thrownBy: 'service',

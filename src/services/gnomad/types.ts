@@ -310,6 +310,14 @@ export interface GeneVariantRow {
   faf95_max: number | null;
   faf95_max_group: string | null;
   flags: string;
+  /**
+   * Ensembl ID of the gene transcript_id is on: the target's own on a gene or
+   * transcript target; on a region, gnomAD's per-row gene, null on a row
+   * without a transcript consequence.
+   */
+  gene_id: string | null;
+  /** HGNC symbol of gene_id; null when gene_id is, or gnomAD gives none. */
+  gene_symbol: string | null;
   /** The genome callset's QC filters, pipe-joined, as exome_filters. */
   genome_filters: string | null;
   /** From the same record(s) as ac and an (0 off X/Y); null when none of them reports one. */
@@ -327,6 +335,33 @@ export interface GeneVariantRow {
 
 /** The LOFTEE confidence gnomad_list_gene_variants filters rows on: a row's lof must equal it. */
 export type LofConfidence = 'HC' | 'LC';
+
+/**
+ * The genetic-ancestry groups gnomAD lists on each release's variant-list rows
+ * (as of 2026-11-24), shared by its subsets — the per-group columns of a
+ * gnomad_list_gene_variants `populations` request. gnomad_r4 exomes carry no
+ * `ami`, which its genomes and joint record do; gnomad_r2_1 and exac list no
+ * `ami` or `mid`, exac no `asj`. Each set is in alphabetical order.
+ */
+export const LIST_ROW_GROUPS = {
+  gnomad_r4: ['afr', 'ami', 'amr', 'asj', 'eas', 'fin', 'mid', 'nfe', 'remaining', 'sas'],
+  gnomad_r3: ['afr', 'ami', 'amr', 'asj', 'eas', 'fin', 'mid', 'nfe', 'oth', 'sas'],
+  gnomad_r2_1: ['afr', 'amr', 'asj', 'eas', 'fin', 'nfe', 'oth', 'sas'],
+  exac: ['afr', 'amr', 'eas', 'fin', 'nfe', 'oth', 'sas'],
+} as const satisfies Record<ParentDataset, readonly AncestryGroup[]>;
+
+/** A genetic-ancestry group some release lists on its variant-list rows. */
+export type ListRowGroup = (typeof LIST_ROW_GROUPS)[ParentDataset][number];
+
+/** One per-group column of a `populations` row: the group's allele count, allele number, or ac/an. */
+export type GroupColumn = `${'ac' | 'an' | 'af'}_${ListRowGroup}`;
+
+/**
+ * The per-group columns of a `populations` row, for the groups its dataset
+ * lists (LIST_ROW_GROUPS): null where no record the row's counts read lists
+ * the group, and af null where an is 0.
+ */
+export type GroupColumns = Partial<Record<GroupColumn, number | null>>;
 
 /**
  * A gene-variant row of an `annotations` request: the default row plus the

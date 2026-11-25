@@ -19,12 +19,16 @@ import type { GenomeTarget } from '@/services/gnomad/types.js';
 export const DATASET_CHOICES =
   'gnomad_r4 and its subset gnomad_r4_non_ukb (GRCh38); gnomad_r3 and its subsets gnomad_r3_controls_and_biobanks, gnomad_r3_non_cancer, gnomad_r3_non_neuro, gnomad_r3_non_topmed, gnomad_r3_non_v2 (GRCh38); gnomad_r2_1 and its subsets gnomad_r2_1_controls, gnomad_r2_1_non_cancer, gnomad_r2_1_non_neuro, gnomad_r2_1_non_topmed (GRCh37); exac (GRCh37)';
 
-/** Dataset selector — defaults applied in the service from server config. */
+/**
+ * Dataset selector — defaults applied in the service from server config. The one
+ * statement of each dataset's build; what a subset lacks (joint data, coverage,
+ * constraint) is stated by each tool where it changes that tool's values.
+ */
 export const datasetField = z
   .enum(GNOMAD_DATASETS)
   .optional()
   .describe(
-    `gnomAD dataset, default gnomad_r4: ${DATASET_CHOICES}. A subset keeps only part of its parent release's samples (non_cancer leaves out cancer-study samples, non_ukb UK Biobank's) and can leave a callset unchanged: gnomad_r4_non_ukb genome counts equal gnomad_r4's, and gnomad_r2_1_non_cancer genome counts equal gnomad_r2_1's. No subset publishes joint data, and gnomAD publishes no subset coverage or constraint, so those come from the parent. Echoed in output.`,
+    `gnomAD dataset, default gnomad_r4: ${DATASET_CHOICES}. A subset keeps part of its parent release's samples (non_cancer drops cancer-study samples, non_ukb UK Biobank's) and can leave a callset unchanged: gnomad_r4_non_ukb genome counts equal gnomad_r4's, and gnomad_r2_1_non_cancer genome counts equal gnomad_r2_1's.`,
   );
 
 /** Reference build selector — derived from dataset when omitted; must be coherent if both given. */
@@ -32,7 +36,7 @@ export const referenceGenomeField = z
   .enum(['GRCh38', 'GRCh37'])
   .optional()
   .describe(
-    'Reference build. Derived from dataset when omitted: GRCh38 for gnomad_r4, gnomad_r3, and their subsets; GRCh37 for gnomad_r2_1, its subsets, and exac. If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.',
+    "Reference build, derived from dataset when omitted; a build other than the dataset's is rejected. Keep aligned with Ensembl coordinates.",
   );
 
 /**
@@ -92,7 +96,7 @@ export const batchVariantIdField = z
   .string()
   .min(1)
   .describe(
-    'Variant ID — chrom-pos-ref-alt (1-based, e.g. 1-55051215-G-GA) on chromosome 1–22, X, or Y with an optional chr prefix, or an rsID (rs11591147). Mitochondrial IDs (M, MT, chrM) are not served. Obtain a variantId from ensembl_predict_variant or a VCF. Malformed IDs are reported per-item in failed[], not rejected wholesale.',
+    'Variant ID — chrom-pos-ref-alt (1-based, e.g. 1-55051215-G-GA) on chromosome 1–22, X, or Y with an optional chr prefix, or an rsID (rs11591147); mitochondrial IDs (M, MT, chrM) are not served. Obtain one from ensembl_predict_variant or a VCF.',
   );
 
 /** Gene reference — HGNC symbol or Ensembl gene ID. */
@@ -123,7 +127,7 @@ export const optionalGeneField = z
   ])
   .optional()
   .describe(
-    'Gene — HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mitochondrial genes (e.g. MT-TL1) are not served. Mutually exclusive with transcript_id and region; blank means omitted.',
+    'Gene, as an HGNC symbol or Ensembl gene ID; mitochondrial genes (e.g. MT-TL1) are not served.',
   );
 
 /**

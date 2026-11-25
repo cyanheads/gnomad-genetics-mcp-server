@@ -18,6 +18,7 @@ import {
   readUpstreamJson,
   sanitizeUpstreamError,
 } from '@/services/upstream-error.js';
+import { upstreamUserAgent } from '@/services/upstream-user-agent.js';
 import type { ClinVarFilters, ClinVarRow, ClinVarSearchResult } from './types.js';
 
 /** ClinVar review-status text → gold-star rating (the standard convention). */
@@ -472,9 +473,7 @@ export class ClinVarService {
           url,
           Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'NCBI ClinVar')),
           reqCtx,
-          {
-            signal,
-          },
+          { headers: { 'user-agent': upstreamUserAgent() }, signal },
         ).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
         const { esearchresult } = await readUpstreamJson(response, 'NCBI ClinVar', EsearchResponse);
         return { ids: esearchresult.idlist, count: esearchresult.count };
@@ -522,9 +521,7 @@ export class ClinVarService {
           url,
           Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'NCBI ClinVar')),
           reqCtx,
-          {
-            signal,
-          },
+          { headers: { 'user-agent': upstreamUserAgent() }, signal },
         ).catch((err: unknown) => sanitizeUpstreamError(err, 'NCBI ClinVar'));
         const { result } = await readUpstreamJson(response, 'NCBI ClinVar', EsummaryResponse);
         const rows: ClinVarRow[] = [];

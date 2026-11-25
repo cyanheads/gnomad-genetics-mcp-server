@@ -833,7 +833,7 @@ describe('GnomadService joint frequencies (#53)', () => {
     expect(query).toContain(
       'joint { ac an homozygote_count hemizygote_count fafmax @include(if: $jointFafmax) { faf95_max faf95_max_gen_anc } }',
     );
-    // joint.populations feeds no column and would multiply the response about 3.6×.
+    // A call without populations selects no joint.populations; only the populations form does (#81).
     expect(query).not.toMatch(/joint \{[^}]*populations/);
   });
 });
@@ -1896,6 +1896,12 @@ describe('GnomadService list and coverage boundary', () => {
     // A row without lof reads it as null, and a call without annotations adds none of the five.
     expect(rows.map((row) => row.lof)).toEqual([null, null]);
     expect(rows.every((row) => !('hgvsc' in row) && !('rsids' in row))).toBe(true);
+    // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/82
+    // A gene root without gene_id and symbol gives each row a null gene, never one guessed from the target.
+    expect(rows.map((row) => [row.gene_id, row.gene_symbol])).toEqual([
+      [null, null],
+      [null, null],
+    ]);
   });
 
   // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/65
@@ -1952,6 +1958,44 @@ describe('GnomadService list and coverage boundary', () => {
     });
     expect(plain).toMatchObject({ lof: 'HC' });
     expect(Object.keys(plain ?? {})).not.toContain('hgvsc');
+    // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/82
+    // The region row omitted its gene fields too: both read as null on either shape.
+    for (const row of [annotated, plain]) {
+      expect(row).toMatchObject({ gene_id: null, gene_symbol: null });
+    }
+  });
+
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/82
+  it('reads a transcript root without gene_id or gene as a null gene on every row', async () => {
+    fakeGraphql(() => ({
+      data: {
+        transcript: {
+          chrom: '1',
+          variants: [
+            {
+              variant_id: '1-100-A-T',
+              consequence: 'stop_gained',
+              transcript_id: 'ENST00000302118',
+              flags: [],
+              exome: { ac: 1, an: 1_000, af: 0.001, homozygote_count: 0, filters: [] },
+              genome: null,
+            },
+          ],
+        },
+      },
+    }));
+    const svc = new GnomadService(getServerConfig());
+
+    const rows = await svc.listGeneVariants(
+      { kind: 'transcript', value: 'ENST00000302118' },
+      {},
+      svc.resolveDatasetContext('gnomad_r4'),
+      createMockContext(),
+    );
+
+    expect(rows.map((row) => [row.transcript_id, row.gene_id, row.gene_symbol])).toEqual([
+      ['ENST00000302118', null, null],
+    ]);
   });
 
   it('routes Ensembl gene, transcript, and region coverage with the effective build', async () => {

@@ -17,6 +17,7 @@ import { gnomadGetGeneConstraint } from '@/mcp-server/tools/definitions/gnomad-g
 import * as serviceModule from '@/services/gnomad/gnomad-service.js';
 import { GnomadService, initGnomadService } from '@/services/gnomad/gnomad-service.js';
 import type { Dataset, GeneConstraint } from '@/services/gnomad/types.js';
+import { serverAuthoredStrings } from '../helpers/definition-bytes.js';
 import { fakeLiveConstraint, liveGene } from '../helpers/live-constraint.js';
 
 /** Real service for genuine dataset/build derivation; network method overridden. */
@@ -383,7 +384,8 @@ describe('gnomad_get_gene_constraint release provenance', () => {
     expect(gnomadGetGeneConstraint.description).toMatch(/< 0\.45[^.]*v4\.1\.2/);
     expect(gnomadGetGeneConstraint.description).toMatch(/< 0\.35[^.]*v2\.1\.1/);
     expect(gnomadGetGeneConstraint.description).toMatch(/on exac[^.]*pLI is the intolerance/);
-    expect(shape.constraint_flags.description).toMatch(/exac/);
+    // #83: what exac leaves empty spans fields, so the tool description states it once.
+    expect(gnomadGetGeneConstraint.description).toMatch(/on exac[^.]*constraint_flags is empty/);
     expect(shape.constraint_release.description).toMatch(/no v3 constraint/);
   });
 });
@@ -515,11 +517,12 @@ describe('gnomad_get_gene_constraint on a subset dataset (#68)', () => {
     },
   );
 
-  it('names the subset routing in the tool and constraint_release descriptions', () => {
-    expect(gnomadGetGeneConstraint.description).toMatch(/subsets?[^.]*parent/);
-    expect(gnomadGetGeneConstraint.output.shape.constraint_release.description).toMatch(
-      /subsets?[^.]*parent/,
+  // #83: stated once, on constraint_release, rather than in the tool description as well.
+  it('names the subset routing in the constraint_release description alone', () => {
+    const routing = serverAuthoredStrings(gnomadGetGeneConstraint).filter((text) =>
+      /subset[^.]*reads? (its|the) parent/.test(text),
     );
+    expect(routing).toEqual([gnomadGetGeneConstraint.output.shape.constraint_release.description]);
   });
 });
 
@@ -659,8 +662,9 @@ describe('gnomad_get_gene_constraint LOEUF percentile and missense/synonymous in
     expect(shape.oe_lof_percentile.description).toMatch(/v4\.1\.2/);
     for (const field of ['oe_mis_lower', 'oe_mis_upper', 'oe_syn_lower', 'oe_syn_upper'] as const) {
       expect(shape[field].description).toMatch(/90%/);
-      expect(shape[field].description).toMatch(/exac/);
     }
+    // #83: the intervals' exac nulls ride the tool description's one exac sentence.
+    expect(gnomadGetGeneConstraint.description).toMatch(/on exac[^.]*every other metric is null/);
     expect(gnomadGetGeneConstraint.description).toMatch(/percentile/);
   });
 });

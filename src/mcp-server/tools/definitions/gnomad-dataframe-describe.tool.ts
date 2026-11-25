@@ -15,11 +15,11 @@ import { getCanvas } from '@/services/canvas-accessor.js';
 const gnomadDataframeDescribeDef = tool('gnomad_dataframe_describe', {
   title: 'gnomad-genetics-mcp-server: dataframe describe',
   description:
-    'List the tables staged on a canvas and their columns (name and type) so you can write correct SQL for gnomad_dataframe_query. Use the canvas_id returned by gnomad_list_gene_variants or gnomad_search_clinvar. Returns one entry per table with its row count and column schema.',
+    'List the tables staged on a canvas with their row counts and columns (name and SQL type), to write SQL for gnomad_dataframe_query.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
     canvas_id: CanvasIdSchema.describe(
-      'Canvas ID returned by a prior staging call (gnomad_list_gene_variants or gnomad_search_clinvar).',
+      'Canvas ID returned by gnomad_list_gene_variants or gnomad_search_clinvar.',
     ),
   }),
   output: z.object({

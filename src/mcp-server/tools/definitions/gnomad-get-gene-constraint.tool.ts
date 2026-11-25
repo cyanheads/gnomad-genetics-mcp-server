@@ -37,31 +37,27 @@ function releaseNotes(dataset: string): string[] {
 /** A mitochondrial constraint value: non-null upstream and never negative. */
 const mitochondrialValue = (description: string) => z.number().nonnegative().describe(description);
 
-/** gnomAD's constraint for a protein-coding mitochondrial gene, one set per variant class. */
+/**
+ * gnomAD's constraint for a protein-coding mitochondrial gene, one set per variant
+ * class. The kinds, the units, the interval model, and the OEUF reading are stated
+ * once on mitochondrial_constraint.
+ */
 const ProteinMitochondrialConstraint = z
   .object({
-    kind: z
-      .literal('protein')
-      .describe(
-        'A protein-coding mitochondrial gene: stop-gain (lof), missense, and synonymous sets.',
-      ),
-    obs_lof: mitochondrialValue('Observed sum of maximum heteroplasmy over stop-gain SNVs.'),
-    exp_lof: mitochondrialValue('Expected sum of maximum heteroplasmy over stop-gain SNVs.'),
-    oe_lof: mitochondrialValue('Observed/expected ratio for stop-gain SNVs.'),
+    kind: z.literal('protein').describe('A protein-coding gene.'),
+    obs_lof: mitochondrialValue('Observed, stop-gain SNVs.'),
+    exp_lof: mitochondrialValue('Expected, stop-gain SNVs.'),
+    oe_lof: mitochondrialValue('Observed/expected, stop-gain SNVs.'),
     oe_lof_lower: mitochondrialValue('Lower bound of the 90% interval around oe_lof.'),
-    oe_lof_upper: mitochondrialValue(
-      'Upper bound of the 90% interval around oe_lof (OEUF); lower is more constrained.',
-    ),
-    obs_mis: mitochondrialValue('Observed sum of maximum heteroplasmy over missense SNVs.'),
-    exp_mis: mitochondrialValue('Expected sum of maximum heteroplasmy over missense SNVs.'),
-    oe_mis: mitochondrialValue('Observed/expected ratio for missense SNVs.'),
+    oe_lof_upper: mitochondrialValue('Upper bound (OEUF) of the 90% interval around oe_lof.'),
+    obs_mis: mitochondrialValue('Observed, missense SNVs.'),
+    exp_mis: mitochondrialValue('Expected, missense SNVs.'),
+    oe_mis: mitochondrialValue('Observed/expected, missense SNVs.'),
     oe_mis_lower: mitochondrialValue('Lower bound of the 90% interval around oe_mis.'),
-    oe_mis_upper: mitochondrialValue(
-      'Upper bound of the 90% interval around oe_mis (OEUF); lower is more constrained.',
-    ),
-    obs_syn: mitochondrialValue('Observed sum of maximum heteroplasmy over synonymous SNVs.'),
-    exp_syn: mitochondrialValue('Expected sum of maximum heteroplasmy over synonymous SNVs.'),
-    oe_syn: mitochondrialValue('Observed/expected ratio for synonymous SNVs.'),
+    oe_mis_upper: mitochondrialValue('Upper bound (OEUF) of the 90% interval around oe_mis.'),
+    obs_syn: mitochondrialValue('Observed, synonymous SNVs.'),
+    exp_syn: mitochondrialValue('Expected, synonymous SNVs.'),
+    oe_syn: mitochondrialValue('Observed/expected, synonymous SNVs.'),
     oe_syn_lower: mitochondrialValue('Lower bound of the 90% interval around oe_syn.'),
     oe_syn_upper: mitochondrialValue('Upper bound of the 90% interval around oe_syn.'),
   })
@@ -70,21 +66,19 @@ const ProteinMitochondrialConstraint = z
 /** gnomAD's constraint for a tRNA or rRNA mitochondrial gene, one set over all its SNVs. */
 const RnaMitochondrialConstraint = z
   .object({
-    kind: z.literal('rna').describe('A tRNA or rRNA mitochondrial gene: one set over all SNVs.'),
-    observed: mitochondrialValue('Observed sum of maximum heteroplasmy over all SNVs.'),
-    expected: mitochondrialValue('Expected sum of maximum heteroplasmy over all SNVs.'),
-    oe: mitochondrialValue('Observed/expected ratio over all SNVs.'),
+    kind: z.literal('rna').describe('A tRNA or rRNA gene.'),
+    observed: mitochondrialValue('Observed, all SNVs.'),
+    expected: mitochondrialValue('Expected, all SNVs.'),
+    oe: mitochondrialValue('Observed/expected, all SNVs.'),
     oe_lower: mitochondrialValue('Lower bound of the 90% interval around oe.'),
-    oe_upper: mitochondrialValue(
-      'Upper bound of the 90% interval around oe (OEUF); lower is more constrained.',
-    ),
+    oe_upper: mitochondrialValue('Upper bound (OEUF) of the 90% interval around oe.'),
   })
   .describe('Constraint for a tRNA or rRNA mitochondrial gene.');
 
 export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
   title: 'gnomad-genetics-mcp-server: get gene constraint',
   description:
-    'Fetch gnomAD loss-of-function constraint for a gene — pLI (probability of LoF intolerance; >0.9 intolerant), LOEUF (oe_lof_upper, the headline metric) plus its lower bound and gnomAD’s LOEUF percentile, observed/expected ratios for LoF, missense, and synonymous variation with 90% intervals for missense and synonymous, and the three Z-scores. This is the orthogonal axis to allele frequency: a loss-of-function variant matters far more in a gene intolerant to being broken. Accepts an HGNC symbol (PCSK9) or an Ensembl gene ID (ENSG00000169174). constraint_release names the release the metrics come from: gnomAD v4.1.2 for gnomad_r4, gnomad_r3, and their subsets (gnomAD publishes no v3 constraint), gnomAD v2.1.1 for gnomad_r2_1 and its subsets, and ExAC r0.3 for exac. gnomAD publishes no subset constraint, so a subset dataset reads its parent release’s table and echoes the subset as dataset. gnomAD recommends LOEUF < 0.45 to call a gene LoF-intolerant on v4.1.2 and LOEUF < 0.35 on v2.1.1; only v4.1.2 publishes the LOEUF percentile. ExAC r0.3 publishes only pLI, the Z-scores, and observed/expected counts, so on exac the ratios, their intervals, LOEUF, and the LOEUF percentile are null, constraint_flags is empty, and pLI is the intolerance measure. A mitochondrial gene (MT-CO1, MT-TL1) has no nuclear constraint: gnomAD’s mitochondrial constraint comes back in mitochondrial_constraint instead — kind protein or rna, the same table on every dataset, exac included — and is null for every nuclear gene; the nuclear LOEUF thresholds do not apply to it. Many genes have null constraint (sparse upstream) — null fields are reported as such, never fabricated. Echoes the effective dataset and reference build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'Fetch gnomAD loss-of-function constraint for a gene — pLI, LOEUF (oe_lof_upper, the headline metric) with its lower bound and the LOEUF percentile, observed/expected ratios for LoF, missense, and synonymous variation with the missense and synonymous intervals, the observed and expected counts, and the three Z-scores. This is the orthogonal axis to allele frequency: a loss-of-function variant matters far more in a gene intolerant to being broken. Accepts an HGNC symbol (PCSK9) or an Ensembl gene ID (ENSG00000169174). gnomAD recommends LOEUF < 0.45 to call a gene LoF-intolerant on v4.1.2 and LOEUF < 0.35 on v2.1.1; on exac, pLI is the intolerance measure: ExAC publishes only pLI, the Z-scores, and observed/expected counts, so every other metric is null there and constraint_flags is empty. A mitochondrial gene (MT-CO1, MT-TL1) carries gnomAD’s mitochondrial constraint in mitochondrial_constraint instead of nuclear metrics. Many genes lack some metrics upstream; those fields are null, never fabricated.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: geneField,
@@ -99,30 +93,26 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     constraint_release: z
       .string()
       .describe(
-        'Constraint release the metrics come from: gnomAD v4.1.2 for gnomad_r4, gnomad_r3, and their subsets (gnomAD publishes no v3 constraint, so gnomad_r3 serves the GRCh38 table), gnomAD v2.1.1 for gnomad_r2_1 and its subsets, ExAC r0.3 for exac. A subset reads its parent release’s table, since gnomAD publishes no subset constraint. It labels the nuclear tables only, never mitochondrial_constraint.',
+        'Constraint release the nuclear metrics come from: gnomAD v4.1.2 for gnomad_r4, gnomad_r3 (gnomAD publishes no v3 constraint), and their subsets; gnomAD v2.1.1 for gnomad_r2_1 and its subsets; ExAC r0.3 for exac. A subset reads its parent release’s table, since gnomAD publishes no subset constraint. It labels the nuclear tables only, never mitochondrial_constraint.',
       ),
     pli: z
       .number()
       .min(0)
       .max(1)
       .nullable()
-      .describe('pLI — probability of LoF intolerance; >0.9 intolerant. Null when unavailable.'),
-    oe_lof: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative observed/expected LoF ratio. Null when unavailable.'),
+      .describe('Probability of LoF intolerance; above 0.9 is intolerant.'),
+    oe_lof: z.number().nonnegative().nullable().describe('Observed/expected LoF ratio.'),
     oe_lof_lower: z
       .number()
       .nonnegative()
       .nullable()
-      .describe('LOEUF confidence-interval lower bound. Null when unavailable.'),
+      .describe('Lower bound of the 90% interval around oe_lof.'),
     oe_lof_upper: z
       .number()
       .nonnegative()
       .nullable()
       .describe(
-        'LOEUF (oe_lof_upper) — the headline intolerance metric; gnomAD recommends < 0.45 on v4.1.2 and < 0.35 on v2.1.1 to call a gene LoF-intolerant. Null when unavailable, and always null on exac.',
+        'LOEUF, the upper bound of the 90% interval around oe_lof and the headline intolerance metric; lower is more constrained.',
       ),
     oe_lof_percentile: z
       .number()
@@ -131,83 +121,43 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
       .max(100)
       .nullable()
       .describe(
-        'gnomAD’s LOEUF percentile — the percentile bin the gene’s LOEUF falls in among gnomAD v4.1.2’s MANE Select transcripts, an integer from 0 to 100; lower is more constrained (KMT2A is 0, FLG is 98). Only gnomAD v4.1.2 publishes it, so it is null on gnomad_r2_1, its subsets, and exac, and wherever LOEUF is null.',
+        'Percentile bin of the gene’s LOEUF among gnomAD v4.1.2’s MANE Select transcripts; lower is more constrained (KMT2A is 0, FLG is 98). Only v4.1.2 publishes it, so it is null on every GRCh37 dataset and wherever LOEUF is null.',
       ),
-    oe_mis: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Observed/expected missense ratio. Null when unavailable.'),
+    oe_mis: z.number().nonnegative().nullable().describe('Observed/expected missense ratio.'),
     oe_mis_lower: z
       .number()
       .nonnegative()
       .nullable()
-      .describe(
-        'Lower bound of the 90% confidence interval around oe_mis. Null when unavailable, and always null on exac.',
-      ),
+      .describe('Lower bound of the 90% interval around oe_mis.'),
     oe_mis_upper: z
       .number()
       .nonnegative()
       .nullable()
-      .describe(
-        'Upper bound of the 90% confidence interval around oe_mis. Null when unavailable, and always null on exac.',
-      ),
-    oe_syn: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Observed/expected synonymous ratio. Null when unavailable.'),
+      .describe('Upper bound of the 90% interval around oe_mis.'),
+    oe_syn: z.number().nonnegative().nullable().describe('Observed/expected synonymous ratio.'),
     oe_syn_lower: z
       .number()
       .nonnegative()
       .nullable()
-      .describe(
-        'Lower bound of the 90% confidence interval around oe_syn. Null when unavailable, and always null on exac.',
-      ),
+      .describe('Lower bound of the 90% interval around oe_syn.'),
     oe_syn_upper: z
       .number()
       .nonnegative()
       .nullable()
-      .describe(
-        'Upper bound of the 90% confidence interval around oe_syn. Null when unavailable, and always null on exac.',
-      ),
-    lof_z: z.number().nullable().describe('LoF constraint Z-score. Null when unavailable.'),
-    mis_z: z.number().nullable().describe('Missense constraint Z-score. Null when unavailable.'),
-    syn_z: z.number().nullable().describe('Synonymous constraint Z-score. Null when unavailable.'),
-    obs_lof: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative observed LoF variant count. Null when unavailable.'),
-    exp_lof: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative expected LoF variant count. Null when unavailable.'),
-    obs_mis: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative observed missense count. Null when unavailable.'),
-    exp_mis: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative expected missense count. Null when unavailable.'),
-    obs_syn: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative observed synonymous count. Null when unavailable.'),
-    exp_syn: z
-      .number()
-      .nonnegative()
-      .nullable()
-      .describe('Non-negative expected synonymous count. Null when unavailable.'),
+      .describe('Upper bound of the 90% interval around oe_syn.'),
+    lof_z: z.number().nullable().describe('LoF constraint Z-score.'),
+    mis_z: z.number().nullable().describe('Missense constraint Z-score.'),
+    syn_z: z.number().nullable().describe('Synonymous constraint Z-score.'),
+    obs_lof: z.number().nonnegative().nullable().describe('Observed LoF variant count.'),
+    exp_lof: z.number().nonnegative().nullable().describe('Expected LoF variant count.'),
+    obs_mis: z.number().nonnegative().nullable().describe('Observed missense variant count.'),
+    exp_mis: z.number().nonnegative().nullable().describe('Expected missense variant count.'),
+    obs_syn: z.number().nonnegative().nullable().describe('Observed synonymous variant count.'),
+    exp_syn: z.number().nonnegative().nullable().describe('Expected synonymous variant count.'),
     constraint_flags: z
       .array(z.string())
       .describe(
-        'Caveat flags gnomAD attaches to the gene’s constraint (e.g. no_exp_lof, mis_too_many, syn_outlier); empty when none, and always empty on exac, where ExAC publishes no flags.',
+        'Caveat flags gnomAD attaches to the gene’s constraint (e.g. no_exp_lof, mis_too_many, syn_outlier); empty when none.',
       ),
     mitochondrial_constraint: z
       .union([
@@ -216,7 +166,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
         z.null().describe('No mitochondrial constraint: the gene is nuclear.'),
       ])
       .describe(
-        'gnomAD’s mitochondrial gene constraint, computed from 56,434 gnomAD v4.1 genomes: present for every mitochondrial gene and null for a nuclear gene, whose nuclear fields carry its constraint instead. kind "protein" carries observed, expected, observed/expected, and its 90% interval for stop-gain (lof; splice variants do not apply in mtDNA), missense (mis), and synonymous (syn) SNVs; kind "rna" (a tRNA or rRNA gene) carries one set over all SNVs. Observed and expected are sums of maximum heteroplasmy over every possible SNV, not variant counts, and the intervals come from a beta distribution, so the nuclear LOEUF thresholds do not apply; gnomAD reads the upper bound (OEUF) as the conservative measure, lower meaning stronger selection. The same table on every dataset, exac included; constraint_release does not label it.',
+        'gnomAD’s mitochondrial gene constraint, from 56,434 gnomAD v4.1 genomes; null for a nuclear gene. kind protein carries stop-gain (lof; splice variants do not apply in mtDNA), missense (mis), and synonymous (syn) sets, kind rna one set over all SNVs. Observed and expected are sums of maximum heteroplasmy over every possible SNV, not variant counts, and the intervals come from a beta distribution, so the nuclear LOEUF thresholds do not apply; gnomAD reads the upper bound (OEUF) as the conservative measure, lower meaning stronger selection. The same table on every dataset, exac included.',
       ),
   }),
   errors: [
@@ -238,7 +188,7 @@ export const gnomadGetGeneConstraint = tool('gnomad_get_gene_constraint', {
     {
       reason: 'invalid_constraint_data',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'gnomAD returned constraint metrics outside their valid ranges, such as a pLI above 1, or a mitochondrial constraint of a shape gnomAD’s schema does not define.',
+      when: 'gnomAD returned constraint metrics outside their valid ranges (such as a pLI above 1), or a mitochondrial constraint of a shape its schema does not define.',
       recovery:
         'Treat this gene’s constraint as unavailable rather than estimating it: gnomAD returns the same metrics on every retry. For a nuclear gene, the GRCh37 tables (dataset gnomad_r2_1 or exac) are a separate source; a mitochondrial gene’s constraint is the same table on every dataset.',
       thrownBy: 'service',

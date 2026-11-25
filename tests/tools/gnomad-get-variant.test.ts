@@ -1408,11 +1408,14 @@ describe('gnomad_get_variant joint frequencies (#53)', () => {
     expect(text).not.toContain('Joint per-ancestry');
   });
 
-  it('describes the joint source and the callset-sum fallback on an', () => {
+  // https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/83 — the source rule spans the overall counts, so the tool description carries it.
+  it('describes the joint AN on an, and the joint source with its callset-sum fallback in the tool description', () => {
     const description = gnomadGetVariant.output.shape.found.element.shape.an.description ?? '';
 
-    expect(description).toMatch(/joint/i);
-    expect(description).toMatch(/sum/i);
+    expect(description).toMatch(/joint AN over every callable sample/);
+    expect(gnomadGetVariant.description).toMatch(
+      /overall counts[^.]*joint exome \+ genome data[^.]*sum the callsets carrying the variant/,
+    );
   });
 });
 
@@ -1967,15 +1970,11 @@ describe('gnomad_get_variant on a subset dataset (#68)', () => {
     });
   });
 
+  // #83 moved the rule off ac, an, and joint_populations into the one tool-description sentence they share.
   it('describes joint data as gnomad_r4 only, gnomad_r4_non_ukb and the other subsets summed', () => {
-    const shape = (
-      gnomadGetVariant.output.shape.found as unknown as {
-        element: { shape: Record<string, { description?: string }> };
-      }
-    ).element.shape;
-    for (const field of ['ac', 'an', 'joint_populations']) {
-      expect(shape[field]?.description).toMatch(/gnomad_r4_non_ukb/);
-    }
+    expect(gnomadGetVariant.description).toMatch(
+      /On gnomad_r4 the overall counts and joint_populations read gnomAD's joint[^.]*gnomad_r4_non_ukb and the other subsets included, publishes no joint data[^.]*joint_populations is empty/,
+    );
   });
 });
 
@@ -2151,12 +2150,10 @@ describe('gnomad_get_variant filtering allele frequency (#64)', () => {
   it('describes the subset FAF notice and the FAF threshold test', () => {
     const shape = gnomadGetVariant.output.shape.found.element.shape;
 
-    expect(gnomadGetVariant.enrichment?.notice?.description).toMatch(
-      /subset.*filtering allele frequency/,
-    );
-    expect(shape.faf95.description).toMatch(/BA1 or BS1/);
+    expect(gnomadGetVariant.enrichment?.notice?.description).toMatch(/subset[^.]*faf95/);
+    // #83: the threshold test contrasts faf95 with af, so the tool description carries it.
+    expect(gnomadGetVariant.description).toMatch(/faf95[^.]*BA1 or BS1, which raw AF is not/);
     expect(shape.faf95.description).toMatch(/gnomad_r4 or gnomad_r3 subset/);
-    expect(gnomadGetVariant.description).toMatch(/faf95/);
   });
 });
 
@@ -2255,11 +2252,14 @@ describe('gnomad_get_variant HGVS and LOFTEE fields (#65)', () => {
     );
   });
 
+  // #83: transcript_id names the fields it shares once, rather than each field restating it.
   it('describes the record fields as transcript_id’s, beside primary_transcript', () => {
     const shape = gnomadGetVariant.output.shape.found.element.shape;
+    const transcript = shape.transcript_id.description ?? '';
     for (const name of ['hgvsc', 'hgvsp', 'lof', 'lof_filter', 'lof_flags'] as const) {
-      expect(shape[name].description).toMatch(/describes transcript_id/);
+      expect(transcript).toMatch(new RegExp(`(?<!\\w)${name}(?!\\w)[^.]*also describe`));
     }
+    expect(transcript).toMatch(/minor isoform[^.]*primary_transcript/);
     expect(shape.lof_curations.description).toMatch(/empty when gnomAD has none/);
     expect(Object.keys(shape)).not.toContain('is_mane_select');
   });

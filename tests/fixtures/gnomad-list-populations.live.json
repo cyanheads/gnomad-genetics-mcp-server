@@ -1,0 +1,2409 @@
+{
+  "_about": "Live gnomAD gene-list replies with each record's genetic-ancestry groups (populations { id ac an }), captured 2026-11-24 (UTC), keyed '<document>:<dataset>:<gene>'. Each value is the HTTP status and the body, its rows cut to those named here, in gnomAD's order. The gnomad_r4 replies select populations on joint alone, the record that sets a gnomad_r4 row; the others select it on exome, genome, and joint (null on every row there). Every other field is the reply to this server's list document, before gene_id and gene_symbol (#82) were selected, with the FAF @include flags its dataset sets and annotations false.",
+  "list-gene:gnomad_r4:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": {
+            "ensembl_id": "ENST00000302118"
+          },
+          "variants": [
+            {
+              "variant_id": "1-55039763-C-A",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "ac": 0,
+                "an": 1374942,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"]
+              },
+              "genome": null,
+              "joint": {
+                "ac": 0,
+                "an": 1527290,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 59292
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 52032
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 59322
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 42496
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 4314
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 83932
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 28360
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 73512
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 1123118
+                  },
+                  {
+                    "id": "",
+                    "ac": 0,
+                    "an": 1527290
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              }
+            },
+            {
+              "variant_id": "1-55039771-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "ac": 4,
+                "an": 1391284,
+                "af": 0.0000028750420474899444,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": {
+                "ac": 1,
+                "an": 152256,
+                "af": 0.000006567885666246322,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": {
+                "ac": 5,
+                "an": 1543540,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 59810
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 52284
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 59480
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 1,
+                    "an": 42710
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 1,
+                    "an": 4370
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 84484
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 28538
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 73798
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 3,
+                    "an": 1137154
+                  },
+                  {
+                    "id": "",
+                    "ac": 5,
+                    "an": 1543540
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": 6.999999999999999e-7,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              }
+            },
+            {
+              "variant_id": "1-55039784-C-G",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "ac": 3,
+                "an": 152386,
+                "af": 0.000019686847873164203,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": {
+                "ac": 3,
+                "an": 1558598,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 60316
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 52708
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 59748
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 42946
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 4372
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 84986
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 28620
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 3,
+                    "an": 74272
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 1149718
+                  },
+                  {
+                    "id": "",
+                    "ac": 3,
+                    "an": 1558598
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": 0.00001073,
+                  "faf95_max_gen_anc": "afr"
+                }
+              }
+            },
+            {
+              "variant_id": "1-55039793-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "ac": 0,
+                "an": 1412788,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"]
+              },
+              "genome": {
+                "ac": 3,
+                "an": 152276,
+                "af": 0.00001970106911135044,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": {
+                "ac": 3,
+                "an": 1565064,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 60584
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 52876
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 59918
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 43166
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 4414
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 85228
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 28672
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 74354
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 3,
+                    "an": 1154940
+                  },
+                  {
+                    "id": "",
+                    "ac": 3,
+                    "an": 1565064
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": 6.9e-7,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              }
+            },
+            {
+              "variant_id": "1-55056227-G-A",
+              "consequence": "intron_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": ["lcr"],
+              "exome": {
+                "ac": 14,
+                "an": 25418,
+                "af": 0.0005507907781886852,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": null,
+              "joint": {
+                "ac": 14,
+                "an": 25824,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 972
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 200
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 388
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 392
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 48
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 800
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 268
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 1050
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 14,
+                    "an": 21706
+                  },
+                  {
+                    "id": "",
+                    "ac": 14,
+                    "an": 25824
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": 0.00038972000000000046,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r4:CFTR": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "7",
+          "canonical_transcript_id": "ENST00000003084",
+          "mane_select_transcript": {
+            "ensembl_id": "ENST00000003084"
+          },
+          "variants": [
+            {
+              "variant_id": "7-117480021-C-A",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000648260",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "ac": 0,
+                "an": 1219880,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"]
+              },
+              "genome": null,
+              "joint": {
+                "ac": 0,
+                "an": 1371998,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 54566
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 59730
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 62396
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 43670
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 5408
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 86294
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 28072
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 70500
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 960450
+                  },
+                  {
+                    "id": "",
+                    "ac": 0,
+                    "an": 1371998
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              }
+            },
+            {
+              "variant_id": "7-117642566-G-A",
+              "consequence": "stop_gained",
+              "transcript_id": "ENST00000003084",
+              "lof": "HC",
+              "flags": [],
+              "exome": {
+                "ac": 371,
+                "an": 1461246,
+                "af": 0.0002538929105708416,
+                "homozygote_count": 1,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": {
+                "ac": 50,
+                "an": 152130,
+                "af": 0.00032866627226713996,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": {
+                "ac": 421,
+                "an": 1613376,
+                "homozygote_count": 1,
+                "hemizygote_count": 0,
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 48,
+                    "an": 62450
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 2,
+                    "an": 59928
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 64016
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 44792
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 1,
+                    "an": 6078
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 91068
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 279,
+                    "an": 29578
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 1,
+                    "an": 74882
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 90,
+                    "an": 1179672
+                  },
+                  {
+                    "id": "",
+                    "ac": 421,
+                    "an": 1613376
+                  }
+                ],
+                "fafmax": {
+                  "faf95_max": 0.00006312,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r4_non_ukb:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": {
+            "ensembl_id": "ENST00000302118"
+          },
+          "variants": [
+            {
+              "variant_id": "1-55039763-C-A",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 30964
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 35772
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 48438
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 2464
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 322714
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 63340
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 19956
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 33854
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 16888
+                  }
+                ],
+                "ac": 0,
+                "an": 574390,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"],
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              },
+              "genome": null,
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039771-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 31074
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 36030
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 48586
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 2470
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 2,
+                    "an": 324192
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 63586
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 20010
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 1,
+                    "an": 33996
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 16978
+                  }
+                ],
+                "ac": 3,
+                "an": 576922,
+                "af": 0.000005200009706684786,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "fafmax": {
+                  "faf95_max": 0.00000103,
+                  "faf95_max_gen_anc": "nfe"
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 2094
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 15292
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 10628
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 5184
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 316
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 4838
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 3472
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 41478
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 68042
+                  }
+                ],
+                "ac": 1,
+                "an": 152256,
+                "af": 0.000006567885666246322,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "fafmax": null
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039774-C-G",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 31072
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 36098
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 48646
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 2466
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 324432
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 63650
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 20016
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 34012
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 17002
+                  }
+                ],
+                "ac": 0,
+                "an": 577394,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"],
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 2114
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 15308
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 10622
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 910
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 5176
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 294
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 4832
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 3470
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 1,
+                    "an": 41600
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 68024
+                  }
+                ],
+                "ac": 1,
+                "an": 152350,
+                "af": 0.000006563833278634723,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "fafmax": null
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039784-C-G",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 2116
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 15312
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 10632
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 5178
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 294
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 4834
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 3472
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 3,
+                    "an": 41594
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 68042
+                  }
+                ],
+                "ac": 3,
+                "an": 152386,
+                "af": 0.000019686847873164203,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "fafmax": null
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55056227-GGGCGGA-G",
+              "consequence": "intron_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": ["lcr"],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 164
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 154
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 338
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 14
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 1450
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 204
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 88
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 244
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 216
+                  }
+                ],
+                "ac": 0,
+                "an": 2872,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AS_VQSR", "AC0"],
+                "fafmax": {
+                  "faf95_max": null,
+                  "faf95_max_gen_anc": null
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "remaining",
+                    "ac": 0,
+                    "an": 2
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 12
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 40
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 20
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 16
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 3,
+                    "an": 186
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 120
+                  }
+                ],
+                "ac": 3,
+                "an": 404,
+                "af": 0.007425742574257425,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "fafmax": null
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r3:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": {
+            "ensembl_id": "ENST00000302118"
+          },
+          "variants": [
+            {
+              "variant_id": "1-55039771-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 2094
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 15292
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 10628
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 912
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 5184
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 316
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 41478
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 4838
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 3472
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 68042
+                  }
+                ],
+                "ac": 1,
+                "an": 152256,
+                "af": 0.000006567885666246322,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039774-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "oth",
+                    "ac": 224,
+                    "an": 2092
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 1262,
+                    "an": 15284
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 919,
+                    "an": 10620
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 267,
+                    "an": 910
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 602,
+                    "an": 5188
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 31,
+                    "an": 316
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 1026,
+                    "an": 41478
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 722,
+                    "an": 4834
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 559,
+                    "an": 3470
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 9339,
+                    "an": 68030
+                  }
+                ],
+                "ac": 14951,
+                "an": 152222,
+                "af": 0.09821839155969571,
+                "homozygote_count": 896,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55056227-GGGCGGA-G",
+              "consequence": "intron_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": ["lcr"],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 2
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 12
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 40
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 20
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 3,
+                    "an": 186
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 16
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 120
+                  }
+                ],
+                "ac": 3,
+                "an": 404,
+                "af": 0.007425742574257425,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r3_non_v2:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": {
+            "ensembl_id": "ENST00000302118"
+          },
+          "variants": [
+            {
+              "variant_id": "1-55039771-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 1864
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 13754
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 7322
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 0,
+                    "an": 910
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 2806
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 0,
+                    "an": 308
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 28746
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 3892
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 3076
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 51964
+                  }
+                ],
+                "ac": 1,
+                "an": 114642,
+                "af": 0.00000872280665026779,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55039774-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "oth",
+                    "ac": 196,
+                    "an": 1862
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 1143,
+                    "an": 13746
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 602,
+                    "an": 7312
+                  },
+                  {
+                    "id": "ami",
+                    "ac": 267,
+                    "an": 908
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 336,
+                    "an": 2808
+                  },
+                  {
+                    "id": "mid",
+                    "ac": 31,
+                    "an": 308
+                  },
+                  {
+                    "id": "afr",
+                    "ac": 748,
+                    "an": 28748
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 583,
+                    "an": 3888
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 504,
+                    "an": 3074
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 7277,
+                    "an": 51960
+                  }
+                ],
+                "ac": 11687,
+                "an": 114614,
+                "af": 0.10196834592632663,
+                "homozygote_count": 732,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r2_1:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": null,
+          "variants": [
+            {
+              "variant_id": "1-55505447-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 200,
+                    "an": 8706
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 71,
+                    "an": 848
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 54,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 186,
+                    "an": 1560
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 351,
+                    "an": 3474
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1876,
+                    "an": 15420
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 108,
+                    "an": 1086
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 2846,
+                "an": 31384,
+                "af": 0.09068315065001274,
+                "homozygote_count": 144,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.11707654000000005,
+                  "popmax_population": "nfe"
+                }
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505462-A-G",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 10484
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 26560
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8582
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 13644
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 16088
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 71144
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 4680
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 24070
+                  }
+                ],
+                "ac": 1,
+                "an": 175252,
+                "af": 0.000005706068974961769,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "genome": null,
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505464-G-C",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 10534
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 1,
+                    "an": 26584
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8588
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 13638
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 16122
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 71596
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 4712
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 24098
+                  }
+                ],
+                "ac": 1,
+                "an": 175872,
+                "af": 0.000005685953420669578,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 8710
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 846
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 1560
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 3476
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 15432
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 1088
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 1,
+                "an": 31402,
+                "af": 0.0000318451054072989,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505483-C-G",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 10902
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 26618
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8634
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 13790
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 16410
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 73502
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 4768
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 24306
+                  }
+                ],
+                "ac": 0,
+                "an": 178930,
+                "af": 0,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["AC0"],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 8718
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 846
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 1560
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 3476
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 15430
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 1088
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 1,
+                "an": 31408,
+                "af": 0.00003183902190524707,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505520-G-A",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 10080
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 25842
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8582
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 24,
+                    "an": 13124
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 16190
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 69140
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 4662
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 23864
+                  }
+                ],
+                "ac": 24,
+                "an": 171484,
+                "af": 0.0001399547479648247,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.001260869999999997,
+                  "popmax_population": "eas"
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 8712
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 846
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 1,
+                    "an": 1558
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 3476
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 15430
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 1088
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 1,
+                "an": 31400,
+                "af": 0.00003184713375796178,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["RF"],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:gnomad_r2_1_non_cancer:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": null,
+          "variants": [
+            {
+              "variant_id": "1-55505447-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": null,
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 200,
+                    "an": 8706
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 71,
+                    "an": 848
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 54,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 186,
+                    "an": 1560
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 351,
+                    "an": 3474
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1876,
+                    "an": 15420
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 108,
+                    "an": 1086
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 2846,
+                "an": 31384,
+                "af": 0.09068315065001274,
+                "homozygote_count": 144,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.11707654000000005,
+                  "popmax_population": "nfe"
+                }
+              },
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505520-G-A",
+              "consequence": "missense_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 9420
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 25740
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 8368
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 23,
+                    "an": 12852
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 16182
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 65110
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 4512
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 23830
+                  }
+                ],
+                "ac": 23,
+                "an": 166014,
+                "af": 0.00013854253255749516,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": [],
+                "faf95": {
+                  "popmax": 0.0012228099999999965,
+                  "popmax_population": "eas"
+                }
+              },
+              "genome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 8712
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 846
+                  },
+                  {
+                    "id": "asj",
+                    "ac": 0,
+                    "an": 290
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 1,
+                    "an": 1558
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 3476
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 15430
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 1088
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 0
+                  }
+                ],
+                "ac": 1,
+                "an": 31400,
+                "af": 0.00003184713375796178,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": ["RF"],
+                "faf95": {
+                  "popmax": null,
+                  "popmax_population": null
+                }
+              },
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  "list-gene:exac:PCSK9": {
+    "status": 200,
+    "body": {
+      "data": {
+        "gene": {
+          "chrom": "1",
+          "canonical_transcript_id": "ENST00000302118",
+          "mane_select_transcript": null,
+          "variants": [
+            {
+              "variant_id": "1-55505475-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 3508
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 1110
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 2332
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 360
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 1,
+                    "an": 14444
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 204
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 8684
+                  }
+                ],
+                "ac": 1,
+                "an": 30642,
+                "af": 0.000032634945499641017,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": null,
+              "joint": null
+            },
+            {
+              "variant_id": "1-55505477-C-T",
+              "consequence": "5_prime_UTR_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 3498
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 1,
+                    "an": 1102
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 2300
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 358
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 14364
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 204
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 0,
+                    "an": 8676
+                  }
+                ],
+                "ac": 1,
+                "an": 30502,
+                "af": 0.0000327847354271851,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": null,
+              "joint": null
+            },
+            {
+              "variant_id": "1-55516839-C-T",
+              "consequence": "intron_variant",
+              "transcript_id": "ENST00000302118",
+              "lof": null,
+              "flags": [],
+              "exome": {
+                "populations": [
+                  {
+                    "id": "afr",
+                    "ac": 0,
+                    "an": 192
+                  },
+                  {
+                    "id": "amr",
+                    "ac": 0,
+                    "an": 92
+                  },
+                  {
+                    "id": "eas",
+                    "ac": 0,
+                    "an": 132
+                  },
+                  {
+                    "id": "fin",
+                    "ac": 0,
+                    "an": 0
+                  },
+                  {
+                    "id": "nfe",
+                    "ac": 0,
+                    "an": 2718
+                  },
+                  {
+                    "id": "oth",
+                    "ac": 0,
+                    "an": 118
+                  },
+                  {
+                    "id": "sas",
+                    "ac": 1,
+                    "an": 7488
+                  }
+                ],
+                "ac": 1,
+                "an": 10740,
+                "af": 0.00009310986964618249,
+                "homozygote_count": 0,
+                "hemizygote_count": 0,
+                "filters": []
+              },
+              "genome": null,
+              "joint": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}

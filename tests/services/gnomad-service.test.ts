@@ -3,8 +3,9 @@
  * coherence validation, the by-symbol/by-id gene routing, the region parser,
  * how coverage buckets are selected and summarized, how upstream failures are
  * classified, the best-effort liftover hint, the dataset lineage table,
- * hemizygote_count sourcing on list rows, and co-occurrence labelling and
- * refusals. The fetch-seam tests fake only global
+ * hemizygote_count sourcing on list rows, the per-group columns of a
+ * populations list, and co-occurrence labelling and refusals. The fetch-seam
+ * tests fake only global
  * fetch, so the real retry loop, fetchWithTimeout, response validation, and the
  * sanitizer all run; everything here is deterministic and offline-safe.
  * @module tests/services/gnomad-service.test
@@ -22,6 +23,7 @@ import {
 import type { Dataset } from '@/services/gnomad/types.js';
 import { UPSTREAM_CALL_BUDGET_MS } from '@/services/upstream-deadline.js';
 import { fakeCoverage, LIVE_COVERAGE } from '../helpers/fake-gnomad-coverage.js';
+import { fakeGnomadGraphql, type GraphqlRequest } from '../helpers/fake-gnomad-graphql.js';
 import {
   CDKN2A_R2_1_GENE,
   CDKN2A_STOP_GAINED_R4,
@@ -41,7 +43,11 @@ import {
   fafVariant,
   fakeFafLists,
   fakeFafVariants,
+  fakePopulationLists,
+  POPULATION_LISTS,
   selectedFafFields,
+  selectedPopulationRecords,
+  selectedRowGeneFields,
   selectedTranscriptFields,
 } from '../helpers/live-faf.js';
 import { fakeSubsetCoverage } from '../helpers/live-subsets.js';
@@ -887,6 +893,272 @@ describe("GnomadService.listGeneVariants — the consequence's transcript", () =
 
     expect(marks(await list('region', '4-45000004-45000004'))).toEqual([
       ['4-45000004-T-C', null, null],
+    ]);
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/82
+describe("GnomadService.listGeneVariants — each row's gene (#82)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const list = (
+    kind: 'gene' | 'transcript' | 'region',
+    value: string,
+    dataset: 'gnomad_r4' | 'gnomad_r2_1' | 'exac' = 'gnomad_r4',
+  ) =>
+    svc.listGeneVariants(
+      { kind, value },
+      {},
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+  const genes = (
+    rows: { variant_id: string; transcript_id: unknown; gene_id: unknown; gene_symbol: unknown }[],
+  ) => rows.map((row) => [row.variant_id, row.transcript_id, row.gene_id, row.gene_symbol]);
+  /** A live region row's ID, consequence, transcript, and gene fields as gnomAD sent them; its callsets left out. */
+  const regionRow = (
+    variant_id: string,
+    consequence: string | null,
+    transcript_id: string | null,
+    gene_id: string | null,
+    gene_symbol: string | null,
+  ) => ({
+    variant_id,
+    consequence,
+    transcript_id,
+    gene_id,
+    gene_symbol,
+    flags: [],
+    exome: null,
+    genome: null,
+    joint: null,
+  });
+  const BSND_38 = ['ENSG00000162399', 'BSND'] as const;
+  const PCSK9 = ['ENSG00000169174', 'PCSK9'] as const;
+
+  /** Each list document the four targets send, from a reply with no rows. */
+  async function sentDocuments(): Promise<GraphqlRequest[]> {
+    const requests = fakeGnomadGraphql(() =>
+      Response.json({
+        data: {
+          region: { variants: [] },
+          transcript: { chrom: '1', variants: [] },
+          gene: { chrom: '1', variants: [] },
+        },
+      }),
+    );
+    for (const target of [
+      { kind: 'region', value: '1-55010000-55045000' },
+      { kind: 'gene', value: 'PCSK9' },
+      { kind: 'gene', value: 'ENSG00000169174' },
+      { kind: 'transcript', value: 'ENST00000302118' },
+    ] as const) {
+      await list(target.kind, target.value);
+    }
+    return requests;
+  }
+
+  it('selects no per-row gene field on a gene or transcript list document', async () => {
+    const [, bySymbol, byId, transcript] = await sentDocuments();
+
+    for (const request of [bySymbol, byId, transcript]) {
+      expect(selectedRowGeneFields(request as GraphqlRequest)).toEqual([]);
+    }
+  });
+
+  it("selects each region row's gene, and the gene and transcript roots' own", async () => {
+    const [region, bySymbol, byId, transcript] = (await sentDocuments()).map((request) =>
+      request.query.replace(/\s+/g, ' '),
+    );
+
+    expect(selectedRowGeneFields({ query: region ?? '', variables: {} })).toEqual([
+      'gene_id',
+      'gene_symbol',
+    ]);
+    for (const gene of [bySymbol, byId]) {
+      expect(gene).toMatch(/\) \{ chrom gene_id symbol canonical_transcript_id /);
+    }
+    expect(transcript).toMatch(
+      /\) \{ chrom gene_id gene \{ symbol \} variants\(dataset: \$dataset\)/,
+    );
+  });
+
+  it('reads each gnomad_r4 region row its own gene: BSND, PCSK9 on its three transcripts, none without a transcript', async () => {
+    // Live rows of 1-55010000-55045000, which spans BSND and PCSK9, captured 2026-11-24 (UTC).
+    serveData({
+      region: {
+        variants: [
+          regionRow('1-55010000-C-A', '3_prime_UTR_variant', 'ENST00000651561', ...BSND_38),
+          regionRow('1-55017173-G-A', null, null, null, null),
+          regionRow('1-55039447-G-T', '5_prime_UTR_variant', 'ENST00000673726', ...PCSK9),
+          regionRow('1-55039549-G-T', '5_prime_UTR_variant', 'ENST00000302118', ...PCSK9),
+          regionRow('1-55040305-T-G', '5_prime_UTR_variant', 'ENST00000673903', ...PCSK9),
+        ],
+      },
+    });
+
+    expect(genes(await list('region', '1-55010000-55045000'))).toEqual([
+      ['1-55010000-C-A', 'ENST00000651561', ...BSND_38],
+      ['1-55017173-G-A', null, null, null],
+      ['1-55039447-G-T', 'ENST00000673726', ...PCSK9],
+      ['1-55039549-G-T', 'ENST00000302118', ...PCSK9],
+      ['1-55040305-T-G', 'ENST00000673903', ...PCSK9],
+    ]);
+  });
+
+  it.each([
+    [
+      'gnomad_r2_1',
+      '1-55475673-55510673',
+      [
+        regionRow('1-55475673-C-A', '3_prime_UTR_variant', 'ENST00000371265', ...BSND_38),
+        regionRow('1-55476561-T-C', null, null, null, null),
+        regionRow('1-55505224-G-A', '5_prime_UTR_variant', 'ENST00000302118', ...PCSK9),
+        regionRow('1-55505896-G-A', '5_prime_UTR_variant', 'ENST00000543384', ...PCSK9),
+      ],
+    ],
+    [
+      'exac',
+      '1-55475673-55510673',
+      [regionRow('1-55505475-C-T', '5_prime_UTR_variant', 'ENST00000302118', ...PCSK9)],
+    ],
+  ] as const)(
+    'reads each %s region row its own gene, as on gnomad_r4',
+    async (dataset, region, variants) => {
+      // Live GRCh37 rows of the same two genes, captured 2026-11-24 (UTC).
+      serveData({ region: { variants } });
+
+      expect(genes(await list('region', region, dataset))).toEqual(
+        variants.map((row) => [row.variant_id, row.transcript_id, row.gene_id, row.gene_symbol]),
+      );
+    },
+  );
+
+  it('reads a region row whose reply carries no gene fields as null, never from its transcript', async () => {
+    serveData({ region: { variants: [PCSK9_R2_1_REGION_ROW] } });
+
+    expect(genes(await list('region', '1-55505647-55505647', 'gnomad_r2_1'))).toEqual([
+      ['1-55505647-G-T', 'ENST00000302118', null, null],
+    ]);
+  });
+
+  it('keeps a region row with a gene ID but no symbol as gnomAD names it', async () => {
+    serveData({
+      region: {
+        variants: [regionRow('9-21968220-C-A', 'intron_variant', 'ENST1', 'ENSG00000264545', null)],
+      },
+    });
+
+    expect(genes(await list('region', '9-21968220-21968220'))).toEqual([
+      ['9-21968220-C-A', 'ENST1', 'ENSG00000264545', null],
+    ]);
+  });
+
+  it("gives every gene row the target's gene from the document root, a row without a transcript included", async () => {
+    serveData({
+      gene: {
+        ...PCSK9_R4_GENE,
+        gene_id: 'ENSG00000169174',
+        symbol: 'PCSK9',
+        variants: [...PCSK9_R4_GENE.variants, INTERGENIC_R4_ROW],
+      },
+    });
+
+    expect(genes(await list('gene', 'PCSK9'))).toEqual([
+      ['1-55039838-A-G', 'ENST00000302118', ...PCSK9],
+      ['1-55044012-T-A', 'ENST00000673903', ...PCSK9],
+      ['4-45000004-T-C', null, ...PCSK9],
+    ]);
+  });
+
+  it('gives a GRCh37 gene row its root gene too (gnomad_r2_1)', async () => {
+    serveData({ gene: { ...CDKN2A_R2_1_GENE, gene_id: 'ENSG00000147889', symbol: 'CDKN2A' } });
+
+    expect(genes(await list('gene', 'CDKN2A', 'gnomad_r2_1'))).toEqual([
+      ['9-21968154-G-T', 'ENST00000498124', 'ENSG00000147889', 'CDKN2A'],
+      ['9-21968212-A-G', 'ENST00000579122', 'ENSG00000147889', 'CDKN2A'],
+    ]);
+  });
+
+  it.each([
+    ['gnomad_r4', 'ENST00000302118'],
+    ['gnomad_r2_1', 'ENST00000543384'],
+  ] as const)(
+    "gives every %s transcript row its gene from the root's gene_id and gene.symbol",
+    async (dataset, transcriptId) => {
+      serveData({
+        transcript: {
+          chrom: '1',
+          gene_id: 'ENSG00000169174',
+          gene: { symbol: 'PCSK9' },
+          variants: PCSK9_R4_GENE.variants.map((row) => ({ ...row, transcript_id: transcriptId })),
+        },
+      });
+
+      expect(genes(await list('transcript', transcriptId, dataset))).toEqual([
+        ['1-55039838-A-G', transcriptId, ...PCSK9],
+        ['1-55044012-T-A', transcriptId, ...PCSK9],
+      ]);
+    },
+  );
+
+  it('gives all 4,544 live PCSK9 gnomad_r4 rows PCSK9 without selecting a per-row gene field', async () => {
+    const requests = fakeFafLists();
+
+    const rows = await list('gene', 'PCSK9');
+
+    expect(rows).toHaveLength(4544);
+    expect(selectedRowGeneFields(requests[0] as GraphqlRequest)).toEqual([]);
+    expect(rows.every((row) => row.gene_id === PCSK9[0] && row.gene_symbol === PCSK9[1])).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ['gnomad_r4', '1-55039974-55039974'],
+    ['gnomad_r2_1', '1-55505647-55505647'],
+    ['exac', '1-55505647-55505647'],
+  ] as const)('selects the gene fields on every %s region row', async (dataset, region) => {
+    const requests = fakeFafLists();
+
+    const rows = await list('region', region, dataset);
+
+    expect(selectedRowGeneFields(requests[0] as GraphqlRequest)).toEqual([
+      'gene_id',
+      'gene_symbol',
+    ]);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.gene_id === PCSK9[0] && row.gene_symbol === PCSK9[1])).toBe(
+      true,
+    );
+  });
+
+  it('places gene_id and gene_symbol just ahead of transcript_id, every other column in its order', async () => {
+    serveData({ region: { variants: [PCSK9_R2_1_REGION_ROW] } });
+
+    const [row] = await list('region', '1-55505647-55505647', 'gnomad_r2_1');
+
+    expect(Object.keys(row ?? {})).toEqual([
+      'variant_id',
+      'af',
+      'ac',
+      'an',
+      'consequence',
+      'consequence_class',
+      'homozygote_count',
+      'hemizygote_count',
+      'faf95_max',
+      'faf95_max_group',
+      'source',
+      'flags',
+      'exome_filters',
+      'genome_filters',
+      'qc_status',
+      'gene_id',
+      'gene_symbol',
+      'transcript_id',
+      'consequence_transcript',
+      'lof',
     ]);
   });
 });
@@ -1791,6 +2063,13 @@ describe('GnomadService — upstream failure classification at the fetch seam', 
     ['a 500 with an empty body', { status: 500, body: '' }],
     ['a 500 with no body', { status: 500, body: null }],
     ['a 502 gateway page', { status: 502, body: 'Bad Gateway' }],
+    [
+      "a 502 proxy's HTML error page",
+      {
+        status: 502,
+        body: '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1></body></html>',
+      },
+    ],
   ])('retries %s four times, then fails as upstream_unavailable', async (_label, reply) => {
     const fetch = fakeReplies(reply);
     expectRetriedOut(await settle(listRegion));
@@ -3879,5 +4158,365 @@ describe('GnomadService.listGeneVariants — lof, lof_confidence, and the annota
       expect(request.variables.annotations).toBe(false);
       expect(selectedTranscriptFields(request)).toEqual(['lof']);
     }
+  });
+});
+
+// https://github.com/cyanheads/gnomad-genetics-mcp-server/issues/81
+describe("GnomadService.listGeneVariants — each genetic-ancestry group's ac, an, and af under populations (#81)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Each release's groups on its list rows as of 2026-11-24 (#81's table), alphabetical. */
+  const GROUPS = {
+    gnomad_r4: ['afr', 'ami', 'amr', 'asj', 'eas', 'fin', 'mid', 'nfe', 'remaining', 'sas'],
+    gnomad_r3: ['afr', 'ami', 'amr', 'asj', 'eas', 'fin', 'mid', 'nfe', 'oth', 'sas'],
+    gnomad_r2_1: ['afr', 'amr', 'asj', 'eas', 'fin', 'nfe', 'oth', 'sas'],
+    exac: ['afr', 'amr', 'eas', 'fin', 'nfe', 'oth', 'sas'],
+  } as const;
+  const groupKeys = (groups: readonly string[]) =>
+    groups.flatMap((group) => [`ac_${group}`, `an_${group}`, `af_${group}`]);
+  const isGroupKey = (key: string) => /^(ac|an|af)_/.test(key);
+
+  /** The gene lists POPULATION_LISTS captured, as dataset and gene. */
+  const CAPTURED = [
+    ['gnomad_r4', 'PCSK9'],
+    ['gnomad_r4', 'CFTR'],
+    ['gnomad_r4_non_ukb', 'PCSK9'],
+    ['gnomad_r3', 'PCSK9'],
+    ['gnomad_r3_non_v2', 'PCSK9'],
+    ['gnomad_r2_1', 'PCSK9'],
+    ['gnomad_r2_1_non_cancer', 'PCSK9'],
+    ['exac', 'PCSK9'],
+  ] as const;
+  type Gene = (typeof CAPTURED)[number][1];
+
+  const list = (
+    dataset: Dataset,
+    gene: Gene = 'PCSK9',
+    filters: Parameters<typeof svc.listGeneVariants>[1] = {},
+  ) =>
+    svc.listGeneVariants(
+      { kind: 'gene', value: gene },
+      { populations: true, ...filters },
+      svc.resolveDatasetContext(dataset),
+      createMockContext(),
+    );
+
+  /** One row of a populations list over the live replies. */
+  async function rowOf(dataset: Dataset, gene: Gene, variantId: string, passOnly = false) {
+    fakePopulationLists();
+    const row = (await list(dataset, gene, { passOnly })).find((r) => r.variant_id === variantId);
+    if (!row) throw new Error(`No ${variantId} row on ${dataset}`);
+    return row;
+  }
+  const groupOf = (row: Record<string, unknown>, group: string) => [
+    row[`ac_${group}`],
+    row[`an_${group}`],
+    row[`af_${group}`],
+  ];
+
+  /** A record of a captured row as gnomAD sent it. */
+  interface RawRecord {
+    ac: number | null;
+    an: number | null;
+    filters?: string[];
+    populations?: { id: string; ac: number; an: number }[];
+  }
+  interface RawRow {
+    exome: RawRecord | null;
+    genome: RawRecord | null;
+    joint: RawRecord | null;
+    variant_id: string;
+  }
+  const rawRows = (dataset: Dataset, gene: Gene) => {
+    const reply = POPULATION_LISTS[`list-gene:${dataset}:${gene}`];
+    if (!reply) throw new Error(`No live ${gene} list on ${dataset}`);
+    return (reply.body as { data: { gene: { variants: RawRow[] } } }).data.gene.variants;
+  };
+  /**
+   * #81's source rule read off the raw records: gnomAD's joint totals where it
+   * carries an AC, else the carried callsets summed — under pass_only only the
+   * passing ones, when any passed.
+   */
+  function rawTotals(row: RawRow, passOnly: boolean): [number, number] {
+    if (row.joint?.ac != null) return [row.joint.ac, row.joint.an ?? 0];
+    const carried = [row.exome, row.genome].filter((r): r is RawRecord => r?.ac != null);
+    const passing = carried.filter((r) => r.filters?.length === 0);
+    const read = passOnly && passing.length > 0 ? passing : carried;
+    return [
+      read.reduce((sum, r) => sum + (r.ac ?? 0), 0),
+      read.reduce((sum, r) => sum + (r.an ?? 0), 0),
+    ];
+  }
+
+  it("reads CFTR 7-117642566-G-A (W1282X) on gnomad_r4 from gnomAD's joint groups: asj 279/29578, nfe 90/1179672", async () => {
+    const row = await rowOf('gnomad_r4', 'CFTR', '7-117642566-G-A');
+
+    expect(row).toMatchObject({ ac: 421, an: 1_613_376 });
+    expect(groupOf(row, 'asj')).toEqual([279, 29_578, 279 / 29_578]);
+    expect(groupOf(row, 'nfe')).toEqual([90, 1_179_672, 90 / 1_179_672]);
+  });
+
+  /** Each case a live row's group as gnomAD's records give it: [ac, an, af]. */
+  it.each([
+    // gnomad_r4: the joint record, whose ami an is 0 here; whole under pass_only (exome AC0).
+    ['gnomad_r4', 'PCSK9', '1-55056227-G-A', false, 'ami', [0, 0, null]],
+    ['gnomad_r4', 'PCSK9', '1-55039793-C-T', true, 'nfe', [3, 1_154_940, 3 / 1_154_940]],
+    // gnomad_r4_non_ukb: no joint data. Its exomes list no ami, so an exome-only row has none.
+    ['gnomad_r4_non_ukb', 'PCSK9', '1-55039763-C-A', false, 'ami', [null, null, null]],
+    ['gnomad_r4_non_ukb', 'PCSK9', '1-55039771-C-T', false, 'ami', [0, 912, 0]],
+    ['gnomad_r4_non_ukb', 'PCSK9', '1-55039771-C-T', false, 'nfe', [3, 392_234, 3 / 392_234]],
+    // Exome AS_VQSR|AC0 beside a passing genome: summed, then dropped under pass_only.
+    ['gnomad_r4_non_ukb', 'PCSK9', '1-55056227-GGGCGGA-G', false, 'afr', [3, 402, 3 / 402]],
+    ['gnomad_r4_non_ukb', 'PCSK9', '1-55056227-GGGCGGA-G', true, 'afr', [3, 186, 3 / 186]],
+    ['gnomad_r3', 'PCSK9', '1-55039774-C-T', false, 'oth', [224, 2_092, 224 / 2_092]],
+    ['gnomad_r3', 'PCSK9', '1-55056227-GGGCGGA-G', false, 'mid', [0, 0, null]],
+    ['gnomad_r3_non_v2', 'PCSK9', '1-55039774-C-T', false, 'ami', [267, 908, 267 / 908]],
+    // gnomad_r2_1: an RF genome beside a passing exome, then an AC0 exome beside a passing genome.
+    ['gnomad_r2_1', 'PCSK9', '1-55505520-G-A', false, 'eas', [25, 14_682, 25 / 14_682]],
+    ['gnomad_r2_1', 'PCSK9', '1-55505520-G-A', true, 'eas', [24, 13_124, 24 / 13_124]],
+    ['gnomad_r2_1', 'PCSK9', '1-55505483-C-G', false, 'nfe', [1, 88_932, 1 / 88_932]],
+    ['gnomad_r2_1', 'PCSK9', '1-55505483-C-G', true, 'nfe', [1, 15_430, 1 / 15_430]],
+    ['gnomad_r2_1', 'PCSK9', '1-55505447-C-T', false, 'sas', [0, 0, null]],
+    ['gnomad_r2_1_non_cancer', 'PCSK9', '1-55505520-G-A', true, 'eas', [23, 12_852, 23 / 12_852]],
+    ['exac', 'PCSK9', '1-55516839-C-T', false, 'fin', [0, 0, null]],
+    ['exac', 'PCSK9', '1-55516839-C-T', false, 'sas', [1, 7_488, 1 / 7_488]],
+  ] as const)(
+    'reads %s %s %s (pass_only %s) %s as %j',
+    async (dataset, gene, variantId, passOnly, group, expected) => {
+      const row = await rowOf(dataset, gene, variantId, passOnly);
+
+      expect(groupOf(row, group)).toEqual(expected);
+    },
+  );
+
+  it.each(
+    CAPTURED.flatMap(([dataset, gene]) => [
+      [dataset, gene, false],
+      [dataset, gene, true],
+    ]),
+  )(
+    "sums every %s %s row's non-null ac_ and an_ groups to its ac and an (pass_only %s)",
+    async (dataset, gene, passOnly) => {
+      fakePopulationLists();
+      const raw = rawRows(dataset, gene);
+
+      const rows = await list(dataset, gene, { passOnly });
+
+      expect(rows.map((row) => row.variant_id)).toEqual(raw.map((row) => row.variant_id));
+      for (const [i, row] of rows.entries()) {
+        const totals = rawTotals(raw[i] as RawRow, passOnly);
+        const cells = Object.entries(row).filter(
+          (cell): cell is [string, number] => isGroupKey(cell[0]) && cell[1] != null,
+        );
+        const sum = (prefix: string) =>
+          cells.filter(([key]) => key.startsWith(prefix)).reduce((s, [, value]) => s + value, 0);
+        expect([row.variant_id, sum('ac_'), sum('an_')]).toEqual([row.variant_id, ...totals]);
+        expect([row.ac, row.an]).toEqual(totals);
+      }
+    },
+  );
+
+  it.each([
+    ['gnomad_r4', GROUPS.gnomad_r4, 30],
+    ['gnomad_r4_non_ukb', GROUPS.gnomad_r4, 30],
+    ['gnomad_r3', GROUPS.gnomad_r3, 30],
+    ['gnomad_r3_non_v2', GROUPS.gnomad_r3, 30],
+    ['gnomad_r2_1', GROUPS.gnomad_r2_1, 24],
+    ['gnomad_r2_1_non_cancer', GROUPS.gnomad_r2_1, 24],
+    ['exac', GROUPS.exac, 21],
+  ] as const)(
+    'appends its groups to every %s row, %j ×3 (%i columns), after lof and after the annotations',
+    async (dataset, groups, count) => {
+      fakePopulationLists();
+
+      const plain = await list(dataset);
+      const annotated = await list(dataset, 'PCSK9', { annotations: true });
+
+      expect(groupKeys(groups)).toHaveLength(count);
+      for (const row of plain) {
+        expect(Object.keys(row).slice(-count - 1)).toEqual(['lof', ...groupKeys(groups)]);
+      }
+      for (const row of annotated) {
+        expect(Object.keys(row).slice(-count - 6)).toEqual([
+          'lof',
+          ...['hgvsc', 'hgvsp', 'lof_filter', 'lof_flags', 'rsids'],
+          ...groupKeys(groups),
+        ]);
+      }
+    },
+  );
+
+  it('makes columns of the dataset’s groups alone: never the id "" totals, oth on gnomad_r4, remaining on gnomad_r3, or an unknown ID', async () => {
+    /** A captured reply with `extra` groups listed on each row's `record`. */
+    const withExtra = (
+      key: string,
+      record: 'joint' | 'genome',
+      extra: RawRecord['populations'],
+    ) => {
+      const body = structuredClone(POPULATION_LISTS[key]?.body) as {
+        data: { gene: { variants: RawRow[] } };
+      };
+      for (const row of body.data.gene.variants) row[record]?.populations?.push(...(extra ?? []));
+      return body.data;
+    };
+    serveData(
+      withExtra('list-gene:gnomad_r4:CFTR', 'joint', [
+        { id: 'oth', ac: 7, an: 70 },
+        { id: 'XX', ac: 1, an: 2 },
+      ]),
+    );
+    const r4 = await list('gnomad_r4', 'CFTR');
+    vi.restoreAllMocks();
+    serveData(
+      withExtra('list-gene:gnomad_r3:PCSK9', 'genome', [
+        { id: 'remaining', ac: 5, an: 50 },
+        { id: 'XX', ac: 1, an: 2 },
+      ]),
+    );
+    const r3 = await list('gnomad_r3');
+
+    for (const [rows, groups] of [
+      [r4, GROUPS.gnomad_r4],
+      [r3, GROUPS.gnomad_r3],
+    ] as const) {
+      for (const row of rows) {
+        expect(Object.keys(row).filter(isGroupKey)).toEqual(groupKeys(groups));
+      }
+    }
+    const w1282x: Record<string, unknown> =
+      r4.find((row) => row.variant_id === '7-117642566-G-A') ?? {};
+    // gnomAD's id "" entry carries the joint totals (421/1613376): read, it would double them.
+    expect(['ac_', 'an_', 'af_', 'ac_oth', 'ac_XX'].filter((key) => key in w1282x)).toEqual([]);
+    expect(GROUPS.gnomad_r4.reduce((sum, g) => sum + Number(w1282x[`ac_${g}`]), 0)).toBe(421);
+    const common: Record<string, unknown> =
+      r3.find((row) => row.variant_id === '1-55039774-C-T') ?? {};
+    expect(['ac_remaining', 'ac_XX'].filter((key) => key in common)).toEqual([]);
+    expect(GROUPS.gnomad_r3.reduce((sum, g) => sum + Number(common[`an_${g}`]), 0)).toBe(152_222);
+  });
+
+  /** Every DatasetId. */
+  const DATASETS = [
+    'gnomad_r4',
+    'gnomad_r4_non_ukb',
+    'gnomad_r3',
+    'gnomad_r3_controls_and_biobanks',
+    'gnomad_r3_non_cancer',
+    'gnomad_r3_non_neuro',
+    'gnomad_r3_non_topmed',
+    'gnomad_r3_non_v2',
+    'gnomad_r2_1',
+    'gnomad_r2_1_controls',
+    'gnomad_r2_1_non_neuro',
+    'gnomad_r2_1_non_cancer',
+    'gnomad_r2_1_non_topmed',
+    'exac',
+  ] as const;
+
+  /** One target per list document: region, gene by symbol, gene by ID, transcript. */
+  const TARGETS = [
+    { kind: 'region', value: '1-55505647-55505647' },
+    { kind: 'gene', value: 'PCSK9' },
+    { kind: 'gene', value: 'ENSG00000169174' },
+    { kind: 'transcript', value: 'ENST00000302118' },
+  ] as const;
+  /** Answer every list document with no rows, recording the requests sent. */
+  const fakeEmptyLists = () =>
+    fakeGnomadGraphql(() =>
+      Response.json({
+        data: {
+          region: { variants: [] },
+          transcript: { chrom: '1', gene_id: null, gene: null, variants: [] },
+          gene: { chrom: '1', variants: [] },
+        },
+      }),
+    );
+
+  it.each(DATASETS)(
+    'selects on %s the groups of the records its rows read, on all four list documents',
+    async (dataset) => {
+      const requests = fakeEmptyLists();
+      const dsCtx = svc.resolveDatasetContext(dataset);
+      for (const target of TARGETS) {
+        await svc.listGeneVariants(target, { populations: true }, dsCtx, createMockContext());
+      }
+
+      const joint = dataset === 'gnomad_r4';
+      expect(requests).toHaveLength(4);
+      for (const request of requests) {
+        expect(request.query).toContain(
+          '$jointPopulations: Boolean!, $callsetPopulations: Boolean!',
+        );
+        expect(request.variables).toMatchObject({
+          jointPopulations: joint,
+          callsetPopulations: !joint,
+        });
+        expect(selectedPopulationRecords(request)).toEqual(joint ? ['joint'] : ['exome', 'genome']);
+      }
+    },
+  );
+
+  /**
+   * Everything a populations document adds to its default-form sibling: each
+   * callset's groups (exome, genome), the joint record's, and the two flags
+   * gating them, each followed by the count it appears.
+   */
+  const POPULATIONS_ADDITIONS = [
+    [' populations @include(if: $callsetPopulations) { id ac an }', 2],
+    [' populations @include(if: $jointPopulations) { id ac an }', 1],
+    [', $jointPopulations: Boolean!, $callsetPopulations: Boolean!', 1],
+  ] as const;
+
+  it.each(DATASETS)(
+    'sends each %s populations list document as its default-form sibling plus only the groups selections and their two flags',
+    async (dataset) => {
+      const requests = fakeEmptyLists();
+      const dsCtx = svc.resolveDatasetContext(dataset);
+      for (const target of TARGETS) {
+        await svc.listGeneVariants(target, {}, dsCtx, createMockContext());
+        await svc.listGeneVariants(target, { populations: true }, dsCtx, createMockContext());
+      }
+
+      const joint = dataset === 'gnomad_r4';
+      expect(requests).toHaveLength(2 * TARGETS.length);
+      for (let i = 0; i < requests.length; i += 2) {
+        const [plain, grouped] = [requests[i], requests[i + 1]] as [GraphqlRequest, GraphqlRequest];
+        let rest = grouped.query;
+        for (const [addition, times] of POPULATIONS_ADDITIONS) {
+          const parts = rest.split(addition);
+          expect([addition, parts.length - 1]).toEqual([addition, times]);
+          rest = parts.join('');
+        }
+        expect(rest).toBe(plain.query);
+        expect(plain.query).not.toMatch(/\bpopulations\b/);
+        expect(grouped.variables).toEqual({
+          ...plain.variables,
+          jointPopulations: joint,
+          callsetPopulations: !joint,
+        });
+      }
+    },
+  );
+
+  it("rejects with the caller's abort when cancelled while a populations list request is in flight", async () => {
+    const controller = new AbortController();
+    const cancelled = new Error('client cancelled');
+    const reply = POPULATION_LISTS['list-gene:gnomad_r4:PCSK9'];
+    if (!reply) throw new Error('No live gnomad_r4 PCSK9 list');
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      // The caller cancels mid-request; a fetch whose signal fired rejects with its reason.
+      controller.abort(cancelled);
+      init?.signal?.throwIfAborted();
+      return Response.json(reply.body, { status: reply.status });
+    });
+
+    await expect(
+      svc.listGeneVariants(
+        { kind: 'gene', value: 'PCSK9' },
+        { populations: true },
+        svc.resolveDatasetContext('gnomad_r4'),
+        createMockContext({ signal: controller.signal }),
+      ),
+    ).rejects.toBe(cancelled);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

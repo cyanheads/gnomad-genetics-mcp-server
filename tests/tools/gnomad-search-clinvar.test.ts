@@ -401,7 +401,7 @@ describe('gnomad_search_clinvar handler — canvas enabled', () => {
     const input = gnomadSearchClinvar.input.parse({ gene: 'LDLR', canvas_id: REUSED });
     const result = await gnomadSearchClinvar.handler(input, ctx as never);
 
-    expect(canvas.acquire).toHaveBeenCalledWith(REUSED, ctx);
+    expect(canvas.acquire).toHaveBeenCalledWith(REUSED, ctx, { signal: ctx.signal });
     expect(result).toMatchObject({
       spilled: false,
       canvas_id: REUSED,
@@ -1617,7 +1617,10 @@ describe('gnomad_search_clinvar notice and staging matrix (#21, #33, #35)', () =
       total: shape.rows,
     });
     expect(sc.notice).toBe(parts.length ? parts.join(' ') : undefined);
-    if (acquires) expect(canvas.acquire).toHaveBeenCalledWith(cell.canvasId, expect.anything());
+    if (acquires)
+      expect(canvas.acquire).toHaveBeenCalledWith(cell.canvasId, expect.anything(), {
+        signal: expect.any(AbortSignal),
+      });
     else expect(canvas.acquire).not.toHaveBeenCalled();
     expect(dropped).toEqual(acquires && !staged ? ['clinvar_variants'] : []);
 

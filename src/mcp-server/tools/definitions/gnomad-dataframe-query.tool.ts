@@ -65,7 +65,7 @@ const widthSql = (view: string, offset: number) =>
 const gnomadDataframeQueryDef = tool('gnomad_dataframe_query', {
   title: 'gnomad-genetics-mcp-server: dataframe query',
   description:
-    'Run a read-only SQL SELECT against a canvas table staged by gnomad_list_gene_variants (table gene_variants) or gnomad_search_clinvar (table clinvar_variants) and return one page of the result. Use the canvas_id and table_name those tools returned to rank by allele frequency, group by consequence class, count loss-of-function variants, or filter the full set the inline preview only sampled. A page holds up to limit rows (default 25, capped at 3,000) and ends before a row that would take its row JSON past 4,000,000 characters; continue from next_offset until it is null. Each page re-runs the SQL, so stable paging needs an ORDER BY over a unique key (such as variant_id) and an unchanged table. Paging reaches the server row cap: above it total is null and later rows are reachable only by filtering or aggregating in SQL. BIGINT values, such as the staged ac and an counts and COUNT(*), arrive as JSON strings to keep their precision; CAST(col AS INTEGER) returns a number. SELECT statements only — writes, DDL, and file/HTTP table functions are rejected by the canvas gate. Call gnomad_dataframe_describe first to discover staged table and column names.',
+    'Run a read-only SQL SELECT against a canvas table staged by gnomad_list_gene_variants (table gene_variants) or gnomad_search_clinvar (table clinvar_variants) and return one page of the result. Use the canvas_id and table_name those tools returned to rank by allele frequency, group by consequence class, count loss-of-function variants, or filter the full set the inline preview only sampled. A page holds up to limit rows and ends before a row that would take its row JSON past 4,000,000 characters (the page character ceiling); continue from next_offset until it is null. Each page re-runs the SQL, so stable paging needs an ORDER BY over a unique key (such as variant_id) and an unchanged table. Paging reaches the server row cap: above it total is null and later rows are reachable only by filtering or aggregating in SQL. BIGINT values, such as the staged ac and an counts and COUNT(*), arrive as JSON strings to keep their precision; CAST(col AS INTEGER) returns a number. SELECT statements only — writes, DDL, and file/HTTP table functions are rejected by the canvas gate. Call gnomad_dataframe_describe first to discover staged table and column names.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
   input: z.object({
     canvas_id: CanvasIdSchema.describe(
@@ -75,20 +75,15 @@ const gnomadDataframeQueryDef = tool('gnomad_dataframe_query', {
       .string()
       .min(1)
       .describe(
-        'Read-only SQL SELECT. Reference tables by the names the staging tool returned (e.g. gene_variants). Add an ORDER BY over a unique key when paging.',
+        'Read-only SQL SELECT, naming tables as the staging tool returned them (e.g. gene_variants).',
       ),
     offset: z
       .number()
       .int()
       .min(0)
       .default(0)
-      .describe(
-        'Row offset of the page to return. Start at 0, then pass next_offset from the previous page.',
-      ),
-    limit: limitSchema(
-      LIMIT,
-      'Maximum rows on the page. A page also ends before a row that would take its row JSON past 4,000,000 characters.',
-    ),
+      .describe('Row offset of the page; pass next_offset from the previous page.'),
+    limit: limitSchema(LIMIT, 'Maximum rows on the page.'),
   }),
   output: z.object({
     rows: z
@@ -104,14 +99,9 @@ const gnomadDataframeQueryDef = tool('gnomad_dataframe_query', {
     returned: z
       .number()
       .describe(
-        'Rows on this page — fewer than limit when the end of the result, the row cap, or the 4,000,000-character row-JSON ceiling ends it early.',
+        'Rows on this page — fewer than limit when the end of the result, the row cap, or the page character ceiling ends it early.',
       ),
-    total: z
-      .number()
-      .nullable()
-      .describe(
-        'Rows the SQL produced; null when the result exceeds the server row cap, whose later rows paging cannot reach.',
-      ),
+    total: z.number().nullable().describe('Rows the SQL produced; null above the server row cap.'),
     truncated: z
       .boolean()
       .describe(
@@ -120,9 +110,7 @@ const gnomadDataframeQueryDef = tool('gnomad_dataframe_query', {
     next_offset: z
       .number()
       .nullable()
-      .describe(
-        'offset for the next page; null when no page follows (end of the result, or the row cap reached).',
-      ),
+      .describe('offset for the next page; null at the end of the result or the row cap.'),
   }),
   enrichment: {
     notice: z
@@ -141,7 +129,7 @@ const gnomadDataframeQueryDef = tool('gnomad_dataframe_query', {
     {
       reason: 'row_too_large',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The first row of the requested page serializes to more than 4,000,000 characters of JSON, so no page can hold it.',
+      when: 'The first row of the requested page alone exceeds the page character ceiling.',
       recovery:
         'Select a narrower projection — fewer columns, or long text cut with substr(column, 1, 500) — so each row stays under 4,000,000 characters.',
     },

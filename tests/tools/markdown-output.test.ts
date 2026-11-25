@@ -129,6 +129,8 @@ describe('Markdown output preserves upstream values', () => {
       exome_filters: '',
       genome_filters: null,
       qc_status: 'pass' as const,
+      gene_id: 'ENSG00000147889',
+      gene_symbol: 'CDKN2A',
       transcript_id: 'ENST00000304494',
       consequence_transcript: 'mane_select' as const,
       lof: null,

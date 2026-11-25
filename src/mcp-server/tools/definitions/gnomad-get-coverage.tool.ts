@@ -21,12 +21,7 @@ import {
 } from '../shared-schemas.js';
 
 const fractionOver = (depth: number) =>
-  z
-    .number()
-    .nullable()
-    .describe(
-      `Fraction of samples covered at ≥${depth}×, averaged over the summarized buckets (gnomAD rounds each bucket's fraction up to the next 0.01); null when no data.`,
-    );
+  z.number().nullable().describe(`Fraction of samples at ≥${depth}×; null when no data.`);
 
 const CoverageSummarySchema = z
   .object({
@@ -36,39 +31,33 @@ const CoverageSummarySchema = z
     positions: z
       .number()
       .describe(
-        'Target bases inside the summarized buckets: of start..stop for a region, of the exons ±75 bp for a gene or transcript. Falls short of the target when the track has no records at its edges (typically outside the exome capture); those bases are left out, not counted as zero depth.',
+        'Target bases inside the summarized buckets; short of target_positions when the track has no records at the target’s edges, typically outside the exome capture.',
       ),
     target_positions: z
       .number()
       .describe(
-        'Total target bases: start..stop inclusive for a region, merged exons ±75 bp for a gene or transcript.',
+        'Total target bases: start..stop inclusive for a region, the merged padded exons for a gene or transcript.',
       ),
     missing_positions: z
       .number()
       .describe(
-        'Target bases without returned coverage buckets (target_positions minus positions). Callability is unknown for these bases; they are not measured zero depth.',
+        'Target bases without returned coverage buckets (target_positions minus positions).',
       ),
     bucket_count: z
       .number()
       .describe(
-        'Number of gnomAD coverage buckets summarized: every returned bucket overlapping the target bases. gnomAD returns every bucket between the first and last record of a track, so an empty bucket inside that span counts as zero depth; buckets past the outermost records are not returned and not counted.',
+        'Coverage buckets summarized: every returned bucket overlapping the target. gnomAD returns each bucket between a track’s first and last record, so an empty one inside that span counts as zero depth.',
       ),
-    bucket_size: z
-      .number()
-      .describe(
-        'Width of each gnomAD coverage bucket in bp: 1 for a region spanning under 850 bp, otherwise about 1/500 of the queried size. Depth and fraction values describe buckets, not single bases.',
-      ),
+    bucket_size: z.number().describe('Width of each coverage bucket in bp.'),
     mean_depth: z
       .number()
       .nullable()
-      .describe(
-        'Mean read depth: the average of the summarized buckets’ mean depths; null when no data.',
-      ),
+      .describe('Mean of the summarized buckets’ mean depths; null when no data.'),
     median_depth: z
       .number()
       .nullable()
       .describe(
-        'Median, across the summarized buckets, of each bucket’s depth (the average of its per-base medians); null when no data.',
+        'Median of the summarized buckets’ depths (each the average of its per-base medians); null when no data.',
       ),
     fraction_over_1: fractionOver(1),
     fraction_over_5: fractionOver(5),
@@ -80,12 +69,14 @@ const CoverageSummarySchema = z
     fraction_over_50: fractionOver(50),
     fraction_over_100: fractionOver(100),
   })
-  .describe('Aggregate coverage for one callset track over the target.');
+  .describe(
+    'Coverage for one track over the target, summarized from its buckets rather than single bases: each fraction is the mean of the buckets’ fractions, which gnomAD rounds up to the next 0.01.',
+  );
 
 export const gnomadGetCoverage = tool('gnomad_get_coverage', {
   title: 'gnomad-genetics-mcp-server: get coverage',
   description:
-    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. gnomAD reports coverage in buckets: 1 bp for a region spanning under 850 bp, wider for larger targets (bucket_size), and a gene or transcript is summarized over its exons ±75 bp, not its introns. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. gnomAD publishes no coverage for subsets, so a subset dataset reads its parent release (gnomad_r4_non_ukb reads gnomad_r4) over all the parent’s samples: coverage_dataset names the release read, and a notice says so. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
+    'Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region — mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1× through 100×), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region; a gene or transcript is summarized over its exons ±75 bp, not its introns. gnomAD reports coverage in buckets (bucket_size): 1 bp for a region spanning under 850 bp, otherwise about 1/500 of the queried span. Target bases with no returned bucket (missing_positions) are left out of the figures: their callability is unknown, not zero depth. gnomAD publishes no coverage for subsets, so a subset dataset reads its parent release (gnomad_r4_non_ukb reads gnomad_r4) over all the parent’s samples, named in coverage_dataset. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     gene: optionalGeneField,
@@ -93,23 +84,19 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       .string()
       .trim()
       .optional()
-      .describe(
-        'Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.',
-      ),
+      .describe('Ensembl transcript ID (e.g. ENST00000302118).'),
     region: normalizedRegion(
       z.union([
         z.literal(''),
         z
           .string()
           .regex(REGION_REGEX, 'Region must be chrom-start-stop, e.g. 1-55039447-55064852.')
-          .describe(
-            'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852) on chromosome 1–22, X, or Y, optional chr prefix.',
-          ),
+          .describe('Region as chrom-start-stop.'),
       ]),
     )
       .optional()
       .describe(
-        'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852): chromosome 1–22, X, or Y with an optional chr prefix (mitochondrial regions are not served) and a span (stop − start) under 2,500,000 bp. Mutually exclusive with gene and transcript_id.',
+        'Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852) on chromosome 1–22, X, or Y with an optional chr prefix, spanning (stop − start) under 2,500,000 bp.',
       ),
     coverage_source: z
       .enum(['exome', 'genome'])
@@ -134,7 +121,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
     coverage_dataset: z
       .string()
       .describe(
-        'The gnomAD release the coverage was read from: dataset itself for a release, the parent release for a subset (gnomad_r4 for gnomad_r4_non_ukb, gnomad_r3 for the gnomad_r3 subsets, gnomad_r2_1 for the gnomad_r2_1 subsets), since gnomAD publishes no subset coverage.',
+        'The gnomAD release the coverage was read from: dataset itself, or a subset’s parent release.',
       ),
     reference_genome: z.string().describe('Effective reference build.'),
   }),
@@ -143,7 +130,7 @@ export const gnomadGetCoverage = tool('gnomad_get_coverage', {
       .string()
       .optional()
       .describe(
-        'Disclosure that a subset dataset was read from its parent release, and of missing target bases, missing supported tracks, or an explicitly requested unsupported track. Missing data leaves callability unknown.',
+        'Set when a subset was read from its parent release, target bases or a supported track returned no coverage, or the requested track is unsupported.',
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },

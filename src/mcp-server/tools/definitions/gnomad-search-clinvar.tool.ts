@@ -59,8 +59,9 @@ const LIMIT: CountLimit = {
  */
 const CANVAS_ON = isCanvasEnabled();
 
+/** The one statement of the staging workflow; the canvas fields and the notice point back to it. */
 const STAGING_DESCRIPTION = CANVAS_ON
-  ? 'A window too large to inline is staged on a DataCanvas table named clinvar_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank or count across the window. A window that fits inline stages no table unless canvas_id is supplied.'
+  ? 'A window too large to inline is staged on a DataCanvas table named clinvar_variants, returned as canvas_id and table_name beside an inline preview — call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank or count across the window.'
   : 'Every row of the window is returned inline.';
 const CANVAS_OFF_FIELD = 'Always empty: DataCanvas is off on this server.';
 
@@ -78,7 +79,7 @@ const FiltersSchema = z
       .nullable()
       .describe('The min_review_stars floor; null when omitted.'),
   })
-  .describe('Row filters applied to this window; offset and limit are not filters.');
+  .describe('Row filters applied to this window.');
 type Filters = z.infer<typeof FiltersSchema>;
 
 /** clinvar_variants column types, declared from ClinVarRow in its field order. */
@@ -118,7 +119,7 @@ const ClinVarRowSchema = z
       .string()
       .nullable()
       .describe(
-        'Germline classification (e.g. Pathogenic); null when none, as on a record ClinVar classifies only for somatic use (see oncogenicity_classification and clinical_impact_classification).',
+        'Germline classification (e.g. Pathogenic); null when none, as on a somatic-only record.',
       ),
     review_status: z
       .string()
@@ -145,9 +146,7 @@ const ClinVarRowSchema = z
     oncogenicity_review_status: z
       .string()
       .nullable()
-      .describe(
-        'Review status of the oncogenicity classification; null when none. No star rating is derived from it.',
-      ),
+      .describe('Review status of the oncogenicity classification; null when none.'),
     oncogenicity_last_evaluated: z
       .string()
       .nullable()
@@ -166,9 +165,7 @@ const ClinVarRowSchema = z
     clinical_impact_review_status: z
       .string()
       .nullable()
-      .describe(
-        'Review status of the clinical-impact classification; null when none. No star rating is derived from it.',
-      ),
+      .describe('Review status of the clinical-impact classification; null when none.'),
     clinical_impact_last_evaluated: z
       .string()
       .nullable()
@@ -188,34 +185,34 @@ const ClinVarRowSchema = z
     rsids: z
       .string()
       .describe(
-        'dbSNP rsIDs (e.g. rs11591147), semicolon-joined; empty when none. One rsID can match several gnomAD variants, so prefer grch38_variant_id for gnomad_get_variant.',
+        'dbSNP rsIDs, semicolon-joined; empty when none. One rsID can match several gnomAD variants, so prefer grch38_variant_id.',
       ),
     grch38_variant_id: z
       .string()
       .nullable()
       .describe(
-        "gnomAD variant ID (chrom-pos-ref-alt, GRCh38) for gnomad_get_variant with a GRCh38 dataset (gnomad_r4, gnomad_r3, or one of their subsets). Derived from the canonical SPDI for SNVs, MNVs, and delins; for deletions, insertions, and duplications, taken from gnomAD's ClinVar mapping by VariationID. Most of those indel IDs are absent from gnomAD's callsets, so gnomad_get_variant answers variant_not_found: absence evidence to pair with gnomad_get_coverage. Null for mitochondrial variants, multi-allele, copy-number, and imprecise structural records, and for records newer than gnomAD's ClinVar release, which lags NCBI's.",
+        "chrom-pos-ref-alt ID for gnomad_get_variant on a GRCh38 dataset such as the default gnomad_r4: from the canonical SPDI for SNVs, MNVs, and delins, and from gnomAD's ClinVar mapping for deletions, insertions, and duplications. Most of those indel IDs are absent from gnomAD's callsets, so gnomad_get_variant answers variant_not_found: absence evidence to pair with gnomad_get_coverage. Null for mitochondrial, multi-allele, copy-number, and imprecise structural records, and for records newer than gnomAD's ClinVar release.",
       ),
   })
-  .describe('One ClinVar variant row — also the canvas table column set.');
+  .describe('One ClinVar variant record.');
 
 export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
   title: 'gnomad-genetics-mcp-server: search clinvar',
-  description: `Search ClinVar (NCBI E-utilities) for a gene and return its classified variants — the germline clinical significance with its review status, 0–4 star rating, and conditions; any somatic oncogenicity or clinical-impact classification with its own review status and tumor types; molecular consequences, submission counts, and gnomAD-compatible identifiers (canonical SPDI, rsIDs, and a GRCh38 variant ID for gnomad_get_variant, derived from the SPDI or filled from gnomAD's own ClinVar mapping) — turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by germline clinical_significance (e.g. pathogenic) and a minimum germline star rating. Each call returns one window of up to limit ClinVar records (default ${LIMIT.default}): total_found is the ClinVar count for the search terms (the match count for a mapped significance term alone, a candidate count once min_review_stars or any other term applies), and next_offset continues through the rest via offset. ${STAGING_DESCRIPTION} Keyless, but honors NCBI_API_KEY for a higher rate limit. Credit: ClinVar, NCBI.`,
+  description: `Search ClinVar (NCBI E-utilities) for a gene and return its classified variants — the germline clinical significance with its review status, 0–4 star rating, and conditions; any somatic oncogenicity or clinical-impact classification with its own review status and tumor types; molecular consequences, submission counts, and gnomAD-compatible identifiers (canonical SPDI, rsIDs, and a GRCh38 variant ID for gnomad_get_variant) — turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by germline clinical_significance (e.g. pathogenic) and a minimum germline star rating. Each call returns one window of up to limit ClinVar records; next_offset continues via offset. min_review_stars, and a clinical_significance term outside the seven that search ClinVar's classification index, are applied after the fetch, so their windows can hold fewer rows than limit and total_found is then a candidate count. ${STAGING_DESCRIPTION} Keyless, but honors NCBI_API_KEY for a higher rate limit. Credit: ClinVar, NCBI.`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     // Tool-specific override of the shared geneField: ClinVar indexes HGNC
     // symbols only. .describe() clones the field, so the shared fragment other
     // tools reuse (which legitimately accept ENSG IDs) is left untouched.
     gene: geneField.describe(
-      'Gene HGNC symbol (e.g. PCSK9). ClinVar indexes HGNC symbols only — Ensembl gene IDs (ENSG…) are not resolved here, unlike the other gnomAD tools; resolve one to its symbol via ensembl_lookup_gene.',
+      'HGNC gene symbol (e.g. PCSK9). ClinVar indexes symbols only, so resolve an Ensembl gene ID to its symbol via ensembl_lookup_gene.',
     ),
     clinical_significance: z
       .string()
       .trim()
       .optional()
       .describe(
-        "Filter by ClinVar germline classification, case-insensitive, matched as whole words; underscores read as spaces. Somatic oncogenicity and clinical-impact classifications are never matched. pathogenic (Pathogenic and Likely pathogenic, combined and low-penetrance forms included), likely pathogenic, uncertain significance, vus (Uncertain significance plus VUS-high, VUS-mid, and VUS-low), likely benign, benign (Benign and Likely benign), and conflicting search ClinVar's germline classification index, so on their own their windows hold matching records only. Any other term (e.g. risk factor) narrows a text search, and its windows can return fewer rows than limit. Blank means no filter.",
+        "Filter by ClinVar germline classification, case-insensitive, matched as whole words, underscores read as spaces; somatic classifications are never matched. pathogenic (Pathogenic and Likely pathogenic, combined and low-penetrance forms included), likely pathogenic, uncertain significance, vus (Uncertain significance plus VUS-high, VUS-mid, and VUS-low), likely benign, benign (Benign and Likely benign), and conflicting search ClinVar's classification index, so alone their windows hold matching records only. Any other term (e.g. risk factor) narrows a text search.",
       ),
     min_review_stars: z
       .number()
@@ -223,9 +220,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .min(0)
       .max(4)
       .optional()
-      .describe(
-        "Keep only variants whose germline classification has at least this gold-star rating (0–4). ClinVar's review-status search also matches the review status of a somatic classification, and those records are dropped after the fetch, so a window can return fewer rows than limit.",
-      ),
+      .describe('Minimum gold-star rating of the germline classification.'),
     offset: z
       .number()
       .int()
@@ -233,15 +228,12 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .max(CLINVAR_OFFSET_MAX)
       .default(0)
       .describe(
-        'Zero-based position of the first ClinVar record in this window. Pass next_offset from the previous call to continue.',
+        'Zero-based position of the first ClinVar record in this window; pass next_offset to continue.',
       ),
-    limit: limitSchema(
-      LIMIT,
-      'ClinVar records to fetch in this window. A mapped clinical_significance term alone narrows the search to matching records, so its windows are full; min_review_stars and any other significance term are also applied after the fetch, so their windows can return fewer rows.',
-    ),
+    limit: limitSchema(LIMIT, 'ClinVar records to fetch in this window.'),
     canvas_id: CanvasIdSchema.optional().describe(
       CANVAS_ON
-        ? 'Optional canvas ID from a prior call, to reuse the same canvas. When supplied, each search writes its window to the clinvar_variants table on that canvas, replacing (not appending to) the previous one — even when the window fits inline; a window with no rows removes the table. An Ensembl gene ID searches nothing and leaves the canvas as it was. Omit to stage on a fresh canvas only when the window is too large to inline.'
+        ? 'canvas_id from a prior call. Each search then writes its window to clinvar_variants on that canvas, replacing the previous table even when the window fits inline; a window with no rows removes it. Omit to stage on a fresh canvas only when the window is too large to inline.'
         : 'Ignored: DataCanvas is off on this server, so every row of the window is returned inline.',
     ),
   }),
@@ -250,28 +242,26 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
     filters: FiltersSchema,
     preview: z
       .array(ClinVarRowSchema)
-      .describe(
-        "Inline preview rows — the immediate answer; the window's every row unless spilled.",
-      ),
+      .describe("The window's rows inline: all of them unless spilled."),
     canvas_id: z
       .string()
       .describe(
         CANVAS_ON
-          ? 'Canvas holding table_name (or the canvas_id you supplied) — pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the window fit inline and no canvas_id was supplied, the gene was an Ensembl ID (nothing was searched), or the canvas is disabled.'
+          ? 'Canvas holding table_name, or the canvas_id supplied; empty when this call used no canvas (the window fit inline with no canvas_id, or the gene was an Ensembl ID and nothing was searched).'
           : CANVAS_OFF_FIELD,
       ),
     table_name: z
       .string()
       .describe(
         CANVAS_ON
-          ? "Canvas table this call staged (clinvar_variants), holding this window's rows — inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table."
+          ? "Canvas table this call staged (clinvar_variants), holding this window's rows; empty when this call staged no table."
           : CANVAS_OFF_FIELD,
       ),
     spilled: z
       .boolean()
       .describe(
         CANVAS_ON
-          ? "True when this window's rows exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all."
+          ? 'True when the window was too large to inline, so preview holds its first rows and table_name all of them.'
           : 'Always false: DataCanvas is off on this server, so preview holds every row of the window.',
       ),
     total: z
@@ -279,9 +269,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .describe('Rows in this window that passed the filters, including any beyond the preview.'),
     total_found: z
       .number()
-      .describe(
-        'ClinVar records matching the gene and filter terms across every window, counted by the search before the post-fetch filters: the match count for a mapped significance term alone, a candidate count once min_review_stars or any other term applies.',
-      ),
+      .describe("ClinVar's count of records for the gene and filter terms, across every window."),
     truncated: z
       .boolean()
       .describe('True when ClinVar records remain past this window; continue with next_offset.'),
@@ -300,9 +288,7 @@ export const gnomadSearchClinvar = tool('gnomad_search_clinvar', {
       .string()
       .optional()
       .describe(
-        CANVAS_ON
-          ? "Guidance on a clamped limit, completeness (the offset that continues the list, or an offset past the end), no-match results, the staged table with its next steps (gnomad_dataframe_describe, then gnomad_dataframe_query), gnomAD's ClinVar mapping when it could not fill missing grch38_variant_id values, and which identifier to pass to gnomad_get_variant."
-          : "Guidance on a clamped limit, completeness (the offset that continues the list, or an offset past the end), no-match results, gnomAD's ClinVar mapping when it could not fill missing grch38_variant_id values, and which identifier to pass to gnomad_get_variant.",
+        `Guidance on a clamped limit, completeness (the offset that continues the list, or an offset past the end), no-match results, ${CANVAS_ON ? 'the staged table, ' : ''}gnomAD's ClinVar mapping when it could not fill missing grch38_variant_id values, and which identifier to pass to gnomad_get_variant.`,
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },

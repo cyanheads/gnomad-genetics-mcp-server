@@ -32,75 +32,41 @@ const CALIBRATION_CAVEAT =
 
 const READING_RULE = `gnomAD's browser reads p_compound_heterozygous above ${TRANS_THRESHOLD} as likely in trans (on different haplotypes) and below ${CIS_THRESHOLD} as likely in cis (on the same haplotype), and makes no prediction between those, when the probability is null, or when both variants are singletons seen in the same individual; each population reads the same way from its own counts.`;
 
+/**
+ * The key order (variant_ids[0] first) is stated once in the tool description,
+ * and the overall counts carry the full field descriptions; each population's
+ * copy of a count object or the probability reads the same way, so it takes a
+ * short describe of its own.
+ */
+const samples = (note = 'Sample count.') => z.number().describe(note);
+
 const GenotypeCountsSchema = z
   .object({
-    ref_ref: z
-      .number()
-      .describe('Samples homozygous reference for variant_ids[0] and for variant_ids[1].'),
-    ref_het: z
-      .number()
-      .describe(
-        'Samples homozygous reference for variant_ids[0] and heterozygous for variant_ids[1].',
-      ),
-    ref_hom: z
-      .number()
-      .describe(
-        'Samples homozygous reference for variant_ids[0] and homozygous alternate for variant_ids[1].',
-      ),
-    het_ref: z
-      .number()
-      .describe(
-        'Samples heterozygous for variant_ids[0] and homozygous reference for variant_ids[1].',
-      ),
-    het_het: z
-      .number()
-      .describe(
-        'Samples heterozygous for both variants — the carriers whose phase the probability estimates.',
-      ),
-    het_hom: z
-      .number()
-      .describe(
-        'Samples heterozygous for variant_ids[0] and homozygous alternate for variant_ids[1].',
-      ),
-    hom_ref: z
-      .number()
-      .describe(
-        'Samples homozygous alternate for variant_ids[0] and homozygous reference for variant_ids[1].',
-      ),
-    hom_het: z
-      .number()
-      .describe(
-        'Samples homozygous alternate for variant_ids[0] and heterozygous for variant_ids[1].',
-      ),
-    hom_hom: z
-      .number()
-      .describe('Samples homozygous alternate for variant_ids[0] and for variant_ids[1].'),
+    ref_ref: samples(),
+    ref_het: samples(),
+    ref_hom: samples(),
+    het_ref: samples(),
+    het_het: samples('Samples heterozygous for both — the carriers whose phase is estimated.'),
+    het_hom: samples(),
+    hom_ref: samples(),
+    hom_het: samples(),
+    hom_hom: samples(),
   })
   .describe(
-    "Samples per genotype pair. Each key names variant_ids[0]'s genotype first and variant_ids[1]'s second: ref (homozygous reference), het (heterozygous), hom (homozygous alternate).",
+    'Samples per genotype pair: ref (homozygous reference), het (heterozygous), hom (homozygous alternate).',
   ) satisfies z.ZodType<CooccurrenceGenotypeCounts>;
+
+const haplotypes = (note = 'Estimated haplotype count.') => z.number().describe(note);
 
 const HaplotypeCountsSchema = z
   .object({
-    ref_ref: z
-      .number()
-      .describe('Estimated haplotypes carrying the reference allele of both variants.'),
-    ref_alt: z
-      .number()
-      .describe(
-        'Estimated haplotypes carrying the reference allele of variant_ids[0] and the alternate allele of variant_ids[1].',
-      ),
-    alt_ref: z
-      .number()
-      .describe(
-        'Estimated haplotypes carrying the alternate allele of variant_ids[0] and the reference allele of variant_ids[1].',
-      ),
-    alt_alt: z
-      .number()
-      .describe('Estimated haplotypes carrying the alternate allele of both variants (in cis).'),
+    ref_ref: haplotypes(),
+    ref_alt: haplotypes(),
+    alt_ref: haplotypes(),
+    alt_alt: haplotypes('Estimated haplotypes with both alternate alleles (in cis).'),
   })
   .describe(
-    "gnomAD's estimated haplotype counts, fractional where samples heterozygous for both variants leave the phase to its EM estimate. Each key names variant_ids[0]'s allele first and variant_ids[1]'s second.",
+    "gnomAD's estimated haplotype counts per allele pair, fractional where samples heterozygous for both variants leave the phase to its EM estimate.",
   ) satisfies z.ZodType<CooccurrenceHaplotypeCounts>;
 
 const ProbabilitySchema = z
@@ -117,11 +83,13 @@ const PopulationSchema = z
       .describe(
         'Genetic-ancestry group of gnomAD v2.1 exomes: afr, amr, asj, eas, fin, nfe, oth, sas.',
       ),
-    p_compound_heterozygous: ProbabilitySchema,
-    genotype_counts: GenotypeCountsSchema,
-    haplotype_counts: HaplotypeCountsSchema,
+    p_compound_heterozygous: ProbabilitySchema.describe(
+      "This group's probability, read as the overall one.",
+    ),
+    genotype_counts: GenotypeCountsSchema.describe("This group's genotype counts."),
+    haplotype_counts: HaplotypeCountsSchema.describe("This group's haplotype counts."),
   })
-  .describe("One genetic-ancestry group's co-occurrence counts, keyed like the overall counts.");
+  .describe("One genetic-ancestry group's co-occurrence counts.");
 
 /**
  * gnomAD's browser reading of one set of co-occurrence counts: no prediction
@@ -149,7 +117,7 @@ const probability = (p: number | null) => (p === null ? 'null (no probability)' 
 
 export const gnomadGetVariantCooccurrence = tool('gnomad_get_variant_cooccurrence', {
   title: 'gnomad-genetics-mcp-server: get variant cooccurrence',
-  description: `Estimate whether two variants in the same gene sit on different haplotypes (in trans — compound heterozygous) or on the same one (in cis), from gnomAD v2.1 exome genotypes: the probability of compound heterozygosity and the genotype and haplotype counts behind it, overall and per genetic-ancestry group. For a proband with two rare heterozygous variants in a recessive gene and no parental samples. Takes exactly two GRCh37 chrom-pos-ref-alt IDs and always reads gnomad_r2_1, the only dataset gnomAD serves co-occurrence for, echoing it with GRCh37. A GRCh38 ID can name a different GRCh37 variant or none, so convert GRCh38 IDs first: gnomad_get_variant on dataset gnomad_r2_1 lists their GRCh37 IDs as candidates only when the ID fails there as variant_not_found_other_build; an ID gnomad_r2_1 finds returns a different variant. gnomAD answers only for two different coding or UTR variants of one gene, both in its exome samples with exome allele frequency of 5% or less; any other pair fails as cooccurrence_unavailable with gnomAD's reason. Each count key names variant_ids[0]'s genotype or allele first and variant_ids[1]'s second, and variant_ids can list the pair in another order than sent. The notice carries gnomAD's calibration caveat and its browser's reading of the probability. gnomAD's browser also notes when the pair is found in phase as a multi-nucleotide variant; this tool does not check for one.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
+  description: `Estimate whether two variants in the same gene sit on different haplotypes (in trans — compound heterozygous) or on the same one (in cis), from gnomAD v2.1 exome genotypes: the probability of compound heterozygosity and the genotype and haplotype counts behind it, overall and per genetic-ancestry group. For a proband with two rare heterozygous variants in a recessive gene and no parental samples. Takes exactly two GRCh37 chrom-pos-ref-alt IDs and always reads gnomad_r2_1, the only dataset gnomAD serves co-occurrence for. A GRCh38 ID can name a different GRCh37 variant or none, so convert GRCh38 IDs first: gnomad_get_variant on dataset gnomad_r2_1 lists their GRCh37 IDs as candidates only when the ID fails there as variant_not_found_other_build; an ID gnomad_r2_1 finds returns a different variant. gnomAD answers only for two different coding or UTR variants of one gene, both in its exome samples with exome allele frequency of 5% or less; any other pair fails as cooccurrence_unavailable with gnomAD's reason. Every count key names variant_ids[0]'s genotype or allele first and variant_ids[1]'s second, and variant_ids can list the pair in another order than sent. The notice carries gnomAD's calibration caveat and its browser's reading of the probability. gnomAD's browser also notes when the pair is found in phase as a multi-nucleotide variant; this tool does not check for one.\nData source: gnomAD (Broad Institute) — https://gnomad.broadinstitute.org/`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
   input: z.object({
     variants: z
@@ -161,24 +129,14 @@ export const gnomadGetVariantCooccurrence = tool('gnomad_get_variant_cooccurrenc
           ),
       )
       .length(2)
-      .describe(
-        'The two variants to phase, as GRCh37 chrom-pos-ref-alt IDs. Order does not matter: variant_ids in the output gives the order the counts use.',
-      ),
+      .describe('The two variants to phase, in any order.'),
   }),
   output: z.object({
     variant_ids: z
       .array(z.string())
-      .describe(
-        "The pair in gnomAD's order, which labels every count: variant_ids[0] is the first token of each key, variant_ids[1] the second. Can differ from the order sent.",
-      ),
-    dataset: z
-      .literal('gnomad_r2_1')
-      .describe(
-        'Dataset the counts come from — always gnomad_r2_1, the only one gnomAD serves co-occurrence for.',
-      ),
-    reference_genome: z
-      .literal('GRCh37')
-      .describe('Reference build of variant_ids — always GRCh37.'),
+      .describe("The pair in gnomAD's order, which labels every count."),
+    dataset: z.literal('gnomad_r2_1').describe('Dataset the counts come from.'),
+    reference_genome: z.literal('GRCh37').describe('Reference build of variant_ids.'),
     p_compound_heterozygous: ProbabilitySchema,
     genotype_counts: GenotypeCountsSchema,
     haplotype_counts: HaplotypeCountsSchema,
@@ -190,7 +148,7 @@ export const gnomadGetVariantCooccurrence = tool('gnomad_get_variant_cooccurrenc
     notice: z
       .string()
       .describe(
-        "gnomAD's calibration caveat and its browser's reading of the probability for this pair. When no sample carries both variants, it adds that the counts come from each variant's separate data and do not account for samples not covered at both sites; that coverage sentence appears only then.",
+        "gnomAD's calibration caveat and its browser's reading of the probability for this pair; when no sample carries both variants, also that the counts come from each variant's separate data and miss samples not covered at both sites.",
       ),
   },
   enrichmentTrailer: { notice: { render: escapeMarkdownInline } },
@@ -213,7 +171,7 @@ export const gnomadGetVariantCooccurrence = tool('gnomad_get_variant_cooccurrenc
     {
       reason: 'cooccurrence_unavailable',
       code: JsonRpcErrorCode.ValidationError,
-      when: "gnomAD refused the pair: the same variant twice, a variant absent from gnomAD v2.1 (as a GRCh38 ID usually is), variants in different genes or outside coding and UTR sequence, a variant with no exome call, or one with exome allele frequency above 5%. The message is gnomAD's reason.",
+      when: "gnomAD refused the pair — the same variant twice, one absent from gnomAD v2.1 (as a GRCh38 ID usually is), different genes, a variant outside coding and UTR sequence, or one with no exome call or a common exome frequency; the message is gnomAD's reason.",
       recovery:
         'Do not resend this pair: gnomAD phases only two different coding or UTR variants of one gene, both in its v2.1 exomes at allele frequency 5% or less. For GRCh38 IDs, run gnomad_get_variant on dataset gnomad_r2_1 and retry with the GRCh37 IDs in its candidates when an ID fails as variant_not_found_other_build.',
       thrownBy: 'service',

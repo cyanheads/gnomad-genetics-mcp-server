@@ -18,7 +18,7 @@ import { getCanvas } from '@/services/canvas-accessor.js';
 const gnomadDataframeDropDef = tool('gnomad_dataframe_drop', {
   title: 'gnomad-genetics-mcp-server: dataframe drop',
   description:
-    'Drop a named table from a canvas to reclaim memory. Opt-in and off by default — a deliberate mutation on the otherwise read-only research surface. Use the canvas_id and table_name from a prior staging call. Per-table TTL already reclaims memory automatically, so this is a convenience for operators who want manual control.',
+    'Drop a named table from a canvas to reclaim its memory before the per-table TTL does. Use the canvas_id and table_name from a prior staging call.',
   annotations: {
     readOnlyHint: false,
     destructiveHint: true,

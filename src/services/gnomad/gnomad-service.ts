@@ -22,6 +22,7 @@ import {
   upstreamGraphqlMessages,
   upstreamUnavailable,
 } from '@/services/upstream-error.js';
+import { upstreamUserAgent } from '@/services/upstream-user-agent.js';
 import { normalizeIdentifier } from './identifier-normalization.js';
 import {
   CLINVAR_BY_VARIANT_ID_QUERY,
@@ -30,15 +31,12 @@ import {
   GENE_CONSTRAINT_BY_SYMBOL_QUERY,
   GENE_COVERAGE_BY_ID_QUERY,
   GENE_COVERAGE_BY_SYMBOL_QUERY,
-  GENE_VARIANTS_BY_ID_QUERY,
-  GENE_VARIANTS_BY_SYMBOL_QUERY,
   liftoverQuery,
   REGION_COVERAGE_QUERY,
-  REGION_VARIANTS_QUERY,
   TRANSCRIPT_COVERAGE_QUERY,
-  TRANSCRIPT_VARIANTS_QUERY,
   VARIANT_BY_RSID_QUERY,
   VARIANT_COOCCURRENCE_QUERY,
+  VARIANT_LIST_QUERIES,
   VARIANT_ONLY_QUERY,
   VARIANT_QUERY,
   VARIANT_SEARCH_QUERY,
@@ -56,9 +54,12 @@ import {
   type GeneConstraint,
   type GeneVariantRow,
   type GenomeTarget,
+  type GroupColumns,
   type InSilicoPredictor,
   isCanonicalAncestry,
   type JointPopulationFreq,
+  LIST_ROW_GROUPS,
+  type ListRowGroup,
   type LofConfidence,
   type ParentDataset,
   type PopulationFreq,
@@ -225,20 +226,40 @@ export function listRowFafField({
 }
 
 /**
- * The variables every list document takes beside its target, dataset, and
- * build: the `@include` flag of each FAF selection, set from listRowFafField,
- * and the `annotations` flag of the opt-in HGVS, LOFTEE, and rsID columns.
+ * The record whose genetic-ancestry groups set a list row's per-group columns
+ * on a dataset — the record its overall counts come from: gnomAD's joint
+ * record on gnomad_r4, whose every row carries one; the callsets elsewhere,
+ * gnomad_r4_non_ukb included, whose rows carry no joint data.
+ */
+function listRowPopulations({ dataset }: DatasetContext): 'joint' | 'callset' {
+  return dataset === 'gnomad_r4' ? 'joint' : 'callset';
+}
+
+/**
+ * The variables a list document takes beside its target, dataset, and build:
+ * the `@include` flag of each FAF selection, set from listRowFafField, the
+ * `annotations` flag of the opt-in HGVS, LOFTEE, and rsID columns, and — on
+ * the `populations` form alone, so a default request is sent unchanged — the
+ * flag of each record's groups, set from listRowPopulations.
  */
 function listDocumentVariables(
   dsCtx: DatasetContext,
   annotations: boolean,
+  populations: boolean,
 ): Record<string, boolean> {
   const faf = listRowFafField(dsCtx);
-  return {
+  const variables = {
     jointFafmax: faf === 'joint_fafmax',
     callsetFafmax: faf === 'callset_fafmax',
     callsetFaf95: faf === 'callset_faf95',
     annotations,
+  };
+  if (!populations) return variables;
+  const groups = listRowPopulations(dsCtx);
+  return {
+    ...variables,
+    jointPopulations: groups === 'joint',
+    callsetPopulations: groups === 'callset',
   };
 }
 
@@ -632,11 +653,24 @@ const RawListSeqData = z
     /** Each FAF field is absent on a dataset whose list document does not include it (listRowFafField). */
     faf95: RawFaf95,
     fafmax: RawFafmax,
+    /**
+     * The record's genetic-ancestry groups, plus `id: ""` holding its totals:
+     * absent from a default request's reply, and from a record whose groups
+     * set no row on the dataset (listRowPopulations).
+     */
+    populations: z.array(RawPopulation.pick({ id: true, ac: true, an: true })).nullish(),
   })
   .nullable();
 
 const RawListVariant = z.object({
   variant_id: z.string(),
+  /**
+   * The gene of transcript_id, selected on region rows only: absent from every
+   * gene and transcript row, and read as null wherever absent. Null for a row
+   * without a transcript consequence.
+   */
+  gene_id: z.string().nullish(),
+  gene_symbol: z.string().nullish(),
   consequence: z.string().nullable(),
   /** Null for a variant with no transcript consequence (intergenic); absent reads as null. */
   transcript_id: z.string().nullish(),
@@ -655,8 +689,8 @@ const RawListVariant = z.object({
   exome: RawListSeqData,
   genome: RawListSeqData,
   /**
-   * The joint totals and `fafmax` only (see RawJointData): gnomAD's list joint
-   * type has no `faf95`. Absent reads as null.
+   * The joint totals, `fafmax`, and groups only (see RawJointData): gnomAD's
+   * list joint type has no `faf95`. Absent reads as null.
    */
   joint: RawListSeqData.unwrap().omit({ af: true, filters: true, faf95: true }).nullish(),
 });
@@ -667,17 +701,28 @@ const RawFeatureVariants = z.object({
 });
 
 /**
- * A gene's list also carries its primary transcripts. Both are nullable in
- * gnomAD's schema (no MANE Select on GRCh37); absent reads as null.
+ * A gene's list also carries the gene's ID and symbol, which every row takes,
+ * and its primary transcripts. The ID and symbol are non-null in gnomAD's
+ * schema, the primary transcripts nullable (no MANE Select on GRCh37); each
+ * absent field reads as null, as on a reply to a document that predates its
+ * selection.
  */
 const RawGeneVariants = RawFeatureVariants.extend({
+  gene_id: z.string().nullish(),
+  symbol: z.string().nullish(),
   canonical_transcript_id: z.string().nullish(),
   mane_select_transcript: z.object({ ensembl_id: z.string() }).nullish(),
 });
 
+/** A transcript's list also carries its gene, which every row takes; absent reads as null, as on RawGeneVariants. */
+const RawTranscriptVariants = RawFeatureVariants.extend({
+  gene_id: z.string().nullish(),
+  gene: z.object({ symbol: z.string() }).nullish(),
+});
+
 const VariantListResponse = z.object({
   gene: RawGeneVariants.nullable().optional(),
-  transcript: RawFeatureVariants.nullable().optional(),
+  transcript: RawTranscriptVariants.nullable().optional(),
   region: z
     .object({ variants: z.array(RawListVariant).nullable() })
     .nullable()
@@ -963,6 +1008,36 @@ function computeAf(ac: number | null | undefined, an: number | null | undefined)
   return ac / an;
 }
 
+/**
+ * A list row's per-group columns from the records its overall counts read:
+ * each of the dataset's groups summed across those records, gnomAD's counts
+ * kept (0 included); null for a group none of them lists; af null where an is
+ * 0. Only the dataset's groups become columns, so the `id: ""` totals entry
+ * and any other ID are never read.
+ */
+function groupColumns(
+  records: readonly (Pick<NonNullable<z.infer<typeof RawListSeqData>>, 'populations'> | null)[],
+  groups: readonly ListRowGroup[],
+): GroupColumns {
+  const sums = new Map<string, { ac: number; an: number }>();
+  for (const record of records) {
+    for (const { id, ac, an } of record?.populations ?? []) {
+      const sum = sums.get(id) ?? { ac: 0, an: 0 };
+      sum.ac += ac ?? 0;
+      sum.an += an ?? 0;
+      sums.set(id, sum);
+    }
+  }
+  const columns: GroupColumns = {};
+  for (const group of groups) {
+    const sum = sums.get(group);
+    columns[`ac_${group}`] = sum?.ac ?? null;
+    columns[`an_${group}`] = sum?.an ?? null;
+    columns[`af_${group}`] = sum ? computeAf(sum.ac, sum.an) : null;
+  }
+  return columns;
+}
+
 /** One record's counts, shared by the callset and joint group vectors, the per-callset view, and the joint overall. */
 function groupCounts(
   p: Omit<z.infer<typeof RawPopulation>, 'id'>,
@@ -1050,6 +1125,26 @@ function genePrimaryTranscript(
     return { id: gene.mane_select_transcript.ensembl_id, kind: 'mane_select' };
   }
   if (gene.canonical_transcript_id) return { id: gene.canonical_transcript_id, kind: 'canonical' };
+  return null;
+}
+
+/** The gene a list row names. */
+type ListRowGene = Pick<GeneVariantRow, 'gene_id' | 'gene_symbol'>;
+
+/**
+ * The gene every row of a gene or transcript list is on, read once from the
+ * document root; null on a region, whose rows each name their own.
+ */
+function listTargetGene(data: z.infer<typeof VariantListResponse>): ListRowGene | null {
+  if (data.gene) {
+    return { gene_id: data.gene.gene_id ?? null, gene_symbol: data.gene.symbol ?? null };
+  }
+  if (data.transcript) {
+    return {
+      gene_id: data.transcript.gene_id ?? null,
+      gene_symbol: data.transcript.gene?.symbol ?? null,
+    };
+  }
   return null;
 }
 
@@ -1198,7 +1293,11 @@ export class GnomadService {
           const timeoutMs = Math.min(this.timeoutMs, remainingBudget(deadline, signal, 'gnomAD'));
           const response = await fetchWithTimeout(this.baseUrl, timeoutMs, reqCtx, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json',
+              'user-agent': upstreamUserAgent(),
+            },
             body: JSON.stringify({ query, variables }),
             signal,
           }).catch((err: unknown) => {
@@ -1722,9 +1821,10 @@ export class GnomadService {
    * LOFTEE confidence, max-AF, and max-FAF; a row with a null af or faf95_max
    * is kept by the filter on it, and lofConfidence keeps only the rows whose
    * lof equals it. Returns the full normalized row set (the handler spills it):
-   * with annotations, each row an AnnotatedGeneVariantRow. passOnly selects the
-   * counts a row reads (see normalizeListVariant) but drops no row: the caller
-   * counts the QC-failed rows first, then drops them.
+   * with annotations, each row an AnnotatedGeneVariantRow; with populations,
+   * each row also carries its dataset's per-group columns (LIST_ROW_GROUPS),
+   * last. passOnly selects the counts a row reads (see normalizeListVariant)
+   * but drops no row: the caller counts the QC-failed rows first, then drops them.
    */
   async listGeneVariants(
     target: GenomeTarget,
@@ -1735,15 +1835,18 @@ export class GnomadService {
       maxAf?: number | undefined;
       maxFaf?: number | undefined;
       passOnly?: boolean | undefined;
+      populations?: boolean | undefined;
     },
     dsCtx: DatasetContext,
     ctx: Context,
   ): Promise<GeneVariantRow[]> {
     const deadline = Date.now() + UPSTREAM_CALL_BUDGET_MS;
     const annotations = filters.annotations ?? false;
+    const populations = filters.populations ?? false;
     const { query, variables } = this.buildTargetQuery(target, dsCtx, {
       kind: 'variants',
       annotations,
+      populations,
     });
     const data = await this.graphql(
       query,
@@ -1756,10 +1859,14 @@ export class GnomadService {
     assertFeatureFound(target, data, dsCtx);
     assertNuclearFeature(target, data.gene ?? data.transcript);
     const raw = (data.gene ?? data.transcript ?? data.region)?.variants ?? [];
-    // gnomAD's gene table marks consequences off the primary transcript on gene targets only.
-    const primary = data.gene ? genePrimaryTranscript(data.gene) : null;
+    const feature = {
+      // gnomAD's gene table marks consequences off the primary transcript on gene targets only.
+      primary: data.gene ? genePrimaryTranscript(data.gene) : null,
+      gene: listTargetGene(data),
+    };
+    const columns = { annotations, groups: populations ? LIST_ROW_GROUPS[dsCtx.parent] : null };
     const rows = raw.map((r) =>
-      this.normalizeListVariant(r, primary, filters.passOnly ?? false, annotations),
+      this.normalizeListVariant(r, feature, filters.passOnly ?? false, columns),
     );
     return rows.filter((row) => {
       if (filters.consequenceClass && row.consequence_class !== filters.consequenceClass)
@@ -1772,11 +1879,18 @@ export class GnomadService {
     });
   }
 
+  /**
+   * One list row. `feature` carries what the target's document root gives
+   * every row: its primary transcript (gene targets only) and its gene (null
+   * on a region, whose row names its own). `columns` names the opt-in columns
+   * the row carries: the annotations, and the per-group columns of `groups`
+   * (null without populations).
+   */
   private normalizeListVariant(
     r: RawListVariantT,
-    primary: ReturnType<typeof genePrimaryTranscript>,
+    feature: { primary: ReturnType<typeof genePrimaryTranscript>; gene: ListRowGene | null },
     passOnly: boolean,
-    annotations: boolean,
+    columns: { annotations: boolean; groups: readonly ListRowGroup[] | null },
   ): GeneVariantRow | AnnotatedGeneVariantRow {
     const { exome, genome, joint } = r;
     const exomeFilters = carriedFilters(exome);
@@ -1797,11 +1911,13 @@ export class GnomadService {
      * browser table drops it before merging (VariantList/filterVariants.ts); the
      * joint record is read whole there too. A row no callset passed keeps the
      * full sum, so qc_filtered, counted before the caller drops that row,
-     * matches the same rows with and without passOnly.
+     * matches the same rows with and without passOnly. The per-group columns
+     * read the same records, so they sum to ac and an.
      */
     const dropFailed = passOnly && qc === 'pass';
     const ex = !dropFailed || exomeFilters?.length === 0 ? exome : null;
     const ge = !dropFailed || genomeFilters?.length === 0 ? genome : null;
+    const records = joint?.ac != null ? [joint] : [ex, ge];
     const counts =
       joint?.ac != null
         ? {
@@ -1830,6 +1946,8 @@ export class GnomadService {
     if (exome?.ac != null) source.push('exome');
     if (genome?.ac != null) source.push('genome');
     const transcriptId = r.transcript_id ?? null;
+    const { primary } = feature;
+    const gene = feature.gene ?? r;
     const row: GeneVariantRow = {
       variant_id: r.variant_id,
       af: computeAf(counts.ac, counts.an),
@@ -1846,20 +1964,24 @@ export class GnomadService {
       exome_filters: exomeFilters?.join('|') ?? null,
       genome_filters: genomeFilters?.join('|') ?? null,
       qc_status: qc,
+      gene_id: gene.gene_id ?? null,
+      gene_symbol: gene.gene_symbol ?? null,
       transcript_id: transcriptId,
       consequence_transcript: primary && (transcriptId === primary.id ? primary.kind : 'other'),
       lof: r.lof ?? null,
     };
-    // The opt-in columns follow every default one, and a row without annotations carries none of them.
-    if (!annotations) return row;
-    return {
-      ...row,
-      hgvsc: r.hgvsc ?? null,
-      hgvsp: r.hgvsp ?? null,
-      lof_filter: r.lof_filter ?? null,
-      lof_flags: r.lof_flags ?? null,
-      rsids: (r.rsids ?? []).join('|'),
-    };
+    // The opt-in columns follow every default one, the per-group ones last; a row carries only those its call asked for.
+    const annotated: GeneVariantRow | AnnotatedGeneVariantRow = columns.annotations
+      ? {
+          ...row,
+          hgvsc: r.hgvsc ?? null,
+          hgvsp: r.hgvsp ?? null,
+          lof_filter: r.lof_filter ?? null,
+          lof_flags: r.lof_flags ?? null,
+          rsids: (r.rsids ?? []).join('|'),
+        }
+      : row;
+    return columns.groups ? { ...annotated, ...groupColumns(records, columns.groups) } : annotated;
   }
 
   /**
@@ -2057,12 +2179,15 @@ export class GnomadService {
    * getCoverage summarizes; gene and transcript intervals come from their exons.
    * A coverage document names the parent release: gnomAD fails every subset's
    * coverage, a region's with an HTTP 500 the retry layer would read as transient.
-   * A list document also takes listDocumentVariables.
+   * A list document, in the form `populations` picks, also takes
+   * listDocumentVariables.
    */
   private buildTargetQuery(
     target: GenomeTarget,
     dsCtx: DatasetContext,
-    document: { kind: 'variants'; annotations: boolean } | { kind: 'coverage' },
+    document:
+      | { kind: 'variants'; annotations: boolean; populations: boolean }
+      | { kind: 'coverage' },
   ): {
     query: string;
     variables: Record<string, unknown>;
@@ -2074,25 +2199,29 @@ export class GnomadService {
         ? {
             dataset: dsCtx.dataset,
             referenceGenome: dsCtx.reference_genome,
-            ...listDocumentVariables(dsCtx, document.annotations),
+            ...listDocumentVariables(dsCtx, document.annotations, document.populations),
           }
         : { dataset: dsCtx.parent, referenceGenome: dsCtx.reference_genome };
+    const list =
+      VARIANT_LIST_QUERIES[
+        document.kind === 'variants' && document.populations ? 'populations' : 'default'
+      ];
     if (target.kind === 'transcript') {
       return {
-        query: kind === 'variants' ? TRANSCRIPT_VARIANTS_QUERY : TRANSCRIPT_COVERAGE_QUERY,
+        query: kind === 'variants' ? list.transcript : TRANSCRIPT_COVERAGE_QUERY,
         variables: { transcriptId: target.value, ...base },
       };
     }
     if (target.kind === 'region') {
       const { chrom, start, stop } = parseRegion(target.value);
       return {
-        query: kind === 'variants' ? REGION_VARIANTS_QUERY : REGION_COVERAGE_QUERY,
+        query: kind === 'variants' ? list.region : REGION_COVERAGE_QUERY,
         variables: { chrom, start, stop, ...base },
         regionBounds: { start, stop },
       };
     }
     const byId = ENSEMBL_GENE_ID.test(target.value);
-    const variantsQ = byId ? GENE_VARIANTS_BY_ID_QUERY : GENE_VARIANTS_BY_SYMBOL_QUERY;
+    const variantsQ = byId ? list.geneById : list.geneBySymbol;
     const coverageQ = byId ? GENE_COVERAGE_BY_ID_QUERY : GENE_COVERAGE_BY_SYMBOL_QUERY;
     return {
       query: kind === 'variants' ? variantsQ : coverageQ,

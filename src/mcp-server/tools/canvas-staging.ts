@@ -95,7 +95,8 @@ export async function stageRows<Row extends Record<string, unknown>>(opts: {
   const fits = previewLength(rows, previewChars) === rows.length;
   if (fits && !canvasId) return { ...inline, canvas_id: '' };
 
-  const instance = await canvas.acquire(canvasId, ctx);
+  // The signal makes a call cancelled before staging fail ahead of minting, so it holds no tenant slot.
+  const instance = await canvas.acquire(canvasId, ctx, { signal: ctx.signal });
   if (!fits) {
     const result = await spillover<Row>({
       canvas: instance,
