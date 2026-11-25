@@ -2,8 +2,8 @@
 
 **Server:** gnomad-genetics-mcp-server
 **Version:** 0.6.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
@@ -389,7 +389,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`: exclude development paths with root-anchored patterns, keeping published `skills/`. The subsequent `scripts/clean-mcpb.ts` prunes dev dependencies, dependency-shipped agent docs, platform-specific native bindings, node-gyp build output, and build-only package files. Inspect the completed archive, then run `lint:packaging`. DuckDB's bindings are removed, so `manifest.json` pins `CANVAS_PROVIDER_TYPE=none` and the bundle runs inline-only: list tools return every row of each page or window, and the dataframe tools are not registered. Everywhere else DataCanvas defaults on. MCPB is stdio-only.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`: exclude development paths with root-anchored patterns, keeping published `skills/`. The subsequent `scripts/clean-mcpb.ts` prunes dev dependencies, dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package's root, and `SKILL.md` anywhere — a `skills/` deeper in a package, such as the MCP SDK's `dist/ext/skills/`, is runtime code and stays), platform-specific native bindings, node-gyp build output, and build-only package files. Inspect the completed archive, then run `lint:packaging`. DuckDB's bindings are removed, so `manifest.json` pins `CANVAS_PROVIDER_TYPE=none` and the bundle runs inline-only: list tools return every row of each page or window, and the dataframe tools are not registered. Everywhere else DataCanvas defaults on. MCPB is stdio-only.
 
 Root `plugin.json` and `mcp.json` implement Agent Plugins 1.0.0. Keep their metadata aligned with `package.json`, the root stdio server's fixed `env` aligned with `.codex-plugin/mcp.json`, and the Codex overlay's `mcpServers` pointer intact so its `env_vars` reach that server. Claude Code uses the `.claude-plugin/plugin.json` overlay and its `userConfig`. User-supplied values never go into root `mcp.json`.
 
