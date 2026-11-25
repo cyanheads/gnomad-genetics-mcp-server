@@ -1,6 +1,6 @@
 # gnomad-genetics-mcp-server - Directory Structure
 
-Generated on: 2026-11-04 06:11:30
+Generated on: 2026-11-25 09:13:50
 
 ```text
 gnomad-genetics-mcp-server/
@@ -181,7 +181,8 @@ gnomad-genetics-mcp-server/
 │   │   │   └── types.ts
 │   │   ├── canvas-accessor.ts
 │   │   ├── upstream-deadline.ts
-│   │   └── upstream-error.ts
+│   │   ├── upstream-error.ts
+│   │   └── upstream-user-agent.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
@@ -205,12 +206,15 @@ gnomad-genetics-mcp-server/
 │   │   ├── gnomad-coverage.live.json
 │   │   ├── gnomad-faf-gene-lists.live.json.gz
 │   │   ├── gnomad-faf.live.json
+│   │   ├── gnomad-list-populations.live.json
 │   │   ├── gnomad-subsets.live.json
 │   │   ├── gnomad-variant-clinvar-error.live.json
 │   │   └── pcsk9-gene-variants.live.json
 │   ├── fuzz/
 │   │   └── identifiers-and-responses.fuzz.test.ts
 │   ├── helpers/
+│   │   ├── definition-bytes.test.ts
+│   │   ├── definition-bytes.ts
 │   │   ├── fake-gnomad-coverage.ts
 │   │   ├── fake-gnomad-graphql.ts
 │   │   ├── live-consequences.ts
@@ -245,12 +249,14 @@ gnomad-genetics-mcp-server/
 │   │   ├── identifier-normalization.test.ts
 │   │   ├── upstream-deadline.test.ts
 │   │   ├── upstream-error.test.ts
-│   │   └── upstream-leak.e2e.test.ts
+│   │   ├── upstream-leak.e2e.test.ts
+│   │   └── upstream-user-agent.test.ts
 │   ├── smoke/
 │   │   └── tool-surface.smoke.test.ts
 │   ├── tools/
 │   │   ├── count-limit.test.ts
 │   │   ├── definition-config.test.ts
+│   │   ├── definition-statements.test.ts
 │   │   ├── gnomad-dataframe-describe.test.ts
 │   │   ├── gnomad-dataframe-drop.test.ts
 │   │   ├── gnomad-dataframe-query.test.ts
