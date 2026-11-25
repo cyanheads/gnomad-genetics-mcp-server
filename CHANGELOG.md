@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.1](changelog/0.6.x/0.6.1.md) — 2026-11-25
+
+gnomad_list_gene_variants gains an opt-in populations input for per-ancestry counts and frequencies and a gene on every row; tool-definition text is trimmed so each caveat is stated once per tool; every upstream request sends a User-Agent; a call cancelled before staging no longer mints an empty canvas.
+
 ## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-03
 
 Adds gnomad_get_variant_cooccurrence, filtering allele frequency, LOFTEE and HGVS fields, ten subset datasets, the LOEUF percentile and mitochondrial constraint, hemizygote counts, and ClinVar somatic classifications; ClinVar indel rows gain GRCh38 IDs from gnomAD's ClinVar mapping.
